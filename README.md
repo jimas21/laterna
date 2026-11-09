@@ -4,10 +4,12 @@
 
 # FramePlayerX
 
-[![CI](https://github.com/remotesojourner/frameplayerx/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/remotesojourner/frameplayerx/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/remotesojourner/frameplayerx?sort=semver&style=flat&logo=github&label=release)](https://github.com/remotesojourner/frameplayerx/releases/latest)
-[![Latest Beta](https://img.shields.io/github/v/release/remotesojourner/frameplayerx?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/remotesojourner/frameplayerx/releases)
+[![CI](https://github.com/jimas21/frameplex/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jimas21/frameplex/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/jimas21/frameplex?sort=semver&style=flat&logo=github&label=release)](https://github.com/jimas21/frameplex/releases/latest)
+[![Latest Beta](https://img.shields.io/github/v/release/jimas21/frameplex?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/jimas21/frameplex/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](LICENSE)
+
+This is a fork of [FramePlayerX](https://github.com/remotesojourner/frameplayerx) (Apache-2.0). Its releases and in-app updates come from this repository, not from upstream.
 
 A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fisheye videos, in 2D or 3D, from the headset, a microSD card, a USB drive or a media server. It runs natively on the headset.
 
@@ -51,9 +53,9 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 ## Quick Start
 
 <p align="center">
-  <a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
-  <!-- <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a> -->
-  <a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
+  <a href="https://github.com/jimas21/frameplex/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+  <!-- <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Fframeplex%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a> -->
+  <a href="https://jimas21.github.io/frameplex/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 </p>
 
 1. **Install FramePlayerX** with one of the buttons above, or from a terminal:
@@ -64,7 +66,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
    - **Frame Control from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [Frame Control](https://github.com/saphid/steam-frame). Then press its button in your PC's browser and it installs the latest release on the headset.
      > **Note:** [FrameDrop](https://framedropvr.com) currently has a bug where it has trouble downloading from GitHub, so it isn't supported yet, but should be once the bug is fixed.
 
-   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/remotesojourner/frameplayerx/releases/latest), then:
+   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/jimas21/frameplex/releases/latest), then:
 
      ```bash
      frameplayerx-install pair 192.168.0.68    # once, with the headset's IP address
@@ -94,7 +96,7 @@ To update later, open **Settings › Updates** and press **Download and install*
 FramePlayerX comes in English, German, Spanish, French, Japanese and Simplified Chinese. All but English started as machine drafts, so some wording is likely to be wrong or awkward, and corrections are welcome.
 
 - **Correct or translate** on [Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/), Codeberg's Weblate. No Git needed: sign in with a Codeberg account, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes come back to this repository as pull requests.
-- **Report a mistake** without translating: open a [Translation problem](https://github.com/remotesojourner/frameplayerx/issues/new?template=translation.yml) issue with the language, where it shows and the wording you'd expect.
+- **Report a mistake** without translating: open a [Translation problem](https://github.com/jimas21/frameplex/issues/new?template=translation.yml) issue with the language, where it shows and the wording you'd expect.
 - **Add a language**: start it on Codeberg Translate, or ask in an issue. Right-to-left languages (Arabic, Hebrew) and scripts that need shaping (Thai, Hindi and other Indic scripts) can't be shown in the interface yet.
 
 ---

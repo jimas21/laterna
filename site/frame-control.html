@@ -39,19 +39,19 @@
     <img src="logo.svg" alt="FramePlayerX logo">
     <h1>Install FramePlayer<span class="x">X</span></h1>
     <p>Opening Frame Control on this PC to install the latest release on your Steam Frame.</p>
-    <a class="install" id="install" href="https://github.com/remotesojourner/frameplayerx/releases/latest">Install with Frame Control</a>
+    <a class="install" id="install" href="https://github.com/jimas21/frameplex/releases/latest">Install with Frame Control</a>
     <p>Needs Frame Control running on this PC and the headset paired with it, in Developer Mode.</p>
     <div class="missing" id="missing" hidden>
       <p>Frame Control didn't open. <a href="https://github.com/saphid/steam-frame/releases/latest">Get Frame Control</a>, pair your headset, then press the button again.</p>
     </div>
     <small>
-      Or install another way: <a href="https://github.com/remotesojourner/frameplayerx#quick-start">FramePlayerX on GitHub</a>
-      · <a href="https://github.com/remotesojourner/frameplayerx/releases/latest">download the release</a>
+      Or install another way: <a href="https://github.com/jimas21/frameplex#quick-start">FramePlayerX on GitHub</a>
+      · <a href="https://github.com/jimas21/frameplex/releases/latest">download the release</a>
     </small>
   </main>
   <script>
     (() => {
-      const MANIFEST = "https://github.com/remotesojourner/frameplayerx/releases/latest/download/frameplayerx.json";
+      const MANIFEST = "https://github.com/jimas21/frameplex/releases/latest/download/frameplayerx.json";
       const link = "frame-control://install?manifest=" + encodeURIComponent(MANIFEST);
       const button = document.getElementById("install");
       button.href = link;
