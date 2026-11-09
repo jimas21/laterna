@@ -4,6 +4,7 @@ use crate::context::XrContext;
 use crate::input::{Actions, InputState};
 use crate::{Error, Result, XrContextExt};
 use ash::vk::{self, Handle};
+use fp_render::timing::Series;
 use fp_render::{EyeTarget, EyeView, Gpu};
 use glam::{Quat, Vec3};
 use openxr as xr;
@@ -55,6 +56,22 @@ pub struct QuadSubmit {
     pub size: glam::Vec2,
 }
 
+/// Wall time, in milliseconds, of the runtime calls that can block. The app
+/// takes and resets each series every few seconds.
+#[derive(Debug, Default)]
+pub struct XrStats {
+    /// `xrWaitFrame`.
+    pub wait_frame: Series,
+    /// `xrBeginFrame`.
+    pub begin_frame: Series,
+    /// Both eye swapchains' acquire and wait, one sample per frame.
+    pub eye_acquire: Series,
+    /// One quad layer's acquire and wait, one sample per picture.
+    pub quad_acquire: Series,
+    /// `xrEndFrame`.
+    pub end_frame: Series,
+}
+
 pub struct XrSession {
     ctx: Arc<XrContext>,
     gpu: Arc<Gpu>,
@@ -79,6 +96,9 @@ pub struct XrSession {
     launch_closes: u32,
     launch_closed_at: Option<Instant>,
     quads: std::collections::HashMap<u64, QuadLayer>,
+    /// The first quad layer's image count is logged once.
+    quad_images_logged: bool,
+    pub stats: XrStats,
 }
 
 /// One frame in progress.
@@ -178,6 +198,8 @@ impl XrSession {
             .copied()
             .unwrap_or(xr::EnvironmentBlendMode::OPAQUE);
         log::info!("XR session: {w}x{h} per eye, {format:?}, blend {blend_mode:?}");
+        let counts: Vec<usize> = eyes.iter().map(|e| e.images.len()).collect();
+        log::info!("eye swapchain images: {counts:?}");
         Ok(XrSession {
             ctx,
             gpu,
@@ -201,7 +223,41 @@ impl XrSession {
             launch_closes: 3,
             launch_closed_at: None,
             quads: std::collections::HashMap::new(),
+            quad_images_logged: false,
+            stats: XrStats::default(),
         })
+    }
+
+    /// Display refresh rates the app may request (`XR_FB_display_refresh_rate`),
+    /// or `None` when the extension is not enabled or the call fails.
+    pub fn refresh_rates(&self) -> Option<Vec<f32>> {
+        if !self.ctx.enabled.fb_display_refresh_rate {
+            return None;
+        }
+        self.session.enumerate_display_refresh_rates().ok()
+    }
+
+    /// The display's current refresh rate, or `None` as for
+    /// [`XrSession::refresh_rates`].
+    pub fn refresh_rate(&self) -> Option<f32> {
+        if !self.ctx.enabled.fb_display_refresh_rate {
+            return None;
+        }
+        self.session.get_display_refresh_rate().ok()
+    }
+
+    /// Asks the runtime to switch the display to `hz` (0 means the system's
+    /// default). Fails when `XR_FB_display_refresh_rate` is not enabled or
+    /// the runtime refuses the rate.
+    pub fn request_refresh_rate(&self, hz: f32) -> Result<()> {
+        if !self.ctx.enabled.fb_display_refresh_rate {
+            return Err(Error::Runtime(
+                "the runtime lacks XR_FB_display_refresh_rate (not enabled)".into(),
+            ));
+        }
+        self.session
+            .request_display_refresh_rate(hz)
+            .ctx("xrRequestDisplayRefreshRateFB")
     }
 
     pub fn is_running(&self) -> bool {
@@ -297,6 +353,12 @@ impl XrSession {
                     log::info!("system recenter");
                     self.recenter_at = Some(e.change_time());
                 }
+                xr::Event::DisplayRefreshRateChangedFB(_) => {
+                    match self.session.get_display_refresh_rate() {
+                        Ok(hz) => log::info!("display refresh rate changed: now {hz} Hz"),
+                        Err(e) => log::info!("display refresh rate changed (current rate: {e})"),
+                    }
+                }
                 xr::Event::InstanceLossPending(_) => return Ok(SessionEvent::Exit),
                 _ => {}
             }
@@ -323,8 +385,12 @@ impl XrSession {
     /// Waits for the next frame, locates the views and acquires swapchain
     /// images. Call [`XrSession::end_frame`] after submitting GPU work.
     pub fn begin_frame(&mut self) -> Result<FrameCtx> {
+        let t = Instant::now();
         let state = self.waiter.wait().ctx("xrWaitFrame")?;
+        self.stats.wait_frame.push_since(t);
+        let t = Instant::now();
         self.stream.begin().ctx("xrBeginFrame")?;
+        self.stats.begin_frame.push_since(t);
         let mut ctx = FrameCtx {
             state,
             eyes: None,
@@ -370,6 +436,7 @@ impl XrSession {
         };
         ctx.eyes = Some([eye(&views[0]), eye(&views[1])]);
         let mut targets = Vec::new();
+        let t = Instant::now();
         for e in &mut self.eyes {
             let i = e.swapchain.acquire_image().ctx("xrAcquireSwapchainImage")? as usize;
             e.swapchain
@@ -382,6 +449,7 @@ impl XrSession {
                 final_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             });
         }
+        self.stats.eye_acquire.push_since(t);
         ctx.targets = Some([targets[0], targets[1]]);
         ctx.views = views;
         Ok(ctx)
@@ -422,7 +490,12 @@ impl XrSession {
                 .ctx("xrEnumerateSwapchainImages")?
                 .into_iter()
                 .map(vk::Image::from_raw)
-                .collect();
+                .collect::<Vec<_>>();
+            if !self.quad_images_logged {
+                self.quad_images_logged = true;
+                let n = images.len();
+                log::info!("quad swapchain images: {n} ({width}x{height})");
+            }
             self.quads.insert(
                 key,
                 QuadLayer {
@@ -444,6 +517,7 @@ impl XrSession {
     /// it. Call at most once per key and frame.
     pub fn quad_layer_image(&mut self, key: u64, width: u32, height: u32) -> Result<vk::Image> {
         let q = self.quad_layer(key, width, height)?;
+        let t = Instant::now();
         let i = q
             .swapchain
             .acquire_image()
@@ -452,7 +526,9 @@ impl XrSession {
             .wait_image(xr::Duration::INFINITE)
             .ctx("xrWaitSwapchainImage (quad layer)")?;
         q.acquired = true;
-        Ok(q.images[i])
+        let image = q.images[i];
+        self.stats.quad_acquire.push_since(t);
+        Ok(image)
     }
 
     /// Whether a quad layer has a picture to show.
@@ -497,10 +573,10 @@ impl XrSession {
             }
         }
         if ctx.targets.is_none() {
-            return self
-                .stream
-                .end(time, self.blend_mode, &[])
-                .ctx("xrEndFrame");
+            let t = Instant::now();
+            let ended = self.stream.end(time, self.blend_mode, &[]);
+            self.stats.end_frame.push_since(t);
+            return ended.ctx("xrEndFrame");
         }
         for e in &mut self.eyes {
             e.swapchain.release_image().ctx("xrReleaseSwapchainImage")?;
@@ -568,9 +644,10 @@ impl XrSession {
             .collect();
         let mut all: Vec<&xr::CompositionLayerBase<xr::Vulkan>> = vec![&*layer];
         all.extend(quad_layers.iter().map(|q| &**q));
-        self.stream
-            .end(time, self.blend_mode, &all)
-            .ctx("xrEndFrame")
+        let t = Instant::now();
+        let ended = self.stream.end(time, self.blend_mode, &all);
+        self.stats.end_frame.push_since(t);
+        ended.ctx("xrEndFrame")
     }
 
     /// Controller state at `time`.
