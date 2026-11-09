@@ -34,8 +34,9 @@ mod watch;
 mod world;
 
 use app::{App, FrameInput, LayerDraw};
+use fp_render::timing::{self, Series};
 use fp_render::{Gpu, Renderer};
-use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrSession};
+use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrSession, XrStats};
 use settings::Settings;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -388,6 +389,99 @@ fn exit_watchdog(limit: Duration) {
 /// Set for the copy [`run_xr`] starts when it restarts.
 const RESTARTED: &str = "FRAMEPLAYERX_RESTARTED";
 
+/// A/B switches for frame pacing, read once at start from the environment
+/// (the launcher sources `~/.config/frameplayerx/env`). With none set the
+/// app behaves as usual.
+#[derive(Debug, Default, PartialEq)]
+struct Switches {
+    /// `FRAMEPLAYERX_UI_IN_EYES=1`: draw the UI into the eye buffers even
+    /// where the runtime could show it as compositor quad layers.
+    ui_in_eyes: bool,
+    /// `FRAMEPLAYERX_REQUEST_HZ=<rate>`: ask the runtime for this display
+    /// refresh rate once the session runs.
+    request_hz: Option<f32>,
+}
+
+impl Switches {
+    fn from_env() -> Switches {
+        Switches::parse(
+            std::env::var("FRAMEPLAYERX_UI_IN_EYES").ok().as_deref(),
+            std::env::var("FRAMEPLAYERX_REQUEST_HZ").ok().as_deref(),
+        )
+    }
+
+    fn parse(ui_in_eyes: Option<&str>, request_hz: Option<&str>) -> Switches {
+        Switches {
+            ui_in_eyes: ui_in_eyes.is_some_and(|v| !matches!(v.trim(), "" | "0")),
+            request_hz: request_hz
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|hz| hz.is_finite() && *hz >= 0.0),
+        }
+    }
+
+    fn describe(&self) -> String {
+        let mut on = Vec::new();
+        if self.ui_in_eyes {
+            on.push("FRAMEPLAYERX_UI_IN_EYES".to_string());
+        }
+        if let Some(hz) = self.request_hz {
+            on.push(format!("FRAMEPLAYERX_REQUEST_HZ={hz}"));
+        }
+        if on.is_empty() {
+            "none".into()
+        } else {
+            on.join(", ")
+        }
+    }
+}
+
+/// What the runtime hands the app each frame, summarised every 10 s. A
+/// predicted display period of twice the panel's means the compositor shows
+/// every app frame twice.
+#[derive(Default)]
+struct Pacing {
+    /// One loop iteration, from before xrWaitFrame to after xrEndFrame.
+    iteration: Series,
+    /// `predicted_display_period`.
+    period: Series,
+    /// Step of `predicted_display_time` between consecutive frames.
+    step: Series,
+    /// Frames the runtime said not to render.
+    skipped: u32,
+    last_display_ns: Option<i64>,
+}
+
+impl Pacing {
+    fn frame(&mut self, period_ns: i64, display_ns: i64, should_render: bool) {
+        self.period.push(period_ns as f32 / 1e6);
+        if let Some(last) = self.last_display_ns.replace(display_ns) {
+            self.step.push((display_ns - last) as f32 / 1e6);
+        }
+        self.skipped += u32::from(!should_render);
+    }
+
+    /// Logs and resets this and the blocking-call timings: `calls` from the
+    /// session and `fence` from the renderer.
+    fn log(&mut self, calls: &mut XrStats, fence: &mut Series) {
+        let iteration = self.iteration.take();
+        let frames = iteration.map_or(0, |s| s.count);
+        let iter = timing::show(iteration);
+        let period = timing::show(self.period.take());
+        let step = timing::show(self.step.take());
+        let skipped = std::mem::take(&mut self.skipped);
+        log::info!("pacing ms (median/max): loop {iter}, period {period}, step {step}");
+        log::info!("pacing: should_render false on {skipped} of {frames} frames");
+        let wait = timing::show(calls.wait_frame.take());
+        let begin = timing::show(calls.begin_frame.take());
+        let eyes = timing::show(calls.eye_acquire.take());
+        log::info!("call ms (median/max): WaitFrame {wait}, BeginFrame {begin}, eyes {eyes}");
+        let quads = timing::show(calls.quad_acquire.take());
+        let end = timing::show(calls.end_frame.take());
+        let fence = timing::show(fence.take());
+        log::info!("call ms (median/max): quads {quads}, EndFrame {end}, slot fence {fence}");
+    }
+}
+
 fn run_xr(args: &Args) -> Result<(), Error> {
     // After a restart SteamVR may still be closing the previous session:
     // keep trying for a while instead of quitting.
@@ -425,6 +519,12 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         session.format,
         session.bindings()
     );
+    let switches = Switches::from_env();
+    log::info!("A/B switches: {}", switches.describe());
+    match (session.refresh_rate(), session.refresh_rates()) {
+        (Some(now), Some(all)) => log::info!("display refresh rate {now} Hz; supported {all:?}"),
+        _ => log::info!("display refresh rates: not available"),
+    }
     let mut renderer = Renderer::new(gpu.clone(), session.format)?;
     fp_media::set_hevc_10bit_hardware(renderer.shows_q10c());
     let mut app = make_app()?;
@@ -473,15 +573,19 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     let mut frame_ms: Vec<f32> = Vec::new();
     let mut last_frame_ms = None;
     let mut timing_since = Instant::now();
-    let layers = session.supports_quad_layers();
+    let layers = session.supports_quad_layers() && !switches.ui_in_eyes;
     log::info!(
         "UI as compositor quad layers: {}",
         if layers {
             "yes"
+        } else if switches.ui_in_eyes {
+            "no (forced into the eyes)"
         } else {
             "no (drawn into the eyes)"
         }
     );
+    let mut request_hz = switches.request_hz;
+    let mut pacing = Pacing::default();
     // Panel picture each quad layer holds: (panel, paint version).
     let mut copied: std::collections::HashMap<u64, (fp_render::PanelId, u64)> =
         std::collections::HashMap::new();
@@ -494,8 +598,23 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             }
             SessionEvent::Running => {}
         }
+        if let Some(hz) = request_hz.take() {
+            match session.request_refresh_rate(hz) {
+                Ok(()) => {
+                    let now = session.refresh_rate();
+                    log::info!("requested display refresh rate {hz} Hz: accepted; now {now:?}");
+                }
+                Err(e) => log::warn!("requested display refresh rate {hz} Hz: {e}"),
+            }
+        }
         session.close_dashboard_at_launch();
+        let iteration = Instant::now();
         let frame = session.begin_frame()?;
+        pacing.frame(
+            frame.state.predicted_display_period.as_nanos(),
+            frame.state.predicted_display_time.as_nanos(),
+            frame.state.should_render,
+        );
         let recentred = session.recentred_by(frame.state.predicted_display_time);
         let work = Instant::now();
         let input = session.input(frame.state.predicted_display_time);
@@ -577,6 +696,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         frame_ms.push(ms);
         last_frame_ms = Some(ms);
         session.end_frame(frame, &submits)?;
+        pacing.iteration.push_since(iteration);
         if timing_since.elapsed() > Duration::from_secs(10) && !frame_ms.is_empty() {
             frame_ms.sort_by(f32::total_cmp);
             let at = |q: f32| frame_ms[((frame_ms.len() - 1) as f32 * q) as usize];
@@ -600,6 +720,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                     st.video_queue
                 );
             }
+            pacing.log(&mut session.stats, &mut renderer.fence_wait);
             frame_ms.clear();
             timing_since = Instant::now();
         }
@@ -633,4 +754,50 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     }
     log::info!("bye");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switches_default_to_off() {
+        let s = Switches::parse(None, None);
+        assert_eq!(s, Switches::default());
+        assert_eq!(s.describe(), "none");
+    }
+
+    #[test]
+    fn switches_parse_the_environment_values() {
+        let s = Switches::parse(Some("1"), Some(" 90 "));
+        assert!(s.ui_in_eyes);
+        assert_eq!(s.request_hz, Some(90.0));
+        let want = "FRAMEPLAYERX_UI_IN_EYES, FRAMEPLAYERX_REQUEST_HZ=90";
+        assert_eq!(s.describe(), want);
+    }
+
+    #[test]
+    fn switches_ignore_off_and_bad_values() {
+        for off in ["", "0", " 0 "] {
+            assert!(!Switches::parse(Some(off), None).ui_in_eyes);
+        }
+        for bad in ["", "fast", "-72", "NaN", "inf"] {
+            assert_eq!(Switches::parse(None, Some(bad)).request_hz, None);
+        }
+    }
+
+    #[test]
+    fn pacing_records_period_step_and_skipped_frames() {
+        let mut p = Pacing::default();
+        p.frame(27_800_000, 1_000_000_000, true);
+        p.frame(27_800_000, 1_027_800_000, false);
+        p.frame(27_800_000, 1_055_600_000, true);
+        let period = p.period.take().unwrap();
+        assert!((period.median - 27.8).abs() < 0.01);
+        // Two steps between three frames.
+        let step = p.step.take().unwrap();
+        assert_eq!(step.count, 2);
+        assert!((step.max - 27.8).abs() < 0.01);
+        assert_eq!(p.skipped, 1);
+    }
 }
