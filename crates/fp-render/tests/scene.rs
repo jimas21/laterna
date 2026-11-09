@@ -394,6 +394,38 @@ fn flat_screen_sits_in_front_and_background_surrounds_it() {
 }
 
 #[test]
+fn a_flat_screens_edge_is_antialiased() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let green = frame(160, 90, |_, _| [0, 255, 0]);
+    let mut p = params(
+        Projection::Flat,
+        StereoLayout::Mono,
+        ViewSettings::default(),
+    );
+    // Turned a little, so the screen's edges cross pixels at every fraction.
+    p.screen_pose =
+        Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0)) * Mat4::from_rotation_y(0.3);
+    p.background = [0.0, 0.0, 0.0, 1.0];
+    let [l, _] = render(&mut r, &mut e, Some(&green), &p, &[]);
+    let (mut full, mut partial) = (0, 0);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            match px(&l, x, y)[1] {
+                0..=8 => {}
+                9..=240 => partial += 1,
+                _ => full += 1,
+            }
+        }
+    }
+    assert!(full > 1000, "screen interior: {full} full pixels");
+    // A hard edge has none of these: every pixel is picture or background.
+    assert!(partial > 20, "edge pixels blended with the background: {partial}");
+    e.destroy(&r);
+}
+
+#[test]
 fn a_sideways_phone_clip_stands_upright() {
     let Some((mut r, mut e)) = setup() else {
         return;
