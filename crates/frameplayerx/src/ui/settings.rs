@@ -370,6 +370,11 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             Some(tr!("settings-resume-desc")),
             &mut s.resume,
         );
+        r.switch(
+            tr!("settings-pause-headset-off"),
+            Some(tr!("settings-pause-headset-off-desc")),
+            &mut s.pause_on_headset_off,
+        );
         let mut step = s.seek_step as f32;
         if r.slider(
             tr!("settings-seek-step"),

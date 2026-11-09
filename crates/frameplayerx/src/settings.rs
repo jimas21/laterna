@@ -71,6 +71,9 @@ pub struct Settings {
     pub passthrough: bool,
     /// Resume videos where they were left.
     pub resume: bool,
+    /// A video playing pauses when the headset comes off (the session drops
+    /// below visible) and stays paused when it goes back on.
+    pub pause_on_headset_off: bool,
     /// The format a video starts in when nothing identifies it (no
     /// metadata, file name tag or telling shape).
     pub default_format: fp_core::format::VideoFormat,
@@ -202,6 +205,7 @@ impl Default for Settings {
             default_view: ViewSettings::default(),
             passthrough: false,
             resume: true,
+            pause_on_headset_off: true,
             default_format: fp_core::format::VideoFormat::FALLBACK,
             fisheye_presets: FISHEYE_PRESETS.to_vec(),
             fisheye_start: FISHEYE_START,
@@ -337,6 +341,7 @@ mod tests {
         assert_eq!(p.volume, 0.25);
         assert_eq!(p.seek_step, 10.0);
         assert!(!p.haptics_enabled, "haptics stay off until turned on");
+        assert!(p.pause_on_headset_off, "old files get the new default");
         assert_eq!(p.default_format, fp_core::format::VideoFormat::FALLBACK);
         assert_eq!(p.fisheye_presets, FISHEYE_PRESETS);
         assert_eq!(p.fisheye_start, FISHEYE_START);
