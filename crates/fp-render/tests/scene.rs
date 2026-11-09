@@ -414,11 +414,12 @@ fn a_flat_screens_edge_is_antialiased() {
         for x in 0..SIZE {
             match px(&l, x, y)[1] {
                 0..=8 => {}
-                9..=240 => partial += 1,
+                9..=220 => partial += 1,
                 _ => full += 1,
             }
         }
     }
+    assert!(centre(&l)[1] > 220, "the screen's centre is full green");
     assert!(full > 1000, "screen interior: {full} full pixels");
     // A hard edge has none of these: every pixel is picture or background.
     assert!(partial > 20, "edge pixels blended with the background: {partial}");

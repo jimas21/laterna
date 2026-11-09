@@ -281,10 +281,27 @@ fn sample_yuv(uv: vec2<f32>) -> vec3<f32> {
     return yuv_to_rgb(fetch_yuv(uv));
 }
 
-// One tap at a point of the screen (0..1), clamped into the screen so a tap
-// never reads the other eye's half of a stereo frame.
+// The upright picture's size in video texels, the eye's share of it.
+fn eye_texels() -> vec2<f32> {
+    var size = params.tex_size.xy;
+    if ((params.display.x & 1u) == 1u) { size = size.yx; }
+    if (params.mode.y == 1u) { size.x = size.x * 0.5; }
+    if (params.mode.y == 2u) { size.y = size.y * 0.5; }
+    return max(size, vec2<f32>(1.0));
+}
+
+// A point of the screen clamped into the picture. For a stereo frame it stays
+// one luma texel (half a 4:2:0 chroma texel) inside the eye's own half, so
+// the linear filter never blends in the other eye's border.
+fn clamp_to_eye(p: vec2<f32>) -> vec2<f32> {
+    var m = vec2<f32>(0.0);
+    if (params.mode.y != 0u) { m = min(vec2<f32>(1.0) / eye_texels(), vec2<f32>(0.25)); }
+    return clamp(p, m, vec2<f32>(1.0) - m);
+}
+
+// One tap at a point of the screen (0..1), clamped into the eye's picture.
 fn fetch_tap(p: vec2<f32>, eye: u32) -> vec3<f32> {
-    return fetch_yuv(stored_uv(to_eye_rect(clamp(p, vec2<f32>(0.0), vec2<f32>(1.0)), eye)));
+    return fetch_yuv(stored_uv(to_eye_rect(clamp_to_eye(p), eye)));
 }
 
 // Four taps on a rotated grid inside the eye pixel's footprint on the screen
@@ -303,11 +320,7 @@ fn sample_yuv_aa(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, eye: u32) -> vec3<
 // How many video texels one eye pixel spans on the screen, the larger of its
 // two axes. `dx`/`dy` are the screen coordinate's derivatives.
 fn texel_footprint(dx: vec2<f32>, dy: vec2<f32>) -> f32 {
-    // The upright picture's size in texels, then the eye's share of it.
-    var size = params.tex_size.xy;
-    if ((params.display.x & 1u) == 1u) { size = size.yx; }
-    if (params.mode.y == 1u) { size.x = size.x * 0.5; }
-    if (params.mode.y == 2u) { size.y = size.y * 0.5; }
+    let size = eye_texels();
     return max(length(dx * size), length(dy * size));
 }
 
@@ -431,13 +444,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Edge pixels centred just outside the picture read its border texel,
     // never the other eye's half of a stereo frame.
-    let uvc = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    let uvc = clamp_to_eye(uv);
     let tuv = stored_uv(to_eye_rect(uvc, eye));
-    var rgb: vec3<f32>;
-    if (SUPERSAMPLE && kind == 0u && texel_footprint(duv_dx, duv_dy) > 1.0) {
-        rgb = sample_yuv_aa(uvc, duv_dx, duv_dy, eye);
-    } else {
-        rgb = sample_yuv(tuv);
+    var rgb = sample_yuv(tuv);
+    // Fades in from one tap to four as the picture gets minified, so a
+    // tilted or curved screen shows no line where the mode would flip.
+    if (SUPERSAMPLE && kind == 0u) {
+        let ss = smoothstep(0.9, 1.3, texel_footprint(duv_dx, duv_dy));
+        if (ss > 0.0) {
+            rgb = mix(rgb, sample_yuv_aa(uvc, duv_dx, duv_dy, eye), ss);
+        }
     }
 
     // Chroma key (as OBS does it): pixels whose chroma is near the key
