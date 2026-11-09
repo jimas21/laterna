@@ -83,6 +83,14 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 const PI: f32 = 3.14159265358979;
 const INVALID: vec2<f32> = vec2<f32>(-1.0, -1.0);
 
+// Analytic antialiasing of the picture's edge (flat or curved screen, and the
+// fisheye image circle): the edge pixels blend towards the background by the
+// fraction of the pixel the picture covers. Off gives the old hard edge.
+const EDGE_AA: bool = true;
+// Four-tap rotated-grid supersampling of a flat screen's picture where it is
+// minified (more than one video texel per eye pixel). Off gives one tap.
+const SUPERSAMPLE: bool = true;
+
 fn rot_y(a: f32) -> mat3x3<f32> {
     let c = cos(a); let s = sin(a);
     return mat3x3<f32>(vec3<f32>(c, 0.0, -s), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(s, 0.0, c));
@@ -135,18 +143,21 @@ fn equirect_uv(d: vec3<f32>, h_fov: f32, v_fov: f32) -> vec2<f32> {
     return vec2<f32>(u, v);
 }
 
-fn fisheye_uv(d: vec3<f32>, fov: f32, k1: f32, k2: f32, size: vec2<f32>, centre: vec2<f32>) -> vec2<f32> {
+// xy: video coordinates (unclamped, so they stay continuous across the image
+// circle's edge and screen-space derivatives are valid there); z: signed
+// distance inside the image circle in units of the circle's radius fraction
+// (0.5 - r, negative outside) before lens distortion.
+fn fisheye_uv(d: vec3<f32>, fov: f32, k1: f32, k2: f32, size: vec2<f32>, centre: vec2<f32>) -> vec3<f32> {
     let theta = acos(clamp(-d.z, -1.0, 1.0));
     var r = theta / fov; // 0.5 at the edge of the image circle
-    if (r > 0.5) { return INVALID; }
+    let inside = 0.5 - r;
     let r2 = r * r * 4.0;
     r = r * (1.0 + k1 * r2 + k2 * r2 * r2);
     let len = length(d.xy);
     var dir = vec2<f32>(0.0, 0.0);
     if (len > 1e-6) { dir = d.xy / len; }
     let uv = centre + vec2<f32>(dir.x, -dir.y) * r * size;
-    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return INVALID; }
-    return uv;
+    return vec3<f32>(uv, inside);
 }
 
 // YouTube equi-angular cubemap, 3x2 layout as FFmpeg's v360 "eac" output:
@@ -192,16 +203,19 @@ fn eac_uv(d: vec3<f32>, h_fov: f32) -> vec2<f32> {
     return uv;
 }
 
-fn flat_uv(origin: vec3<f32>, d: vec3<f32>) -> vec2<f32> {
+// xy: coordinates on the screen, 0..1 inside it but NOT clamped or rejected
+// outside (continuous across the edge, so derivatives are valid there); z: 1
+// when the ray meets the screen's plane or cylinder at all, else 0.
+fn flat_uv(origin: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
     let o = (params.screen_inv * vec4<f32>(origin, 1.0)).xyz;
     let dir = normalize((params.screen_inv * vec4<f32>(d, 0.0)).xyz);
     let w = params.screen.x; let h = params.screen.y; let arc = params.screen.z;
     var p: vec3<f32>;
     var u: f32;
     if (arc < 1e-3) {
-        if (dir.z >= -1e-6) { return INVALID; }
+        if (dir.z >= -1e-6) { return vec3<f32>(INVALID, 0.0); }
         let t = -o.z / dir.z;
-        if (t <= 0.0) { return INVALID; }
+        if (t <= 0.0) { return vec3<f32>(INVALID, 0.0); }
         p = o + t * dir;
         u = p.x / w + 0.5;
     } else {
@@ -213,16 +227,15 @@ fn flat_uv(origin: vec3<f32>, d: vec3<f32>) -> vec2<f32> {
         let qb = 2.0 * dot(oc, dd);
         let qc = dot(oc, oc) - r * r;
         let disc = qb * qb - 4.0 * qa * qc;
-        if (disc < 0.0) { return INVALID; }
+        if (disc < 0.0) { return vec3<f32>(INVALID, 0.0); }
         let t = (-qb + sqrt(disc)) / (2.0 * qa);
-        if (t <= 0.0) { return INVALID; }
+        if (t <= 0.0) { return vec3<f32>(INVALID, 0.0); }
         p = o + t * dir;
         let phi = atan2(p.x, r - p.z);
         u = 0.5 + phi * r / w;
     }
     let v = 0.5 - p.y / h;
-    if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) { return INVALID; }
-    return vec2<f32>(u, v);
+    return vec3<f32>(u, v, 1.0);
 }
 
 fn to_eye_rect(uv: vec2<f32>, eye: u32) -> vec2<f32> {
@@ -244,7 +257,9 @@ fn stored_uv(uv: vec2<f32>) -> vec2<f32> {
     }
 }
 
-fn sample_yuv(uv: vec2<f32>) -> vec3<f32> {
+// The stored frame's raw samples at `uv`, scaled and offset but not yet
+// converted to RGB.
+fn fetch_yuv(uv: vec2<f32>) -> vec3<f32> {
     let y = textureSampleLevel(plane0, samp, uv, 0.0).r;
     var c: vec2<f32>;
     if (params.mode.w == 0u) {
@@ -252,8 +267,48 @@ fn sample_yuv(uv: vec2<f32>) -> vec3<f32> {
     } else {
         c = textureSampleLevel(plane1, samp, uv, 0.0).rg;
     }
-    let yuv = vec3<f32>(y, c) * params.yuv_offset.w - params.yuv_offset.xyz;
+    return vec3<f32>(y, c) * params.yuv_offset.w - params.yuv_offset.xyz;
+}
+
+// rgb = m * yuv is linear in yuv (the offset is already subtracted in
+// fetch_yuv, and the matrix is a plain 3x3), so averaging fetched samples
+// and converting once equals converting each and averaging.
+fn yuv_to_rgb(yuv: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(params.yuv_r.xyz, yuv), dot(params.yuv_g.xyz, yuv), dot(params.yuv_b.xyz, yuv));
+}
+
+fn sample_yuv(uv: vec2<f32>) -> vec3<f32> {
+    return yuv_to_rgb(fetch_yuv(uv));
+}
+
+// One tap at a point of the screen (0..1), clamped into the screen so a tap
+// never reads the other eye's half of a stereo frame.
+fn fetch_tap(p: vec2<f32>, eye: u32) -> vec3<f32> {
+    return fetch_yuv(stored_uv(to_eye_rect(clamp(p, vec2<f32>(0.0), vec2<f32>(1.0)), eye)));
+}
+
+// Four taps on a rotated grid inside the eye pixel's footprint on the screen
+// (offsets of 1/8 and 3/8 of a pixel along its two screen-space axes), so
+// every row and column of the pixel is sampled at a different position.
+// Averaged in the video's own (gamma-encoded Y'CbCr) space, as the single
+// tap was; not in linear light.
+fn sample_yuv_aa(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, eye: u32) -> vec3<f32> {
+    let a = fetch_tap(uv + dx * -0.375 + dy * -0.125, eye);
+    let b = fetch_tap(uv + dx * 0.125 + dy * -0.375, eye);
+    let c = fetch_tap(uv + dx * 0.375 + dy * 0.125, eye);
+    let e = fetch_tap(uv + dx * -0.125 + dy * 0.375, eye);
+    return yuv_to_rgb((a + b + c + e) * 0.25);
+}
+
+// How many video texels one eye pixel spans on the screen, the larger of its
+// two axes. `dx`/`dy` are the screen coordinate's derivatives.
+fn texel_footprint(dx: vec2<f32>, dy: vec2<f32>) -> f32 {
+    // The upright picture's size in texels, then the eye's share of it.
+    var size = params.tex_size.xy;
+    if ((params.display.x & 1u) == 1u) { size = size.yx; }
+    if (params.mode.y == 1u) { size.x = size.x * 0.5; }
+    if (params.mode.y == 2u) { size.y = size.y * 0.5; }
+    return max(length(dx * size), length(dy * size));
 }
 
 fn luma_at(uv: vec2<f32>) -> f32 {
@@ -309,9 +364,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     var uv: vec2<f32>;
+    // False where the ray misses the picture outright (nothing to blend).
+    var hit = true;
+    // Fisheye: signed distance inside the image circle; large elsewhere.
+    var inside = 1.0;
     let kind = params.mode.x;
     if (kind == 0u) {
-        uv = flat_uv(origin, world_dir);
+        let f = flat_uv(origin, world_dir);
+        uv = f.xy;
+        hit = f.z > 0.5;
     } else {
         // In the room frame the video was centred in, so per-eye stereo
         // corrections stay the eyes' own; then the picture's rotation.
@@ -326,20 +387,58 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         d = zoom_dir(d, params.proj.z);
         if (kind == 1u) {
             uv = equirect_uv(d, params.proj.x, params.proj.y);
+            hit = uv.x >= 0.0;
         } else if (kind == 2u) {
             // The centres belong to the images, so they follow a swap.
             let slot = select(0u, eye ^ params.mode.z, params.mode.y != 0u);
             let centre = 0.5 + select(params.centres.xy, params.centres.zw, slot == 1u);
-            uv = fisheye_uv(d, params.proj.x, params.lens.x, params.lens.y, params.circle.xy, centre);
+            let f = fisheye_uv(d, params.proj.x, params.lens.x, params.lens.y, params.circle.xy, centre);
+            uv = f.xy;
+            inside = f.z;
         } else {
             uv = eac_uv(d, params.proj.x);
+            hit = uv.x >= 0.0;
         }
     }
-    if (uv.x < 0.0) {
+
+    // Screen-space derivatives, taken here: derivatives need uniform control
+    // flow, and everything above branches only on uniforms, while the early
+    // returns below depend on the pixel.
+    let duv_dx = dpdx(uv);
+    let duv_dy = dpdy(uv);
+    let dinside = fwidth(inside);
+
+    // Coverage of this pixel by the picture. Flat and curved screens are
+    // edged by uv in 0..1 on both axes; a fisheye also by its image circle.
+    // A pixel centred on the edge is half covered.
+    var cov = 1.0;
+    if (kind == 0u || kind == 2u) {
+        if (EDGE_AA) {
+            let fw = max(abs(duv_dx) + abs(duv_dy), vec2<f32>(1e-6));
+            let e = clamp(min(uv, vec2<f32>(1.0) - uv) / fw + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
+            cov = e.x * e.y;
+            if (kind == 2u) {
+                cov = min(cov, clamp(inside / max(dinside, 1e-6) + 0.5, 0.0, 1.0));
+            }
+        } else if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || inside < 0.0) {
+            cov = 0.0;
+        }
+    }
+    // Also false for NaN.
+    if (!hit || !(cov > 0.0)) {
         return params.bg_color;
     }
-    let tuv = stored_uv(to_eye_rect(uv, eye));
-    var rgb = sample_yuv(tuv);
+
+    // Edge pixels centred just outside the picture read its border texel,
+    // never the other eye's half of a stereo frame.
+    let uvc = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    let tuv = stored_uv(to_eye_rect(uvc, eye));
+    var rgb: vec3<f32>;
+    if (SUPERSAMPLE && kind == 0u && texel_footprint(duv_dx, duv_dy) > 1.0) {
+        rgb = sample_yuv_aa(uvc, duv_dx, duv_dy, eye);
+    } else {
+        rgb = sample_yuv(tuv);
+    }
 
     // Chroma key (as OBS does it): pixels whose chroma is near the key
     // colour's turn see-through, with a soft edge, and the key colour's
@@ -361,7 +460,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (params.key2.z > 0.0) {
         let slot = f32(eye ^ params.mode.z);
         let k = params.key2.z;
-        let m = fract(vec2<f32>((1.0 - slot) * 0.5 + (uv.x - 0.5) * k * 0.5, (uv.y - 0.5) * k));
+        let m = fract(vec2<f32>((1.0 - slot) * 0.5 + (uvc.x - 0.5) * k * 0.5, (uvc.y - 0.5) * k));
         alpha *= clamp((sample_yuv(stored_uv(m)).r - 0.08) / 0.84, 0.0, 1.0);
     }
 
@@ -398,5 +497,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     g = pow(max(g, vec3<f32>(0.0)), vec3<f32>(1.0 / max(params.picture.w, 0.05)));
     let col = srgb_to_linear(clamp(g, vec3<f32>(0.0), vec3<f32>(1.0)));
     // Over the (premultiplied) background: keyed-out pixels show it.
-    return vec4<f32>(col * alpha + params.bg_color.rgb * (1.0 - alpha), alpha + params.bg_color.a * (1.0 - alpha));
+    // Premultiplied, like bg_color and the pipeline (blending is off), so a
+    // partly covered edge pixel is a plain mix towards the background.
+    let shown = vec4<f32>(col * alpha + params.bg_color.rgb * (1.0 - alpha), alpha + params.bg_color.a * (1.0 - alpha));
+    return mix(params.bg_color, shown, vec4<f32>(cov));
 }
