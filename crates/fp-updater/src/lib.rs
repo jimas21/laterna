@@ -90,24 +90,22 @@ pub fn check(url: &str, current_version: &str, channel: Channel) -> Result<Optio
 /// Checks FramePlayerX's GitHub releases for an update on `channel`: the
 /// highest version among recent releases ([`RELEASES_API_URL`]), stable
 /// versions only on the stable channel. Stable falls back to
-/// [`DEFAULT_MANIFEST_URL`] when the list can't be read. Otherwise as
-/// [`check`].
+/// [`DEFAULT_MANIFEST_URL`] when the list can't be read. A channel with no
+/// release at all (an empty list, or no stable release published yet) is
+/// `Ok(None)`, like being up to date; real failures stay errors. Otherwise
+/// as [`check`].
 pub fn check_channel(current_version: &str, channel: Channel) -> Result<Option<Update>> {
     let current = parse_version(current_version)?;
     let updater = Updater::new()?;
-    let url = channel_manifest_url(&updater, channel)?;
-    updater.check(&url, &current, channel)
+    updater.check_channel(RELEASES_API_URL, DEFAULT_MANIFEST_URL, &current, channel)
 }
 
 /// The manifest of the newest release on `channel` among recent releases
 /// ([`RELEASES_API_URL`]). Stable falls back to [`DEFAULT_MANIFEST_URL`]
 /// when the list can't be read; `releases/latest` never offers a beta.
+/// [`Error::NoRelease`] when the list has nothing for a beta.
 pub fn channel_manifest_url(updater: &Updater, channel: Channel) -> Result<String> {
-    match updater.newest_manifest_url(RELEASES_API_URL, channel) {
-        Ok(url) => Ok(url),
-        Err(_) if channel == Channel::Stable => Ok(DEFAULT_MANIFEST_URL.to_string()),
-        Err(e) => Err(e),
-    }
+    updater.channel_manifest_url(RELEASES_API_URL, DEFAULT_MANIFEST_URL, channel)
 }
 
 /// Downloads `update` into the directory `dest` with resume and SHA-256

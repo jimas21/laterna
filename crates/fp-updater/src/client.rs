@@ -112,6 +112,52 @@ impl Updater {
         crate::github::newest_manifest_url(&self.get_small(releases_url)?, channel)
     }
 
+    /// The manifest URL to read for `channel`: the newest release in the
+    /// list at `releases_url`. Stable falls back to `fallback_url` when the
+    /// list can't be read or has no stable release among the recent ones;
+    /// beta has no fallback and gets [`Error::NoRelease`] when the list has
+    /// nothing for it.
+    pub fn channel_manifest_url(
+        &self,
+        releases_url: &str,
+        fallback_url: &str,
+        channel: Channel,
+    ) -> Result<String> {
+        match self.newest_manifest_url(releases_url, channel) {
+            Ok(url) => Ok(url),
+            Err(_) if channel == Channel::Stable => Ok(fallback_url.to_string()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// [`Updater::check`] for the newest release on `channel`, found as in
+    /// [`Updater::channel_manifest_url`].
+    ///
+    /// A channel with no release at all is not a failure: there is nothing
+    /// newer, so `Ok(None)`. That is a list with no release for the channel
+    /// (beta), or the stable fallback's manifest answering HTTP 404 (no
+    /// stable release has been published yet). Network errors, other HTTP
+    /// statuses and bad signatures or manifests stay errors.
+    pub fn check_channel(
+        &self,
+        releases_url: &str,
+        fallback_url: &str,
+        current_version: &Version,
+        channel: Channel,
+    ) -> Result<Option<Update>> {
+        let url = match self.channel_manifest_url(releases_url, fallback_url, channel) {
+            Ok(url) => url,
+            Err(Error::NoRelease(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let result = self.check(&url, current_version, channel);
+        let missing = matches!(
+            &result,
+            Err(Error::HttpStatus { status: 404, url }) if url == fallback_url
+        );
+        if missing { Ok(None) } else { result }
+    }
+
     fn get_small(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
         let status = resp.status().as_u16();
@@ -381,6 +427,8 @@ mod tests {
     enum Route {
         /// Serve bytes, honouring `Range` when `ranges` is true.
         Bytes { data: Vec<u8>, ranges: bool },
+        /// Answer with this status and no body.
+        Status(u16),
     }
 
     /// Request path and `Range` header of every request seen.
@@ -448,6 +496,9 @@ mod tests {
         match route {
             None => {
                 let _ = req.respond(Response::empty(StatusCode(404)));
+            }
+            Some(Route::Status(code)) => {
+                let _ = req.respond(Response::empty(StatusCode(code)));
             }
             Some(Route::Bytes { data, ranges }) => {
                 let start = range
@@ -606,6 +657,109 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(got.version, Version::new(2, 0, 0));
+    }
+
+    /// A closed local port: connecting fails at once.
+    fn dead_url(path: &str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}{path}")
+    }
+
+    fn check_from(
+        u: &Updater,
+        releases_url: &str,
+        fallback_url: &str,
+        channel: Channel,
+    ) -> Result<Option<Update>> {
+        u.check_channel(releases_url, fallback_url, &Version::new(0, 17, 1), channel)
+    }
+
+    fn serve_json(srv: &Server, path: &str, json: serde_json::Value) {
+        let data = serde_json::to_vec(&json).unwrap();
+        let route = Route::Bytes {
+            data,
+            ranges: false,
+        };
+        srv.route(path, route);
+    }
+
+    #[test]
+    fn a_channel_with_no_release_is_up_to_date() {
+        let srv = Server::start();
+        let u = updater(&SigningKey::from_bytes(&[9; 32]));
+        let list = srv.url("/releases");
+        // Nothing is routed at the fallback, so it answers 404.
+        let fallback = srv.url("/latest/manifest.json");
+
+        // The list is empty: nothing on either channel.
+        serve_json(&srv, "/releases", serde_json::json!([]));
+        let got = check_from(&u, &list, &fallback, Channel::Beta).unwrap();
+        assert!(got.is_none());
+        let got = check_from(&u, &list, &fallback, Channel::Stable).unwrap();
+        assert!(got.is_none());
+
+        // Only a pre-release exists: stable has nothing.
+        let beta = serde_json::json!([{
+            "tag_name": "v0.17.1-beta.1",
+            "assets": [{ "name": "manifest.json", "browser_download_url": fallback }],
+        }]);
+        serve_json(&srv, "/releases", beta);
+        let got = check_from(&u, &list, &fallback, Channel::Stable).unwrap();
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn real_failures_are_not_up_to_date() {
+        let srv = Server::start();
+        let u = updater(&SigningKey::from_bytes(&[9; 32]));
+        let list = srv.url("/releases");
+        let fallback = srv.url("/latest/manifest.json");
+
+        // The release list can't be read and stable's fallback is 404: no
+        // stable release yet. Beta has no fallback, so the list is an error.
+        let got = check_from(&u, &list, &fallback, Channel::Stable).unwrap();
+        assert!(got.is_none());
+        assert!(matches!(
+            check_from(&u, &list, &fallback, Channel::Beta),
+            Err(Error::HttpStatus { status: 404, .. })
+        ));
+
+        // A server error on the list (beta) or the fallback (stable).
+        srv.route("/releases", Route::Status(500));
+        assert!(matches!(
+            check_from(&u, &list, &fallback, Channel::Beta),
+            Err(Error::HttpStatus { status: 500, .. })
+        ));
+        srv.route("/latest/manifest.json", Route::Status(500));
+        assert!(matches!(
+            check_from(&u, &list, &fallback, Channel::Stable),
+            Err(Error::HttpStatus { status: 500, .. })
+        ));
+
+        // A manifest without its signature: only a missing manifest is "no
+        // release".
+        let unsigned = Route::Bytes {
+            data: b"{}".to_vec(),
+            ranges: false,
+        };
+        srv.route("/latest/manifest.json", unsigned);
+        assert!(matches!(
+            check_from(&u, &list, &fallback, Channel::Stable),
+            Err(Error::HttpStatus { status: 404, .. })
+        ));
+
+        // A server that can't be reached.
+        let (list, fallback) = (dead_url("/releases"), dead_url("/manifest.json"));
+        assert!(matches!(
+            check_from(&u, &list, &fallback, Channel::Stable),
+            Err(Error::Http { .. })
+        ));
+        assert!(matches!(
+            check_from(&u, &list, &fallback, Channel::Beta),
+            Err(Error::Http { .. })
+        ));
     }
 
     #[test]

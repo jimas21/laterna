@@ -35,6 +35,10 @@ pub enum Error {
     /// The release manifest parsed but is not acceptable.
     #[error("release manifest is not valid: {0}")]
     InvalidManifest(String),
+    /// The release list has no release for the channel (none at all, or none
+    /// carrying a manifest). Not a failure: there is nothing newer to offer.
+    #[error("no release on the {0} channel has a manifest.json")]
+    NoRelease(crate::manifest::Channel),
     /// The detached signature is missing, not base64, or not 64 bytes.
     #[error("release manifest signature is malformed: {0}")]
     MalformedSignature(String),
