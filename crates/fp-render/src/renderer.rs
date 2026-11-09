@@ -11,6 +11,7 @@ use crate::mem::{self, Buffer, Image};
 use crate::params::{self, SceneParams, VideoParams};
 use crate::pipeline::{self, PipelineDesc};
 use crate::q10c::Converter;
+use crate::timing::Series;
 use crate::video::VideoPlanes;
 use crate::{Result, VkContext};
 use ash::vk;
@@ -20,6 +21,7 @@ use glam::{Mat4, Vec2, Vec3};
 use gpu_allocator::MemoryLocation;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 const SLOTS: usize = 2;
 /// Linear-light background format of eye targets.
@@ -174,6 +176,9 @@ pub struct Renderer {
     q10c: Option<Converter>,
     current: usize,
     recording: bool,
+    /// Wall time of the slot-fence wait in [`Renderer::begin_frame`]; the
+    /// app takes and resets it.
+    pub fence_wait: Series,
 }
 
 impl Renderer {
@@ -356,6 +361,7 @@ impl Renderer {
                 q10c: Converter::new(&gpu),
                 current: 0,
                 recording: false,
+                fence_wait: Series::new(),
             };
             r.white.set = r.tex_set(r.white.image.views[1])?;
             // Initialise the white and dummy images.
@@ -637,8 +643,10 @@ impl Renderer {
         // SAFETY: the slot's previous submission is complete after the wait,
         // so its resources and garbage can be reused/destroyed.
         unsafe {
+            let waited = Instant::now();
             d.wait_for_fences(&[slot.fence], true, u64::MAX)
                 .ctx("wait for frame")?;
+            self.fence_wait.push_since(waited);
             for mut img in slot.garbage.drain(..) {
                 img.destroy(&self.gpu);
             }

@@ -9,6 +9,7 @@
 //! - [`math`]: OpenXR-style projection and view matrices.
 //! - [`capture`]: offscreen eye targets with read-back, for tests and
 //!   screenshots.
+//! - [`timing`]: per-period duration statistics for the frame loop.
 //! - `q10c`: shows the Steam Frame decoder's 10-bit (Q10C) pictures.
 
 pub mod capture;
@@ -19,6 +20,7 @@ pub mod params;
 mod pipeline;
 mod q10c;
 pub mod renderer;
+pub mod timing;
 mod video;
 
 pub use gpu::{Creator, DirectCreator, Gpu};
