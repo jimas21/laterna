@@ -405,8 +405,7 @@ fn a_flat_screens_edge_is_antialiased() {
         ViewSettings::default(),
     );
     // Turned a little, so the screen's edges cross pixels at every fraction.
-    p.screen_pose =
-        Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0)) * Mat4::from_rotation_y(0.3);
+    p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0)) * Mat4::from_rotation_y(0.3);
     p.background = [0.0, 0.0, 0.0, 1.0];
     let [l, _] = render(&mut r, &mut e, Some(&green), &p, &[]);
     let (mut full, mut partial) = (0, 0);
@@ -422,7 +421,10 @@ fn a_flat_screens_edge_is_antialiased() {
     assert!(centre(&l)[1] > 220, "the screen's centre is full green");
     assert!(full > 1000, "screen interior: {full} full pixels");
     // A hard edge has none of these: every pixel is picture or background.
-    assert!(partial > 20, "edge pixels blended with the background: {partial}");
+    assert!(
+        partial > 20,
+        "edge pixels blended with the background: {partial}"
+    );
     e.destroy(&r);
 }
 
