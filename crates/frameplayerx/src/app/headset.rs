@@ -20,6 +20,8 @@ impl App {
             && let Some(p) = &mut self.playback
         {
             p.player.pause();
+            // No frame runs while the headset is off, so tell the server now.
+            p.sync_watch();
             // Taking the headset off may be the last thing done.
             p.save_progress(&self.services.library, true);
             self.headset_paused = true;
