@@ -17,20 +17,36 @@ view and hides the environment, as now.
 
 ## Render changes
 
-1. **Depth.** Give each eye target a depth image (D16 or D32, same extent).
+1. **Depth.** The renderer owns one depth image per eye (D32_SFLOAT, made
+   lazily for the target's extent, old ones to the slot's garbage list):
+   `EyeTarget` is built by fp-xr and capture.rs and the XR swapchain cannot
+   supply depth, so neither changes. Every pipeline in the eye pass declares
+   the depth format; the scene and quad pipelines get it with the test off.
 2. **Environment pass** (new `env.wgsl` + pipeline), before the scene pass:
    - Static meshes: position, normal, UV, a lightmap/AO UV; one albedo
      texture per material; depth write on.
    - Lighting = baked/ambient term + an analytic area light for the screen
      (a few samples over the screen rectangle, Lambert + falloff) coloured
-     by the video's average colour, so the room glows with the film.
+     by the video's average colour, so the room glows with the film. The
+     screen rectangle depends on the frame's size, known only inside
+     `Renderer::draw`, so the light is computed there and is off until the
+     first frame arrives.
+   - Only for flat video (`projection == Flat`): 180°/360° video also paints
+     `bg_color` past the picture's edge and fills the view anyway.
+   - A room forces the OPAQUE blend mode; `passthrough` becomes an
+     environment id (the one that keeps the alpha-0 path) and the existing
+     `Settings::passthrough` bool and its three toggle sites migrate into it.
      "House lights" dim from the room's own level to near-dark while
      playing, up again on pause.
    - Optional sky: an equirect texture drawn where no mesh is (space,
      outdoor), reusing the equirect UV maths already in `scene.wgsl`.
 3. **Scene pass with an environment active:** outside the screen
-   `discard` instead of returning `bg_color`; inside, write `frag_depth`
-   from the ray's hit point so seats and the stage occlude correctly.
+   `discard` instead of returning `bg_color` (both returns, and the
+   chroma-key blend at the end discards or blends without the bg term, so
+   the room shows behind keyed pixels); inside, write `frag_depth` from the
+   ray's hit point (needs the forward view-proj in `Params`) so seats and
+   the stage occlude correctly. `frag_depth` disables early-Z, which is why
+   the room pass runs first.
 4. **Screen colour.** A tiny compute pass after the video upload samples a
    coarse grid of the frame (both YUV paths, Q10C after conversion) into a
    storage buffer, smoothed over ~150 ms so cuts don't strobe. Lit edges
@@ -79,12 +95,18 @@ copies of another app's rooms.
 - Per-environment: house-light level, screen spill on/off, screen size
   preset (the room's own, or the user's existing screen settings).
 - Remember the last environment; optionally per-library (movies → cinema,
-  TV → living room).
+  TV → living room), keyed by the library's section type
+  (`collection_type`), which Plex, Jellyfin and Emby all report; the
+  item's kind (movie / episode) is the fallback. Remembering a choice per
+  video needs a schema version and a `MediaRecord` column, so it comes
+  last.
 
 ## Milestones
 
-1. Toolchain: WSL2 Ubuntu, `tools/local-xr.sh setup`, build and run the
-   preview harness unchanged.
+1. Toolchain: WSL2 Ubuntu (needs a reboot, so it waits for a window:
+   `wsl --install --web-download`, reboot, `wsl --install -d Ubuntu-24.04`),
+   then `tools/local-xr.sh setup`, build and run the preview harness
+   unchanged. Where each change goes: [ENVIRONMENTS-CODEMAP.md](ENVIRONMENTS-CODEMAP.md).
 2. Depth + env pass + one procedural room (`home-theater`) with the screen
    light; check in the preview harness and Monado.
 3. Video average colour pass; house-light dimming.
