@@ -44,14 +44,14 @@ pub use semver::Version;
 /// expected at the same URL plus `.sig`. The stable channel falls back to
 /// it when GitHub's release list can't be read (rate limits).
 pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/remotesojourner/frameplayerx/releases/latest/download/manifest.json";
+    "https://github.com/jimas21/frameplex/releases/latest/download/manifest.json";
 
 /// GitHub's list of the most recent releases, pre-releases included. Both
 /// channels pick the highest version for them here: it is current the
 /// moment a release is published, where `releases/latest` can lag, and it
 /// goes by the version rather than GitHub's pre-release flag.
 pub const RELEASES_API_URL: &str =
-    "https://api.github.com/repos/remotesojourner/frameplayerx/releases?per_page=10";
+    "https://api.github.com/repos/jimas21/frameplex/releases?per_page=10";
 
 /// The ed25519 public key release manifests are signed with.
 ///
@@ -60,8 +60,8 @@ pub const RELEASES_API_URL: &str =
 /// `fp-release keygen`, keep the private key offline, and paste the line it
 /// prints here.
 pub const RELEASE_PUBLIC_KEY: Option<[u8; 32]> = Some([
-    0xf6, 0x17, 0x2c, 0x39, 0xe9, 0xe8, 0xdd, 0x6c, 0x99, 0x09, 0x00, 0x33, 0xee, 0xee, 0xd7, 0xe1,
-    0xa2, 0xe8, 0xf8, 0xd3, 0xa0, 0x87, 0x82, 0x7b, 0x94, 0xb3, 0xa1, 0x71, 0xcb, 0xd8, 0x07, 0xd0,
+    0x2f, 0x72, 0x12, 0x0e, 0x00, 0x68, 0x50, 0x26, 0x31, 0xcb, 0x42, 0x85, 0xfc, 0x9e, 0xe6, 0x26,
+    0xbd, 0xec, 0x86, 0x46, 0x06, 0x6e, 0x0e, 0x65, 0xa7, 0x3c, 0xcc, 0x5d, 0x26, 0x2e, 0x2c, 0xba,
 ]);
 
 /// The compiled-in release key, parsed.
