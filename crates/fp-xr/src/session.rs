@@ -22,6 +22,13 @@ pub enum SessionEvent {
     Exit,
 }
 
+/// Whether a session in `state` is in front of the user's eyes: visible, or
+/// focused too. Taking the headset off moves it to synchronized (and on to
+/// idle, stopping); SteamVR's dashboard over the app is only visible.
+pub fn is_worn(state: xr::SessionState) -> bool {
+    matches!(state, xr::SessionState::VISIBLE | xr::SessionState::FOCUSED)
+}
+
 struct Eye {
     swapchain: xr::Swapchain<xr::Vulkan>,
     images: Vec<vk::Image>,
@@ -210,6 +217,11 @@ impl XrSession {
 
     pub fn state(&self) -> xr::SessionState {
         self.state
+    }
+
+    /// Whether the app is in front of the user's eyes (see [`is_worn`]).
+    pub fn headset_on(&self) -> bool {
+        is_worn(self.state)
     }
 
     /// Whether the runtime supports a blend mode showing the real world.
@@ -596,6 +608,28 @@ impl Drop for XrSession {
                 // SAFETY: GPU idle; views were created by us.
                 unsafe { self.gpu.device.destroy_image_view(v, None) };
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_visible_and_focused_count_as_worn() {
+        assert!(is_worn(xr::SessionState::FOCUSED));
+        assert!(is_worn(xr::SessionState::VISIBLE));
+        for off in [
+            xr::SessionState::UNKNOWN,
+            xr::SessionState::IDLE,
+            xr::SessionState::READY,
+            xr::SessionState::SYNCHRONIZED,
+            xr::SessionState::STOPPING,
+            xr::SessionState::LOSS_PENDING,
+            xr::SessionState::EXITING,
+        ] {
+            assert!(!is_worn(off), "{off:?}");
         }
     }
 }
