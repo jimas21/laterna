@@ -460,8 +460,8 @@ What the code relies on about the platform:
   `XR_VALVE_frame_controller_interaction` extension. Without it SteamVR
   presents them as Touch controllers.
 - SteamVR's per-app video settings override what an app asks for through
-  OpenXR, which is why the launcher sets the refresh rate and resolution
-  there.
+  OpenXR. The launcher leaves them alone unless `FRAMEPLAYERX_REFRESH_RATE`
+  or `FRAMEPLAYERX_RESOLUTION` is set to a non-zero value in the env file.
 - The hardware decoder is a V4L2 stateful decoder for 4:2:0 H.264 (8-bit)
   and HEVC (8- and 10-bit). One session takes at most 8192×4320. Every
   session open on the driver lowers that, idle ones and encoders too, so

@@ -26,7 +26,7 @@ fi
 vrcmd=/opt/steamvr/bin/linuxarm64/vrcmd
 vrsettings=$HOME/.config/openvr/config/steamvr.vrsettings
 app_default() { # KEY TYPE VALUE
-  [[ -n ${SteamAppId:-} && $3 != 0 && -x $vrcmd ]] || return 0
+  [[ -n ${SteamAppId:-} && -n $3 && $3 != 0 && -x $vrcmd ]] || return 0
   python3 -c 'import json, sys
 s = json.load(open(sys.argv[1])).get("steam.app." + sys.argv[2], {})
 sys.exit(0 if sys.argv[3] in s else 1)' "$vrsettings" "$SteamAppId" "$1" 2>/dev/null && return 0
