@@ -21,7 +21,7 @@ or your network.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the installer:
 
-<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+<a href="https://github.com/jimas21/frameplex/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
 
 Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm
 when Desktop Mode asks whether to trust it. A terminal window opens and:
@@ -46,15 +46,15 @@ FrameDrop or Valve's SteamOS Devkit Client.
 **With FrameDrop or Frame Control, from a PC.** With the app running on
 your PC and the headset paired, press the button in your PC's browser:
 
-<a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="../assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a>
-<a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="../assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
+<a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Fframeplex%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="../assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a>
+<a href="https://jimas21.github.io/frameplex/frame-control.html"><img src="../assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 
 GitHub doesn't keep links that open apps, so the Frame Control button opens a
 small page that opens Frame Control. If that doesn't work, paste this link
 into the browser's address bar instead:
 
 ```
-frame-control://install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframeplayerx.json
+frame-control://install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Fframeplex%2Freleases%2Flatest%2Fdownload%2Fframeplayerx.json
 ```
 
 Either app reads the release's manifest (`framedrop.json` or
@@ -110,7 +110,7 @@ left off. Your videos are never touched.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the uninstaller:
 
-<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Uninstall in Desktop Mode" width="240" /></a>
+<a href="https://github.com/jimas21/frameplex/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Uninstall in Desktop Mode" width="240" /></a>
 
 Open `Uninstall-FramePlayerX.desktop` from your Downloads folder and
 confirm when Desktop Mode asks whether to trust it. A terminal window
@@ -122,7 +122,7 @@ From Konsole, the same installer's `--remove` does this, and
 `--remove --purge` deletes your settings and watch history without asking:
 
 ```
-curl -fsSL https://github.com/remotesojourner/frameplayerx/releases/latest/download/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py
+curl -fsSL https://github.com/jimas21/frameplex/releases/latest/download/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py
 python3 /tmp/frameplayerx-desktop-install.py --remove
 ```
 
