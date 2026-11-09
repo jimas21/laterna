@@ -439,8 +439,8 @@ Steam can't pass environment variables to an app, so the launcher reads
 
 | Variable | Default | What it does |
 |---|---|---|
-| `FRAMEPLAYERX_REFRESH_RATE` | `90` | The refresh rate set in SteamVR's per-app settings for FramePlayerX, unless you chose one there. `0` leaves it alone |
-| `FRAMEPLAYERX_RESOLUTION` | `2160` | Pixels per eye, set the same way (SteamVR's default is 1728). `0` leaves it alone |
+| `FRAMEPLAYERX_REFRESH_RATE` | | A refresh rate in Hz to set in SteamVR's per-app settings for FramePlayerX, unless you chose one there. Unset or `0` sets nothing, so SteamVR's default applies |
+| `FRAMEPLAYERX_RESOLUTION` | | Pixels per eye, set the same way. Unset or `0` sets nothing |
 | `FRAMEPLAYERX_DEBUG_INPUT` | | `1` logs each controller's input when it changes |
 | `FRAMEPLAYERX_V4L2` | | `0` turns off the native V4L2 decoder |
 | `FRAMEPLAYERX_V4L2_DEVICE` | | The V4L2 device to decode with, instead of the one found |
