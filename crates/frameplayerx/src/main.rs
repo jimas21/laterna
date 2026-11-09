@@ -485,8 +485,16 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     // Panel picture each quad layer holds: (panel, paint version).
     let mut copied: std::collections::HashMap<u64, (fp_render::PanelId, u64)> =
         std::collections::HashMap::new();
+    let mut headset_on = false;
     loop {
-        match session.poll()? {
+        let event = session.poll()?;
+        // Acted on here, not in a frame: no frame may be rendered once the
+        // headset is off.
+        if session.headset_on() != headset_on {
+            app.headset_worn_changed(headset_on, session.headset_on());
+            headset_on = session.headset_on();
+        }
+        match event {
             SessionEvent::Exit => break,
             SessionEvent::None => {
                 std::thread::sleep(Duration::from_millis(20));

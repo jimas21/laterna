@@ -96,6 +96,8 @@ settings-pointing-slider-desc = Thumbstick left / right moves it one step
 settings-reset-controls = Reset to defaults
 settings-resume = Resume where I left off
 settings-resume-desc = Videos start again from the last position.
+settings-pause-headset-off = Pause when the headset comes off
+settings-pause-headset-off-desc = A playing video pauses when you take the headset off, and stays paused until you press play.
 settings-seek-step = Thumbstick seek
 settings-seek-step-desc = How far one push of the thumbstick jumps.
 settings-auto-hide = Hide controls after
@@ -920,6 +922,7 @@ button-dpad-up = D-pad up
 # A controller button: use Steam's word for it.
 button-bumper = Bumper
 button-stick-press = Thumbstick press
+toast-paused-headset-off = Paused: headset off
 toast-sound-on = Sound on
 toast-muted = Muted
 toast-no-room = This headset can't show your room

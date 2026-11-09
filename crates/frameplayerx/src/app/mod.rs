@@ -3,6 +3,7 @@
 
 mod actions;
 mod frame;
+mod headset;
 mod input;
 mod plex;
 mod remote;
@@ -179,6 +180,9 @@ pub struct App {
     /// Up next.
     queue: crate::queue::Queue,
     last_status: Option<PlaybackStatus>,
+    /// The video was paused because the headset came off: it says so when
+    /// the headset is back on.
+    headset_paused: bool,
     /// When the web remote's details were last built.
     remote_details_at: Instant,
     /// The open video's picture for the web remote, by its location.
@@ -312,6 +316,7 @@ impl App {
             offsets: Default::default(),
             queue: Default::default(),
             last_status: None,
+            headset_paused: false,
             remote_details_at: Instant::now(),
             remote_picture: None,
             update: None,
