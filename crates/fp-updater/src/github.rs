@@ -37,7 +37,8 @@ struct Asset {
 /// without a pre-release part (`1.2.0`, not `1.2.0-beta.1`) for stable,
 /// whatever GitHub's pre-release flag says. Drafts, tags that aren't
 /// versions (`v` prefix allowed) and releases without a manifest (yet) are
-/// skipped.
+/// skipped. When none is left, [`Error::NoRelease`]: the list was read fine
+/// but has nothing for the channel.
 pub fn newest_manifest_url(releases_json: &[u8], channel: Channel) -> Result<String> {
     let releases: Vec<Release> = serde_json::from_slice(releases_json)
         .map_err(|e| Error::InvalidManifest(format!("GitHub release list: {e}")))?;
@@ -59,13 +60,7 @@ pub fn newest_manifest_url(releases_json: &[u8], channel: Channel) -> Result<Str
         })
         .max_by(|(a, _), (b, _)| a.cmp_precedence(b))
         .map(|(_, url)| url)
-        .ok_or_else(|| {
-            let which = match channel {
-                Channel::Stable => "stable release",
-                Channel::Beta => "release",
-            };
-            Error::InvalidManifest(format!("no {which} in the list has a manifest.json"))
-        })
+        .ok_or(Error::NoRelease(channel))
 }
 
 #[cfg(test)]
@@ -118,7 +113,7 @@ mod tests {
         );
         assert!(matches!(
             newest_stable(&[release("v1.0.0-beta.1", false, true)]),
-            Err(Error::InvalidManifest(_))
+            Err(Error::NoRelease(Channel::Stable))
         ));
     }
 
@@ -160,8 +155,9 @@ mod tests {
         );
         assert!(matches!(
             newest(&[release("v0.6.0", false, false)]),
-            Err(Error::InvalidManifest(_))
+            Err(Error::NoRelease(Channel::Beta))
         ));
+        assert!(matches!(newest(&[]), Err(Error::NoRelease(Channel::Beta))));
         assert!(matches!(
             newest_manifest_url(b"{\"message\":\"rate limited\"}", Channel::Stable),
             Err(Error::InvalidManifest(_))

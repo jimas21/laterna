@@ -4,7 +4,7 @@ FramePlayerX is maintained by one person, and every feature, setting and button 
 
 You don't need to write code to help:
 
-- **Found a bug or have an idea?** Open a [bug report](https://github.com/remotesojourner/frameplayerx/issues/new?template=bug_report.md) or a [suggestion](https://github.com/remotesojourner/frameplayerx/issues/new?template=feature_request.md).
+- **Found a bug or have an idea?** Open a [bug report](https://github.com/jimas21/frameplex/issues/new?template=bug_report.md) or a [suggestion](https://github.com/jimas21/frameplex/issues/new?template=feature_request.md).
 - **Spotted a wrong translation?** See [Help translate](README.md#help-translate).
 
 ## Before you write code

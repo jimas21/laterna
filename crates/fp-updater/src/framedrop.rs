@@ -246,7 +246,7 @@ mod tests {
     fn good() -> FramedropManifest {
         FramedropManifest::for_zip(
             "FramePlayerX",
-            "https://github.com/remotesojourner/frameplayerx/releases/download/v1.0.0/frameplayerx-1.0.0-aarch64.zip",
+            "https://github.com/jimas21/frameplex/releases/download/v1.0.0/frameplayerx-1.0.0-aarch64.zip",
             SHA,
             12345,
             "frameplayerx/frameplayerx.sh",

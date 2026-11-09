@@ -439,8 +439,8 @@ Steam can't pass environment variables to an app, so the launcher reads
 
 | Variable | Default | What it does |
 |---|---|---|
-| `FRAMEPLAYERX_REFRESH_RATE` | `90` | The refresh rate set in SteamVR's per-app settings for FramePlayerX, unless you chose one there. `0` leaves it alone |
-| `FRAMEPLAYERX_RESOLUTION` | `2160` | Pixels per eye, set the same way (SteamVR's default is 1728). `0` leaves it alone |
+| `FRAMEPLAYERX_REFRESH_RATE` | | A refresh rate in Hz to set in SteamVR's per-app settings for FramePlayerX, unless you chose one there. Unset or `0` sets nothing, so SteamVR's default applies |
+| `FRAMEPLAYERX_RESOLUTION` | | Pixels per eye, set the same way. Unset or `0` sets nothing |
 | `FRAMEPLAYERX_DEBUG_INPUT` | | `1` logs each controller's input when it changes |
 | `FRAMEPLAYERX_V4L2` | | `0` turns off the native V4L2 decoder |
 | `FRAMEPLAYERX_V4L2_DEVICE` | | The V4L2 device to decode with, instead of the one found |
@@ -460,8 +460,8 @@ What the code relies on about the platform:
   `XR_VALVE_frame_controller_interaction` extension. Without it SteamVR
   presents them as Touch controllers.
 - SteamVR's per-app video settings override what an app asks for through
-  OpenXR, which is why the launcher sets the refresh rate and resolution
-  there.
+  OpenXR. The launcher leaves them alone unless `FRAMEPLAYERX_REFRESH_RATE`
+  or `FRAMEPLAYERX_RESOLUTION` is set to a non-zero value in the env file.
 - The hardware decoder is a V4L2 stateful decoder for 4:2:0 H.264 (8-bit)
   and HEVC (8- and 10-bit). One session takes at most 8192×4320. Every
   session open on the driver lowers that, idle ones and encoders too, so

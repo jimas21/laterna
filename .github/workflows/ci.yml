@@ -2,7 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # environments and fp/* build and test on every push; only main,
+    # a tag or a run from the Actions tab can release.
+    branches: [main, environments, 'fp/**']
     tags: ['v*']
   pull_request:
   # Run from the Actions tab: on main it publishes a stable release, on any
