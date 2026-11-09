@@ -602,7 +602,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             match session.request_refresh_rate(hz) {
                 Ok(()) => {
                     let now = session.refresh_rate();
-                    log::info!("requested display refresh rate {hz} Hz: accepted (read back {now:?})");
+                    log::info!("requested {hz} Hz: accepted (read back {now:?})");
                 }
                 Err(e) => log::warn!("requested display refresh rate {hz} Hz: {e}"),
             }
