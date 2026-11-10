@@ -1392,7 +1392,8 @@ earbuds-install = Install Tragus
 # Short: a button.
 earbuds-reinstall = Reinstall Tragus
 earbuds-working = Installing Tragus...
-earbuds-installed = Tragus is installed.
+earbuds-installed = Tragus { $version } is installed.
+earbuds-installed-plain = Tragus is installed.
 earbuds-uptodate = Tragus is installed and up to date.
 earbuds-updated = Tragus is installed. Restart the headset once to see it in Steam's menu.
 earbuds-failed = Tragus could not be installed.

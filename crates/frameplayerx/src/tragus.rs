@@ -18,15 +18,26 @@ fn script_url() -> String {
     format!("https://github.com/jimas21/tragus/releases/download/{TAG}/magicpods-frame-install.py")
 }
 
-/// Where the install leaves its own uninstaller; present once Tragus is in.
-fn marker() -> Option<PathBuf> {
+/// The installer's record of what is installed: `{"core": tag, "menu": tag}`.
+fn versions_file() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".local/share/magicpodscore/uninstall.sh"))
+    Some(PathBuf::from(home).join(".local/share/magicpods-app/versions.json"))
 }
 
-/// Whether Tragus is installed (a file check, no network).
-pub fn installed() -> bool {
-    marker().is_some_and(|p| p.is_file())
+/// The installed Tragus version, or `None` when it is not installed (a file
+/// read, no network).
+pub fn installed() -> Option<String> {
+    let text = std::fs::read_to_string(versions_file()?).ok()?;
+    Some(parse_version(&text).unwrap_or_default())
+}
+
+/// The version in `versions.json` (the core's, else the menu's).
+pub fn parse_version(text: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    ["core", "menu"]
+        .iter()
+        .find_map(|k| v.get(k)?.as_str())
+        .map(str::to_string)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -222,6 +233,8 @@ mod tests {
             })
         );
         assert_eq!(parse_status("not json"), None);
+        let v = parse_version(r#"{"core": "2.0.12-frame.10", "menu": "2.0.12-frame.10"}"#);
+        assert_eq!(v.as_deref(), Some("2.0.12-frame.10"));
         assert_eq!(parse_status(r#"{"message": "no state"}"#), None);
     }
 }

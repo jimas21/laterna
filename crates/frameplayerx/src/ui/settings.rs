@@ -522,11 +522,17 @@ fn earbuds(ui: &mut egui::Ui, tragus: &crate::tragus::Tragus) {
     use crate::tragus::Phase;
     let phase = tragus.phase();
     let running = matches!(phase, Phase::Running(_));
-    let installed = crate::tragus::installed();
+    let version = crate::tragus::installed();
+    let installed = version.is_some();
     heading(ui, tr!("settings-earbuds"));
     widgets::rows(ui, |r| {
-        if installed && !running {
-            r.row(tr!("earbuds-installed"), None, |ui| {
+        if let Some(version) = version.as_deref().filter(|_| !running) {
+            let line = if version.is_empty() {
+                tr!("earbuds-installed-plain").to_string()
+            } else {
+                tr!("earbuds-installed", version = version)
+            };
+            r.row(&line, None, |ui| {
                 open_tragus(ui);
             });
         }
