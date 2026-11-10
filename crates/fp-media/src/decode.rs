@@ -328,6 +328,27 @@ pub struct Decoder {
     paired: Option<Paired>,
     /// Packets precise seeks left out.
     pub(crate) left_out: u64,
+    /// Damage met while decoding (see [`ErrorCounts`]).
+    errors: ErrorCounts,
+}
+
+/// Damage a decoder met in a video, counted since it opened. Nothing acts
+/// on it: they are for the log and the performance overlay.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ErrorCounts {
+    /// Pictures the hardware decoder flagged as broken (`V4L2_BUF_FLAG_ERROR`).
+    pub(crate) pictures_flagged: u64,
+    /// Packets FFmpeg refused as invalid data and skipped.
+    pub(crate) packets_invalid: u64,
+    /// Frames FFmpeg handed over marked corrupt or concealed.
+    pub(crate) frames_corrupt: u64,
+}
+
+/// Whether an FFmpeg frame, from its `flags` and `decode_error_flags`, was
+/// decoded with damage: marked corrupt, or with any decode error noted
+/// (invalid bitstream, a missing reference, concealment).
+fn frame_damaged(flags: u32, decode_error_flags: u32) -> bool {
+    flags & ff::AV_FRAME_FLAG_CORRUPT != 0 || decode_error_flags != 0
 }
 
 /// The ways of decoding 3D through another decoder, pairing its pictures.
@@ -448,6 +469,7 @@ impl Decoder {
                 crate::frame_seq::FrameSeqDecoder::new(inner, stream, stills),
             ))),
             left_out: 0,
+            errors: ErrorCounts::default(),
         };
         dec.follow_paired();
         dec
@@ -495,6 +517,7 @@ impl Decoder {
             skip: None,
             paired: Some(Paired::Mvc(Box::new(mvc))),
             left_out: 0,
+            errors: ErrorCounts::default(),
         };
         dec.follow_paired();
         Ok(dec)
@@ -612,6 +635,7 @@ impl Decoder {
             skip: None,
             paired: None,
             left_out: 0,
+            errors: ErrorCounts::default(),
         })
     }
 
@@ -654,6 +678,7 @@ impl Decoder {
                 skip: None,
                 paired: None,
                 left_out: 0,
+                errors: ErrorCounts::default(),
             };
             if hardware {
                 HW_SESSIONS.fetch_add(1, Ordering::Relaxed); // until Drop
@@ -710,6 +735,27 @@ impl Decoder {
         self.ctx
     }
 
+    /// The damage met since opening: the native decoder's flagged pictures
+    /// included, and for 3D the decoder behind the pairing too.
+    pub(crate) fn error_counts(&self) -> ErrorCounts {
+        let mut c = self.errors;
+        #[cfg(target_os = "linux")]
+        if let Some(n) = &self.native {
+            c.pictures_flagged += n.dec.pictures_flagged();
+        }
+        let inner = match &self.paired {
+            Some(Paired::Mvc(m)) => Some(&m.inner),
+            Some(Paired::FrameSequential(f)) => Some(&f.inner),
+            None => None,
+        };
+        if let Some(i) = inner.map(Decoder::error_counts) {
+            c.pictures_flagged += i.pictures_flagged;
+            c.packets_invalid += i.packets_invalid;
+            c.frames_corrupt += i.frames_corrupt;
+        }
+        c
+    }
+
     /// Replaces a failed native decoder with the next candidates (FFmpeg's
     /// V4L2 wrapper, then software), replaying startup packets into it.
     #[cfg(target_os = "linux")]
@@ -727,6 +773,8 @@ impl Decoder {
             }
         );
         let startup = native.startup.take().unwrap_or_default();
+        // The count of its flagged pictures goes on with the decoder.
+        self.errors.pictures_flagged += native.dec.pictures_flagged();
         // FFmpeg's V4L2 wrapper feeds the device the same way, so a stream
         // the hardware flags as broken goes straight to software.
         let hw = if native.dec.pictures_broken() {
@@ -819,6 +867,7 @@ impl Decoder {
         }
         if r == ff::AVERROR_INVALIDDATA_ {
             log::debug!("{}: skipping invalid packet", self.name);
+            self.errors.packets_invalid += 1;
             return Ok(true);
         }
         check(r, "send packet")?;
@@ -890,6 +939,14 @@ impl Decoder {
                     }
                 }
                 self.skip = None;
+            }
+            // SAFETY: a decoded frame, only read.
+            let damaged = unsafe {
+                let f = &*frame.0;
+                frame_damaged(f.flags as u32, f.decode_error_flags as u32)
+            };
+            if damaged {
+                self.errors.frames_corrupt += 1;
             }
             if self.hardware {
                 copy_out(frame)?;
@@ -1376,6 +1433,50 @@ mod tests {
             max <= 1023 && max > 600,
             "10-bit values in low bits, got max {max}"
         );
+    }
+
+    #[test]
+    fn damage_is_a_corrupt_flag_or_any_decode_error() {
+        assert!(!frame_damaged(0, 0));
+        assert!(frame_damaged(ff::AV_FRAME_FLAG_CORRUPT, 0));
+        // Other frame flags (key, interlaced) are not damage.
+        assert!(!frame_damaged(!ff::AV_FRAME_FLAG_CORRUPT, 0));
+        for e in [
+            ff::FF_DECODE_ERROR_INVALID_BITSTREAM,
+            ff::FF_DECODE_ERROR_MISSING_REFERENCE,
+            ff::FF_DECODE_ERROR_CONCEALMENT_ACTIVE,
+            ff::FF_DECODE_ERROR_DECODE_SLICES,
+        ] {
+            assert!(frame_damaged(0, e), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_clean_stream_meets_no_damage() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data")
+            .join("h264_aac_180_LR.mp4");
+        let mut input = Input::open(
+            Arc::new(FileSource::open(&path).unwrap()),
+            "clip",
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
+        let mut dec = Decoder::open(&input, vi, HwDecode::Off).unwrap();
+        assert_eq!(dec.error_counts(), ErrorCounts::default());
+        let (mut pkt, mut frame) = (Packet::new(), Frame::new());
+        let mut sent = 0;
+        while sent < 30 && input.read(pkt.as_ptr()).unwrap() {
+            if pkt.stream_index() == vi {
+                dec.send(pkt.as_ptr()).unwrap();
+                sent += 1;
+                while let Some(true) = dec.receive(&mut frame).unwrap() {}
+            }
+            pkt.unref();
+        }
+        assert!(sent > 0);
+        assert_eq!(dec.error_counts(), ErrorCounts::default());
     }
 
     #[test]

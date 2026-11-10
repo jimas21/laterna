@@ -964,6 +964,8 @@ mod linux {
         in_band_parameter_sets: bool,
         /// CAPTURE buffers flagged as broken since the last good picture.
         broken_in_a_row: u32,
+        /// CAPTURE buffers flagged as broken since opening.
+        flagged: u64,
         out_free: Vec<u32>,
         /// Filtered packets waiting for a free OUTPUT buffer, with their ids.
         pending: VecDeque<(Packet, u64)>,
@@ -1228,6 +1230,7 @@ mod linux {
                 hvcc_parameter_sets: Vec::new(),
                 in_band_parameter_sets: false,
                 broken_in_a_row: 0,
+                flagged: 0,
                 out_free: Vec::new(),
                 pending: VecDeque::new(),
                 ts: Timestamps::default(),
@@ -1334,6 +1337,12 @@ mod linux {
         /// can't decode this stream, however it is fed.
         pub(crate) fn pictures_broken(&self) -> bool {
             self.broken_in_a_row >= MAX_BROKEN_PICTURES
+        }
+
+        /// Pictures the device flagged as broken since opening (not those of
+        /// the primer or from before a seek).
+        pub(crate) fn pictures_flagged(&self) -> u64 {
+            self.flagged
         }
 
         /// End of stream was sent (until a flush).
@@ -2090,6 +2099,7 @@ mod linux {
                     if self.ts.get(d.id).is_some() {
                         if d.flags & BUF_FLAG_ERROR != 0 {
                             self.broken_in_a_row += 1;
+                            self.flagged += 1;
                         } else if d.bytesused > 0 {
                             self.broken_in_a_row = 0;
                         }
