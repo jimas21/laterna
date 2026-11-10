@@ -797,7 +797,7 @@ your hand towards your head to bring it closer, or away from it to push it
 back, about two metres for each metre your hand moves, between half a metre
 and three and a half metres away. The keyboard under a panel goes with it,
 and the distance is kept with the panel's place. A panel follows your hand a
-moment behind it (about a twentieth of a second), which keeps a trembling
+moment behind it (about a tenth of a second), which keeps a trembling
 hand from shaking it. To put them all back where they start, press **Put back** at the top
 of the adjust panel's Position tab: a flat screen, the control bar, the
 adjust panel and the browse panel return (a 180° or 360° picture keeps

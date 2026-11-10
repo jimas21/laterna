@@ -108,8 +108,9 @@ const STICK_HOLD: f32 = 0.5;
 const REPEAT_DELAY: f32 = 0.5;
 const REPEAT_EVERY: f32 = 0.35;
 
-/// How closely a dragged thing trails the hand: it covers all but a
-/// `1/e` of the way in about this many seconds (see [`Damped`]). Short enough
+/// How closely a dragged thing trails the hand: with this time constant
+/// (seconds) it has covered about a quarter of a step after one time constant,
+/// nine tenths after four (see [`Damped`]). Short enough
 /// to follow at once, long enough that a hand's tremor, which is magnified at
 /// a panel's distance, doesn't show.
 pub(crate) const DRAG_TAU: f32 = 0.05;
