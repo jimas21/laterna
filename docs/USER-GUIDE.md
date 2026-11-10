@@ -881,6 +881,10 @@ Add a device in **Settings › Haptics**: Intiface Central, TCode devices
 (OSR2/SR6 over USB serial, TCP or UDP), or The Handy (connection key). The
 seek bar shows the script's intensity.
 
+## Earbuds
+
+**Settings › Sound** has an **Earbuds** group with one button, **Install Tragus**. Tragus shows earbud battery and noise control in Steam's menu, for AirPods and other earbuds. FramePlayerX downloads a pinned installer, checks it against a built-in checksum and runs it; the installer checks the signed packages it fetches. When it says Tragus is installed, restart the headset once to see it in Steam's menu. Tragus updates itself from then on. **Reinstall Tragus** repeats the install.
+
 ## Remote control
 
 With **Settings › Remote control › Phone and browser remote** on, your

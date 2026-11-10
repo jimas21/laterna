@@ -45,6 +45,8 @@ settings-passthrough = Passthrough
 settings-controller = Controller
 # Short: a tab.
 settings-haptics = Haptics
+# Heading of a group in Settings > Sound.
+settings-earbuds = Earbuds
 # Short: a tab.
 settings-remote = Remote control
 # Short: a tab.
@@ -928,6 +930,7 @@ button-dpad-up = D-pad up
 button-bumper = Bumper
 button-stick-press = Thumbstick press
 toast-paused-headset-off = Paused: headset off
+toast-paused-earbud-out = Paused: earbud out
 toast-sound-on = Sound on
 toast-muted = Muted
 toast-no-room = This headset can't show your room
@@ -1386,3 +1389,37 @@ plex-connection-manual-local-desc = For an access token, use a LAN IP address wi
 plex-test-required = Connect to a server before saving.
 # Plex edit form: changing credentials keeps the existing source separate.
 plex-new-account-source = Linking again or replacing the token adds a separate source and keeps this one.
+
+# Settings > Earbuds
+earbuds-title = Tragus
+earbuds-desc = Earbud battery and noise control in Steam's menu, for AirPods and other earbuds.
+# Short: a button.
+earbuds-install = Install Tragus
+# Short: a button.
+earbuds-reinstall = Reinstall Tragus
+earbuds-working = Installing Tragus...
+earbuds-installed = Tragus { $version } is installed.
+earbuds-installed-plain = Tragus is installed.
+earbuds-uptodate = Tragus is installed and up to date.
+earbuds-updated = Tragus is installed. Restart the headset once to see it in Steam's menu.
+earbuds-failed = Tragus could not be installed.
+earbuds-open = Open Tragus
+earbuds-left = Left
+earbuds-right = Right
+earbuds-case = Case
+earbuds-headphones = Headphones
+earbuds-charging = charging
+earbuds-noise = Noise control
+# Short: a chip.
+earbuds-mode-off = Off
+# Short: a chip.
+earbuds-mode-transparency = Transparency
+# Short: a chip.
+earbuds-mode-adaptive = Adaptive
+# Short: a chip.
+earbuds-mode-noise-cancel = Noise cancelling
+earbuds-starting = Tragus is starting…
+earbuds-restart = Restart the headset once to finish installing Tragus.
+earbuds-none = No earbuds connected.
+earbuds-pause = Pause when an earbud comes out
+earbuds-pause-desc = The video stays paused when the earbud goes back in.

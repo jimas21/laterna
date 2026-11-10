@@ -30,6 +30,7 @@ mod settings;
 mod shuffle;
 mod subtitles;
 mod testcard;
+mod tragus;
 mod ui;
 mod watch;
 mod world;

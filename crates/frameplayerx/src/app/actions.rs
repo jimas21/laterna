@@ -290,6 +290,11 @@ impl App {
                     h.new_pairing_code();
                 }
             }
+            Action::SetEarbudsNoise(mode) => {
+                if let Some(link) = &self.earbuds.link {
+                    link.set_noise(mode);
+                }
+            }
             Action::CheckUpdates => self.check_updates(),
             Action::InstallUpdate => self.install_update(),
             Action::PlexLinkStart => self.plex_link_start(),

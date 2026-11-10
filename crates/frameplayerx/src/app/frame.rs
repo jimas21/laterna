@@ -209,6 +209,7 @@ impl App {
     /// Background work, remote commands and saving the open video's state.
     fn update(&mut self) {
         self.poll_jobs();
+        self.update_earbuds();
         // Play all, a playlist and what was queued play through, any list
         // with Autoplay; Loop video keeps to the one playing.
         if self

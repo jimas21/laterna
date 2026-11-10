@@ -388,6 +388,8 @@ pub enum Action {
     NewPairingCode,
     CheckUpdates,
     InstallUpdate,
+    /// Switch the earbuds' noise control.
+    SetEarbudsNoise(fp_earbuds::NoiseMode),
     /// Opens an HTTPS address in Steam's browser.
     OpenWebPage(WebAddress),
     /// Send the crash report the start offered, or don't.
@@ -766,6 +768,10 @@ pub struct Picking {
 pub struct UiState {
     pub screen: Screen,
     pub settings_tab: SettingsTab,
+    /// The Tragus install in Settings › Earbuds.
+    pub tragus: crate::tragus::Tragus,
+    /// What Tragus last reported (the app owns the link).
+    pub earbuds: fp_earbuds::EarbudsState,
     /// The controller input whose choices are open in Settings > Controller.
     pub remap_open: Option<RemapSlot>,
     /// Settings > Controller shows what the buttons do with the grip held.
@@ -860,6 +866,8 @@ impl Default for UiState {
         UiState {
             screen: Screen::Home,
             settings_tab: SettingsTab::General,
+            tragus: crate::tragus::Tragus::default(),
+            earbuds: fp_earbuds::EarbudsState::default(),
             remap_open: None,
             remap_grip: false,
             languages_open: false,
