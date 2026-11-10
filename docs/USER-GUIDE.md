@@ -967,10 +967,15 @@ a place while it shows.
   picker at the top: Plain, Your room, Cinema and Studio.
 - **Or set it for every video** in Settings › Places. It is the same
   choice: it stays until you change it, and a restart keeps it.
-- **Seat.** The cinema has three seats, Front, Middle and Back. The seat sets
-  how large the screen looks: from Front a film that fills the screen is
-  about 85° across, from Middle (the first choice) about 72°, and from Back
-  about 58°. Each place remembers its own seat.
+- **Seat.** The cinema is laid out like a real stadium cinema: a stage with
+  the screen, open floor and two steps in front, then nine steep rows of
+  seats. The first row is well back from the screen and nothing stands
+  between you and the picture: from every seat you see the whole picture over
+  the heads in front. There are three seats, Front (the first row), Middle
+  and Back (with rows behind it). The seat sets how large the screen looks:
+  from Front a film that fills the screen is about 85° across, from Middle
+  (the first choice) about 72°, and from Back about 58°. Each place remembers
+  its own seat.
 - **Seat height.** Beside the seats, a slider raises or lowers where your
   eyes sit in the room, from 30 cm lower to 30 cm higher in steps of 5 cm.
   Use it if you sit low in a bed or a deep couch and the screen looks too

@@ -526,8 +526,9 @@ fn region_mean(img: &[u8], cols: std::ops::Range<u32>, rows: std::ops::Range<u32
 }
 
 /// The first row below the picture and its edge from the middle seat: from
-/// here down the eye sees only the seats in front (the picture spans 72
-/// degrees, so it reaches row 91 and hides the stage behind the rows).
+/// here down the eye sees the floor and the seats in front of it, with the
+/// stage above them (the picture spans 72 degrees, so it reaches row 91; the
+/// hall's rebuilt rake leaves this edge where it was).
 const BELOW: u32 = 94;
 
 /// What the middle seat sees of the room the picture lights: the ceiling

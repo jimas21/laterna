@@ -486,11 +486,12 @@ mod tests {
     }
 
     /// Everything between the audience and the screen that can block a view
-    /// apart from heads: the seats, the risers and the stage.
+    /// apart from heads: the seats (each `SIGHT_MARGIN` taller, for the margin
+    /// the picture's edge must clear them by), the risers and the stage.
     fn obstacles() -> Vec<Aabb> {
         let v = Vec3::new;
         let w = HALF_WIDTH;
-        let mut boxes = seat_boxes();
+        let mut boxes: Vec<Aabb> = seat_boxes().iter().map(with_margin).collect();
         let mut risers = Vec::new();
         let mut prev = 0.0;
         for (i, &y) in APPROACH_FLOORS.iter().enumerate() {
@@ -544,7 +545,7 @@ mod tests {
         let layout = layout();
         let screen = layout.screen.unwrap();
         let bottom = screen.centre.y - screen.max.y / 2.0;
-        let boxes: Vec<Aabb> = obstacles().iter().map(with_margin).collect();
+        let boxes = obstacles();
         for seat in &layout.seats {
             let name = seat.name;
             // The bottom edge of the screen: its middle and both corners.
@@ -560,7 +561,7 @@ mod tests {
     fn every_seat_in_every_row_sees_the_whole_bottom_edge_over_the_heads_in_front() {
         let screen = layout().screen.unwrap();
         let bottom = screen.centre.y - screen.max.y / 2.0;
-        let obstacles: Vec<Aabb> = obstacles().iter().map(with_margin).collect();
+        let obstacles = obstacles();
         // The heads of every seat in every row, 12 cm taller for the margin.
         let heads: Vec<(usize, Aabb)> = (0..ROWS)
             .flat_map(|row| {
