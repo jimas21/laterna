@@ -130,8 +130,15 @@ fn rows(v: &View) -> Vec<Row> {
         builtin: true,
         lock: Lock::None,
     };
+    let hidden =
+        crate::plex_profiles::hidden(&v.services.source_configs, &v.settings.plex_profiles);
+    let shown = v
+        .services
+        .source_configs
+        .iter()
+        .filter(|c| !hidden.iter().any(|id| id == c.id()));
     std::iter::once(local)
-        .chain(v.services.source_configs.iter().map(|c| {
+        .chain(shown.map(|c| {
             let lock = lock_of(v, c.id());
             let kind = match c {
                 SourceConfig::Library(l) if !crate::libraries::present(l) => {
@@ -579,6 +586,7 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
     let searching = v.state.dlna_searching;
     let pins = v.settings.source_pins.clone();
     let configs = v.services.source_configs.clone();
+    let chosen = v.settings.plex_profiles.clone();
     let Some(f) = v.state.source_form.as_mut() else {
         return;
     };
@@ -593,7 +601,7 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
         ),
     };
     let save = if f.kind == SourceKind::Plex {
-        super::plex::form(ui, f, id, &configs, v.actions)
+        super::plex::form(ui, f, id, &configs, &chosen, v.actions)
     } else if let Some(SourceConfig::Dlna(_)) = &editing {
         dlna_edit_form(ui, f, id)
     } else if f.kind == SourceKind::Dlna {

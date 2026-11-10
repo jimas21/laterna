@@ -4,7 +4,10 @@ use super::sources::{address_hint, name_hint, text_field};
 use super::theme::{self, Weight};
 use super::widgets::{self, Kind};
 use super::{Action, SourceForm};
-use fp_sources::plex::auth::{LINK_URL, PlexCredentials, PlexPin, PlexResource, linked_source_id};
+use crate::plex_profiles::{self, Chosen};
+use fp_sources::plex::auth::{
+    LINK_URL, PlexCredentials, PlexHomeUser, PlexPin, PlexResource, linked_source_id,
+};
 use fp_sources::{PlexConfig, SourceConfig};
 use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, Instant};
@@ -58,6 +61,37 @@ pub enum Libraries {
     Failed(String),
 }
 
+/// The Plex Home members of the account of the source being edited, to
+/// choose who is watching.
+#[derive(Clone, Debug, Default)]
+pub enum Profiles {
+    #[default]
+    Unasked,
+    Loading,
+    Listed(Vec<PlexHomeUser>),
+    Failed(String),
+}
+
+/// A Plex PIN as typed, on its way to plex.tv. Debug never shows it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProfilePin(String);
+
+impl ProfilePin {
+    pub fn new(digits: &str) -> Self {
+        Self(digits.to_string())
+    }
+
+    pub fn digits(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ProfilePin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProfilePin(..)")
+    }
+}
+
 /// Why the servers of an account could not be listed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListError {
@@ -105,7 +139,7 @@ impl LinkState {
 
 /// What groups the sources of the account `credentials` belong to, as
 /// [`PlexConfig::account_key`] does for a source.
-fn account_key(credentials: &PlexCredentials) -> &String {
+pub(crate) fn account_key(credentials: &PlexCredentials) -> &String {
     credentials
         .account
         .as_ref()
@@ -364,6 +398,14 @@ pub struct Connect {
     pub libraries: Libraries,
     /// The keys of the libraries the source leaves out.
     pub hidden: BTreeSet<String>,
+    /// The Plex Home members, for choosing who is watching.
+    pub profiles: Profiles,
+    /// A member whose PIN is being typed, and the digits so far.
+    pub pin: Option<(PlexHomeUser, String)>,
+    /// A switch is on its way to plex.tv.
+    pub switching: bool,
+    /// Why the last switch did not happen.
+    pub profile_error: Option<String>,
 }
 
 impl Default for Connect {
@@ -381,6 +423,10 @@ impl Default for Connect {
             removing: None,
             libraries: Libraries::Unasked,
             hidden: BTreeSet::new(),
+            profiles: Profiles::Unasked,
+            pin: None,
+            switching: false,
+            profile_error: None,
         }
     }
 }
@@ -511,6 +557,7 @@ pub fn form(
     f: &mut SourceForm,
     id: String,
     configs: &[SourceConfig],
+    chosen: &Chosen,
     actions: &mut Vec<Action>,
 ) -> Option<SourceConfig> {
     if let LinkState::Waiting {
@@ -664,6 +711,7 @@ pub fn form(
     if matches!(f.plex.state, LinkState::Connected)
         && matches!(f.editing, Some(SourceConfig::Plex(_)))
     {
+        watching(ui, f, configs, chosen, actions);
         hide_list(ui, f, actions);
     }
     ui.add_space(16.0);
@@ -831,6 +879,182 @@ fn manage_row(
     });
 }
 
+/// What choosing the Home member `user` does now: a member with a PIN opens
+/// the PIN pad (nothing is asked of plex.tv yet), any other member is
+/// switched to.
+fn choose(
+    f: &mut SourceForm,
+    credentials: &PlexCredentials,
+    user: &PlexHomeUser,
+) -> Option<Action> {
+    if f.plex.switching {
+        return None;
+    }
+    f.plex.profile_error = None;
+    if user.protected {
+        f.plex.pin = Some((user.clone(), String::new()));
+        return None;
+    }
+    f.plex.pin = None;
+    f.plex.switching = true;
+    Some(Action::PlexSwitchProfile {
+        credentials: credentials.clone(),
+        user: user.clone(),
+        pin: None,
+    })
+}
+
+/// The PIN pad's "Switch": the digits go to plex.tv with the switch, and
+/// the pad closes so nothing of them stays in the form.
+fn submit_pin(f: &mut SourceForm, credentials: &PlexCredentials) -> Option<Action> {
+    let (user, digits) = f.plex.pin.take()?;
+    if !crate::pin::valid(&digits) || digits.len() != 4 {
+        f.plex.pin = Some((user, digits));
+        return None;
+    }
+    f.plex.switching = true;
+    Some(Action::PlexSwitchProfile {
+        credentials: credentials.clone(),
+        user,
+        pin: Some(ProfilePin::new(&digits)),
+    })
+}
+
+/// Who is watching: the members of the account's Plex Home, one of whom the
+/// source plays as. It is remembered, so nobody is asked at each start.
+fn watching(
+    ui: &mut egui::Ui,
+    f: &mut SourceForm,
+    configs: &[SourceConfig],
+    chosen: &Chosen,
+    actions: &mut Vec<Action>,
+) {
+    let Some(credentials) = linked_credentials(f) else {
+        return;
+    };
+    let Some(account) = credentials.account.clone() else {
+        return;
+    };
+    if !account.home {
+        return;
+    }
+    let key = account_key(&credentials).clone();
+    let active = plex_profiles::active(configs, chosen, &key);
+    ui.add_space(12.0);
+    widgets::section_label(ui, tr!("plex-watching-as"));
+    ui.label(
+        egui::RichText::new(tr!("plex-watching-as-desc"))
+            .font(theme::font(Weight::Regular, 15.0))
+            .color(theme::TEXT_2),
+    );
+    ui.add_space(6.0);
+    match f.plex.profiles.clone() {
+        Profiles::Unasked => {
+            if widgets::button_sized(ui, None, tr!("plex-watching-choose"), Kind::Secondary, 36.0)
+                .clicked()
+            {
+                f.plex.profiles = Profiles::Loading;
+                actions.push(Action::PlexProfiles {
+                    credentials: credentials.clone(),
+                });
+            }
+        }
+        Profiles::Loading => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(tr!("common-loading"));
+            });
+        }
+        Profiles::Failed(error) => {
+            ui.label(egui::RichText::new(error).color(theme::WARN));
+            if widgets::button_sized(ui, None, tr!("source-retry"), Kind::Secondary, 36.0).clicked()
+            {
+                f.plex.profiles = Profiles::Loading;
+                actions.push(Action::PlexProfiles {
+                    credentials: credentials.clone(),
+                });
+            }
+        }
+        Profiles::Listed(users) => {
+            ui.add_enabled_ui(!f.plex.switching, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for user in &users {
+                        let on = if user.uuid == account.uuid {
+                            active.is_empty()
+                        } else {
+                            user.uuid == active
+                        };
+                        if widgets::chip(ui, &user.title, on).clicked()
+                            && !on
+                            && let Some(action) = choose(f, &credentials, user)
+                        {
+                            actions.push(action);
+                        }
+                    }
+                });
+            });
+        }
+    }
+    if f.plex.switching {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(tr!("settings-device-connecting"));
+        });
+    }
+    pin_pad(ui, f, &credentials, actions);
+    if let Some(error) = &f.plex.profile_error {
+        ui.label(egui::RichText::new(error).color(theme::WARN));
+    }
+    if !plex_profiles::profile_sources(configs, &key).is_empty()
+        && widgets::button_sized(ui, None, tr!("plex-profiles-forget"), Kind::Secondary, 36.0)
+            .clicked()
+    {
+        actions.push(Action::PlexForgetProfiles { account: key });
+    }
+}
+
+/// The PIN of a Home member who has one, asked once when switching to them.
+fn pin_pad(
+    ui: &mut egui::Ui,
+    f: &mut SourceForm,
+    credentials: &PlexCredentials,
+    actions: &mut Vec<Action>,
+) {
+    let mut cancel = false;
+    let mut submit = false;
+    if let Some((user, digits)) = &mut f.plex.pin {
+        ui.add_space(8.0);
+        ui.label(tr!("plex-profile-pin", name = user.title.as_str()));
+        ui.horizontal(|ui| {
+            let field = ui.add(
+                egui::TextEdit::singleline(digits)
+                    .margin(egui::Margin::symmetric(12, 9))
+                    .password(true)
+                    .char_limit(4)
+                    .font(theme::font(Weight::Regular, 17.0))
+                    .desired_width(120.0),
+            );
+            digits.retain(|c| c.is_ascii_digit());
+            let ready = digits.len() == 4;
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let go = ui
+                .add_enabled_ui(ready, |ui| {
+                    widgets::button_sized(ui, None, tr!("plex-profile-switch"), Kind::Primary, 36.0)
+                })
+                .inner
+                .clicked();
+            submit = (go || enter) && ready;
+            cancel = widgets::button_sized(ui, None, tr!("common-cancel"), Kind::Secondary, 36.0)
+                .clicked();
+        });
+    }
+    if cancel {
+        f.plex.pin = None;
+    } else if submit && let Some(action) = submit_pin(f, credentials) {
+        actions.push(action);
+    }
+}
+
 /// The switches that leave libraries out of the source being edited: the
 /// libraries the server has now. Those it no longer has stay left out.
 fn hide_list(ui: &mut egui::Ui, f: &mut SourceForm, actions: &mut Vec<Action>) {
@@ -969,6 +1193,57 @@ fn server_config(
 mod tests {
     use super::*;
     use fp_sources::plex::auth::{PlexAccount, PlexConnection, PlexProfile};
+
+    fn member(title: &str, protected: bool) -> PlexHomeUser {
+        PlexHomeUser {
+            id: 2,
+            uuid: format!("uuid-{title}"),
+            title: title.into(),
+            thumb: None,
+            protected,
+            restricted: false,
+            admin: false,
+        }
+    }
+
+    #[test]
+    fn a_protected_profile_asks_its_pin_and_clears_it_on_a_wrong_one() {
+        let credentials = signed_in("acct");
+        let mut form = SourceForm::default();
+        // An open member is switched to at once.
+        let open = member("Kid", false);
+        let Some(Action::PlexSwitchProfile { pin: None, .. }) =
+            choose(&mut form, &credentials, &open)
+        else {
+            panic!("an open profile switches straight away");
+        };
+        assert!(form.plex.switching);
+        form.plex.switching = false;
+        // A protected one opens the pad and asks plex.tv nothing yet.
+        let guest = member("Guest", true);
+        assert!(choose(&mut form, &credentials, &guest).is_none());
+        assert!(form.plex.pin.is_some() && !form.plex.switching);
+        // Fewer than four digits do not go anywhere.
+        form.plex.pin.as_mut().unwrap().1 = "12".into();
+        assert!(submit_pin(&mut form, &credentials).is_none());
+        assert!(form.plex.pin.is_some(), "the pad stays for the rest");
+        form.plex.pin.as_mut().unwrap().1 = "1234".into();
+        let action = submit_pin(&mut form, &credentials).expect("four digits are sent");
+        // The pad is closed and holds no digits; the action keeps them out
+        // of its Debug text, which is what a log would show.
+        assert!(form.plex.pin.is_none());
+        assert!(form.plex.switching);
+        let Action::PlexSwitchProfile { pin: Some(pin), .. } = &action else {
+            panic!("the PIN travels with the switch");
+        };
+        assert_eq!(pin.digits(), "1234");
+        for shown in [format!("{action:?}"), format!("{pin:?}")] {
+            assert!(!shown.contains("1234"), "{shown}");
+        }
+        // Nothing is asked again while the switch is on its way.
+        assert!(choose(&mut form, &credentials, &guest).is_none());
+        assert!(form.plex.pin.is_none());
+    }
 
     #[test]
     fn connection_modes_default_to_local_and_reach_both_setup_methods() {

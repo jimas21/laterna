@@ -190,6 +190,12 @@ pub struct Settings {
     /// [`crate::pin`]). Left out of the file when empty.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub source_pins: std::collections::BTreeMap<String, String>,
+    /// The Plex Home profile each linked account plays as: the account's
+    /// key to the profile's uuid (see [`crate::plex_profiles`]). An account
+    /// that is not here plays as itself. Never a PIN or a token. Left out of
+    /// the file when empty.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub plex_profiles: std::collections::BTreeMap<String, String>,
     /// The place around flat videos and the menus: [`PLAIN_PLACE`] or a
     /// place id (`fp_render::env::Place::id`). A string, so a file from a
     /// newer build with a place this one lacks still loads; an unknown id
@@ -328,6 +334,7 @@ impl Default for Settings {
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),
             source_pins: Default::default(),
+            plex_profiles: Default::default(),
             environment: PLAIN_PLACE.to_string(),
             place_seats: Default::default(),
             house_lights_playing: HOUSE_PLAYING_START,
@@ -410,6 +417,28 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plex_profiles_default_empty_and_round_trip() {
+        let dir = std::env::temp_dir().join(format!("fp-plex-profiles-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let mut s = Settings::default();
+        assert!(s.plex_profiles.is_empty());
+        s.save(&path).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("plex_profiles")
+        );
+        s.plex_profiles
+            .insert("account-key".into(), "profile-uuid".into());
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), s);
+        // Saved before profiles: nobody has one chosen.
+        std::fs::write(&path, r#"{"volume": 0.25}"#).unwrap();
+        assert!(Settings::load(&path).plex_profiles.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn round_trip_and_partial_files() {

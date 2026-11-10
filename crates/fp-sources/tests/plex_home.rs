@@ -175,6 +175,10 @@ fn when_neither_list_answers_the_first_error_is_kept() {
 #[test]
 fn switching_sends_the_pin_only_to_plex_tv_and_returns_the_profiles_token() {
     let server = TestServer::start(|request| {
+        // The cheap account call that tells a wrong PIN from a dead token.
+        if request.method == "GET" && request.path() == "/api/v2/user" && account_asks(request) {
+            return json_reply(r#"{"id":1,"uuid":"uuid-owner","title":"Owner"}"#);
+        }
         if request.method != "POST" || !account_asks(request) {
             return refused();
         }
@@ -211,7 +215,12 @@ fn switching_sends_the_pin_only_to_plex_tv_and_returns_the_profiles_token() {
     assert!(!shown.contains("plextv-token"), "{shown}");
     assert!(!shown.contains("Guest"), "{shown}");
 
-    let requests = server.requests();
+    // The refused PIN was followed by one account check, nothing else.
+    let all = server.requests();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[1].method, "GET");
+    assert_eq!(all[1].path(), "/api/v2/user");
+    let requests: Vec<_> = all.into_iter().filter(|r| r.method == "POST").collect();
     assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.method, "POST");
@@ -288,6 +297,35 @@ fn a_dead_account_token_is_signed_out_not_a_wrong_pin() {
     for shown in [error.to_string(), format!("{error:?}")] {
         assert!(!shown.contains("1234"), "{shown}");
         assert!(!shown.contains("secret"), "{shown}");
+    }
+}
+
+#[test]
+fn a_refused_pin_is_wrong_when_the_account_token_still_works() {
+    // plex.tv's status for a wrong PIN is unconfirmed: it may be 401 too.
+    for status in [401, 403] {
+        let server = TestServer::start(move |request| {
+            if request.method == "GET" && account_asks(request) {
+                return json_reply(r#"{"id":1,"uuid":"uuid-owner","title":"Owner"}"#);
+            }
+            resp(status, "no", &[])
+        });
+        let error = api(&server)
+            .switch_profile(&credentials(), &guest(), Some("1234"))
+            .unwrap_err();
+        assert!(is_wrong_pin(&error), "{status}: {error:?}");
+    }
+}
+
+#[test]
+fn a_refused_pin_is_signed_out_when_the_account_token_is_refused_too() {
+    for status in [401, 403] {
+        let server = TestServer::start(move |_| resp(status, "no", &[]));
+        let error = api(&server)
+            .switch_profile(&credentials(), &guest(), Some("1234"))
+            .unwrap_err();
+        assert!(matches!(error, Error::SignedOut(_)), "{status}: {error:?}");
+        assert!(!is_wrong_pin(&error));
     }
 }
 

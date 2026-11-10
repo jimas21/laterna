@@ -445,6 +445,18 @@ impl HomeCache {
         self.0.insert(source.to_string(), entry);
     }
 
+    /// Forgets the front page of `source`: its profile or server changed, so
+    /// what it showed is not for whoever opens it next.
+    pub fn forget(&mut self, source: &str) {
+        self.0.remove(source);
+    }
+
+    /// Forgets every front page. A Plex profile's home is its own: after a
+    /// switch none of them is shown to the profile now watching.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
     /// The front page last seen of `source`, unless it is long out of date.
     pub fn get(&self, source: &str) -> Option<CatalogHome> {
         self.get_at(source, Instant::now())
@@ -3024,6 +3036,19 @@ mod tests {
 
         let later = Instant::now() + HOME_LIFE + Duration::from_secs(1);
         assert!(cache.get_at("plex", later).is_none(), "long out of date");
+    }
+
+    #[test]
+    fn a_forgotten_home_is_not_shown_again() {
+        let home = home_with(vec![row("a", "Row", CatalogKind::Movie)]);
+        let mut cache = HomeCache::default();
+        cache.put("one", &home);
+        cache.put("two", &home);
+        cache.forget("one");
+        assert!(cache.get("one").is_none());
+        assert!(cache.get("two").is_some());
+        cache.clear();
+        assert!(cache.get("two").is_none());
     }
 
     #[test]

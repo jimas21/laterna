@@ -1517,3 +1517,19 @@ plex-servers-added = Added { $names }
 plex-signed-in-again = Signed in to { $account } again
 # Plex server list: the code was claimed by a different account than the source being edited.
 plex-another-account = This is another Plex account: its servers are added as new sources.
+
+# Plex edit form: who is watching (a member of the account's Plex Home)
+plex-watching-as = Who is watching
+plex-watching-as-desc = This source shows what the person you choose may watch, with their watched marks and Continue Watching. It is remembered, so nobody is asked at each start.
+plex-watching-choose = Choose who is watching
+# A Plex Home member with a PIN: it is asked once, when you switch to them, and is not saved.
+plex-profile-pin = Plex PIN for { $name }
+plex-profile-switch = Switch
+plex-profile-wrong-pin = That PIN is not right.
+plex-profile-no-servers = None of your servers is shared with this person.
+# Toast: the servers a chosen person cannot see.
+plex-profile-not-shared = Not shared with this person: { $names }
+plex-profile-switched = Switched who is watching
+plex-profile-not-shared-here = This server is not shared with the person watching.
+plex-profiles-forget = Forget the other people
+plex-profiles-forgotten = Forgot the other people. This source shows the account again.
