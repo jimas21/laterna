@@ -180,7 +180,12 @@ impl App {
         f.plex.generation = generation;
         f.plex.other_account = false;
         f.plex.state = LinkState::Requesting;
-        // The source being edited stays: signing in again is for it.
+        // A linked source being edited stays: signing in again is for it.
+        // One entered with a token is another identity, so its servers are
+        // added as new sources and it is kept as it is.
+        if matches!(&f.editing, Some(SourceConfig::Plex(old)) if old.auth.is_none()) {
+            f.editing = None;
+        }
         let device = self.services.device_identifier();
         let client = link_client_identifier(device, f.editing.as_ref());
         self.jobs.spawn("plex-link", move || {

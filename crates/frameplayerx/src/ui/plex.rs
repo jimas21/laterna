@@ -132,8 +132,9 @@ fn wanted<'a>(state: &'a LinkState, configs: &[SourceConfig]) -> Vec<&'a PlexRes
 
 /// The id a server gets as a new source: stable for this account and
 /// server when the account is known (so adding it again, later or after
-/// removing it, reaches what was watched), else made from the time. The
-/// source being edited keeps its own id for its own server.
+/// removing it, reaches what was watched), else made from the time. A linked
+/// source being edited keeps its own id for its own server; one entered with
+/// a token is another identity, so its id is never reused.
 fn new_source_id(
     credentials: &PlexCredentials,
     machine: &str,
@@ -142,6 +143,7 @@ fn new_source_id(
     index: usize,
 ) -> String {
     if let Some(old) = editing
+        && old.auth.is_some()
         && old.machine_identifier == machine
     {
         return old.id.clone();
@@ -165,9 +167,16 @@ fn start_batch(f: &mut SourceForm, configs: &[SourceConfig], now_ms: u64) -> Opt
         Some(SourceConfig::Plex(old)) => Some(old),
         _ => None,
     };
-    // A typed name is for a single server; several keep their own.
+    // A typed name is for a single server; several keep their own. While a
+    // source is edited the name field holds that source's name, so it only
+    // goes to that source's own server.
     let typed = f.name.trim();
-    let name = (servers.len() == 1 && !typed.is_empty()).then_some(typed);
+    let own_server = |server: &PlexResource| match editing {
+        Some(old) => old.machine_identifier == server.machine_identifier,
+        None => true,
+    };
+    let single = servers.len() == 1 && own_server(&servers[0]);
+    let name = (single && !typed.is_empty()).then_some(typed);
     let mut checks = Vec::new();
     let mut refused = Vec::new();
     for (index, server) in servers.iter().enumerate() {
@@ -708,7 +717,8 @@ fn server_config(
             .unwrap_or_else(|| credentials.access_token.clone()),
         connections: server.connections.clone(),
         auth: Some(credentials.clone()),
-        insecure_tls: f.insecure_tls,
+        // The switch is drawn only for a token; a linked server is always checked.
+        insecure_tls: false,
         parallel_downloads: f.parallel_downloads,
         max_height: None,
         local_only: true,
@@ -744,6 +754,11 @@ mod tests {
             provides: "server".into(),
         };
         let auth = PlexCredentials::manual("account-token".into(), "client".into());
+        // A self-signed token source does not carry over to a linked one.
+        form.insecure_tls = true;
+        let linked = server_config(&server, &auth, "id", None, &form).unwrap();
+        assert!(!linked.insecure_tls);
+        form.insecure_tls = false;
         for (mode, local_only, allow_relay) in [
             (ConnectionMode::Local, true, false),
             (ConnectionMode::Direct, false, false),
@@ -1041,6 +1056,7 @@ mod tests {
         let old = PlexConfig {
             id: "old-id".into(),
             machine_identifier: "m1".into(),
+            auth: Some(signed_in("account-uuid-1")),
             ..Default::default()
         };
         let kept = new_source_id(&credentials, "m1", Some(&old), 1, 0);
@@ -1048,5 +1064,51 @@ mod tests {
         let other = new_source_id(&credentials, "m2", Some(&old), 1, 0);
         let expected = linked_source_id("account-uuid-1", "m2", None);
         assert_eq!(other, expected);
+    }
+
+    #[test]
+    fn a_token_source_being_edited_never_lends_its_id_to_a_linked_one() {
+        let credentials = signed_in("account-uuid-1");
+        let token_source = PlexConfig {
+            id: "token-id".into(),
+            machine_identifier: "m1".into(),
+            auth: None,
+            ..Default::default()
+        };
+        let id = new_source_id(&credentials, "m1", Some(&token_source), 1, 0);
+        assert_eq!(id, linked_source_id("account-uuid-1", "m1", None));
+        assert_ne!(id, "token-id");
+        // The same through the form.
+        let mut form = list_form(vec![own("m1")], &[]);
+        form.editing = Some(SourceConfig::Plex(token_source));
+        let configs = asked(start_batch(&mut form, &[], 1));
+        let expected = linked_source_id("account-uuid-1", "m1", None);
+        assert_eq!(configs[0].id, expected);
+    }
+
+    #[test]
+    fn linked_servers_ignore_the_token_forms_self_signed_switch() {
+        let mut form = list_form(vec![own("m1"), own("m2")], &[]);
+        form.insecure_tls = true;
+        let configs = asked(start_batch(&mut form, &[], 1));
+        assert_eq!(configs.len(), 2);
+        assert!(configs.iter().all(|c| !c.insecure_tls));
+    }
+
+    #[test]
+    fn the_edited_sources_name_is_not_given_to_another_server() {
+        let edited = source_of("m1", "Home");
+        // Another server ticked while editing keeps its own name.
+        let mut form = list_form(vec![resource("Home TV", "m2", true)], &[]);
+        form.editing = Some(edited.clone());
+        form.name = "Home".into();
+        let other = asked(start_batch(&mut form, &[], 1));
+        assert_eq!(other[0].name, "Home TV");
+        // Its own server takes the typed name.
+        let mut form = list_form(vec![resource("Home", "m1", true)], &[]);
+        form.editing = Some(edited);
+        form.name = "Den".into();
+        let own_one = asked(start_batch(&mut form, &[], 1));
+        assert_eq!(own_one[0].name, "Den");
     }
 }
