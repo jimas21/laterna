@@ -833,10 +833,14 @@ EOF
     XDG_CACHE_HOME="$card_home/.cache" \
     "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
     --script "$card_home/panels.fps" --size 1400
-  HOME="$card_home" XDG_CONFIG_HOME="$card_home/.config" XDG_DATA_HOME="$card_home/.local/share" \
-    XDG_CACHE_HOME="$card_home/.cache" \
+  # In a home of its own: it expects the video where a fresh one has it (yaw 0),
+  # and the window script above leaves this video turned (it keeps what a drag
+  # set, as the headset does).
+  multitask_home="$(mktemp -d)"
+  HOME="$multitask_home" XDG_CONFIG_HOME="$multitask_home/.config" XDG_DATA_HOME="$multitask_home/.local/share" \
+    XDG_CACHE_HOME="$multitask_home/.cache" \
     "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
     --script "$card_home/multitask.fps" --size 1400
-  rm -rf "$card_home"
+  rm -rf "$card_home" "$multitask_home"
 fi
 ls -l "$out"
