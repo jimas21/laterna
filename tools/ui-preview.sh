@@ -364,6 +364,12 @@ screen settings playback
 panel main settings-playback
 screen settings position
 panel main settings-position
+screen settings places
+panel main settings-places
+place cinema
+screen settings places
+panel main settings-places-cinema
+place void
 screen settings sound
 panel main settings-sound
 screen settings passthrough
@@ -427,8 +433,34 @@ point bar 0.5 0.5
 frames 8
 panel bar player-bar
 sbs player-scene
-# A hover label: the Hide button.
-point bar 0.883 0.69
+# Places, round the paused video. The room shows once the room renderer is in
+# the build: until then these are the plain background. The cinema with the
+# house lights down and up, from above and from the front seat, then the
+# studio. The lights are held at a level, since the short clip ends and would
+# raise them; Plain again after, so every later shot is unchanged.
+place cinema
+house 0
+frames 8
+sbs place-cinema
+house 1
+frames 2
+sbs place-cinema-lit
+look 0 -35
+frames 2
+sbs place-cinema-down
+look 0 0
+seat 0
+frames 2
+sbs place-cinema-front
+seat 1
+place studio
+frames 8
+sbs place-studio
+house auto
+place void
+frames 4
+# A hover label: the Hide button. (The bar's keys are counted from the right.)
+point bar 0.894 0.69
 frames 10
 panel bar player-bar-tip
 # The adjustments panel.
@@ -440,6 +472,13 @@ panel bar player-bar-adjust
 adjust 1
 frames 8
 panel adjust adjust-position
+# The place picker tops that tab. With the cinema chosen it adds the seats,
+# the house lights and the screen light, and the room sets the screen.
+place cinema
+frames 4
+panel adjust place-picker
+place void
+frames 4
 look -21 -3
 point bar 0.52 0.65
 frames 4
@@ -500,7 +539,7 @@ frames 8
 panel adjust adjust-chapters
 # The library queued behind it: Next on the bar, and Up next from it.
 queue-all
-point bar 0.6215 0.69
+point bar 0.611 0.69
 frames 10
 panel bar player-bar-next
 up-next

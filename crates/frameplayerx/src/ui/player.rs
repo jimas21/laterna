@@ -4,11 +4,13 @@ use super::theme::Weight;
 use super::widgets::{Kind, ListArea, Tip};
 use super::{Action, View, depth, fmt_time, icons, premium, theme, widgets};
 use crate::playback::Quality;
+use crate::settings::{HOUSE_PLAYING, PLAIN_PLACE, Settings};
 use crate::subtitles::Pick;
 use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 use fp_core::format::{Projection, StereoLayout, VideoFormat};
 use fp_core::view::ViewSettings;
 use fp_media::PlayerState;
+use fp_render::env::{Place, PlaceKind, SeatName};
 
 /// Width of the projection names beside the format list's rows.
 const GROUP_WIDTH: f32 = 130.0;
@@ -268,15 +270,14 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 .layout(Layout::right_to_left(Align::Center)),
         );
         widgets::well(&mut right, |ui| {
-            view_keys(
-                ui,
-                pb,
-                v.state,
-                v.settings.passthrough,
-                v.passthrough_available,
-                v.settings.follow,
-                v.actions,
-            );
+            let keys = ViewKeys {
+                passthrough: v.settings.passthrough,
+                passthrough_available: v.passthrough_available,
+                follow: v.settings.follow,
+                places_offered: v.places_enabled,
+                place_shown: v.place_shown,
+            };
+            view_keys(ui, pb, v.state, keys, v.actions);
         });
     });
 }
@@ -285,11 +286,21 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
 /// with the end of what is inside it.
 pub const BAR_MARGIN: i8 = 28;
 
+/// The adjust panel's tabs the bar opens directly.
+const FORMAT_TAB: usize = 0;
+/// Position, which holds the place picker above the picture's placement.
+const POSITION_TAB: usize = 1;
+
 /// The format pill opens the adjust panel's Format tab (again closes it).
 fn toggle_format_tab(state: &mut super::UiState) {
-    let showing = state.adjust_open && state.adjust_tab == 0;
+    toggle_adjust_tab(state, FORMAT_TAB);
+}
+
+/// Opens the adjust panel at `tab`, or closes it when it already shows it.
+fn toggle_adjust_tab(state: &mut super::UiState, tab: usize) {
+    let showing = state.adjust_open && state.adjust_tab == tab;
     state.adjust_open = !showing;
-    state.adjust_tab = 0;
+    state.adjust_tab = tab;
 }
 
 /// Title, status, format, and the audio and subtitles in use.
@@ -626,16 +637,27 @@ fn queue_key(
     }
 }
 
-/// Close, hide, room, follow, bookmark and adjust.
+/// What the keys on the right of the bar depend on.
+#[derive(Clone, Copy)]
+struct ViewKeys {
+    passthrough: bool,
+    passthrough_available: bool,
+    follow: bool,
+    /// Places may show at all (the kill switch is not set).
+    places_offered: bool,
+    /// The place showing round the picture now.
+    place_shown: Option<Place>,
+}
+
+/// Close, hide, room, place, follow, bookmark and adjust.
 fn view_keys(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
     state: &mut super::UiState,
-    passthrough: bool,
-    passthrough_available: bool,
-    follow: bool,
+    keys: ViewKeys,
     actions: &mut Vec<Action>,
 ) {
+    let flat = pb.format.projection == Projection::Flat;
     if widgets::key(ui, icons::X, 52.0, false)
         .tip(tr!("player-close"))
         .clicked()
@@ -650,9 +672,9 @@ fn view_keys(
     }
     // Your room shows around a flat video's screen, or through a
     // side-by-side passthrough video's own mask.
-    if passthrough_available {
-        if pb.format.projection == Projection::Flat {
-            if widgets::key(ui, icons::ARMCHAIR, 52.0, passthrough)
+    if keys.passthrough_available {
+        if flat {
+            if widgets::key(ui, icons::ARMCHAIR, 52.0, keys.passthrough)
                 .tip(tr!("player-room"))
                 .clicked()
             {
@@ -666,13 +688,30 @@ fn view_keys(
             actions.push(Action::SetFormat(Some(f)));
         }
     }
-    // Only a flat screen follows: around 180°/360° video you look about.
-    if pb.format.projection == Projection::Flat
-        && widgets::key(ui, icons::BED, 52.0, follow)
-            .tip(tr!("settings-follow"))
+    // A place surrounds a flat screen only: it opens the picker, one click
+    // from the bar.
+    if keys.places_offered
+        && flat
+        && widgets::key(ui, icons::FILM_STRIP, 52.0, keys.place_shown.is_some())
+            .tip(tr!("player-place"))
             .clicked()
     {
-        actions.push(Action::ToggleFollow);
+        toggle_adjust_tab(state, POSITION_TAB);
+    }
+    // Only a flat screen follows: around 180°/360° video you look about.
+    // Inside a place it does nothing, and the tip says so.
+    if flat {
+        let tip = if keys.place_shown.is_some() {
+            tr!("player-follow-place")
+        } else {
+            tr!("settings-follow")
+        };
+        if widgets::key(ui, icons::BED, 52.0, keys.follow)
+            .tip(tip)
+            .clicked()
+        {
+            actions.push(Action::ToggleFollow);
+        }
     }
     if widgets::key(ui, icons::BOOKMARK_SIMPLE, 52.0, false)
         .tip(tr!("player-bookmark"))
@@ -1134,9 +1173,22 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                     0 => format_tab(ui, pb, v.settings, v.actions),
                     1 => {
                         let flat = pb.format.projection == Projection::Flat;
+                        // Round a flat screen, the place comes first; it
+                        // decides which of the controls below apply.
+                        let place = if flat {
+                            place_controls(
+                                ui,
+                                v.settings,
+                                v.passthrough_available,
+                                v.places_enabled,
+                                true,
+                            )
+                        } else {
+                            None
+                        };
                         let moved = v.settings.panel_offsets != Default::default()
                             || (flat && (pb.settings.yaw, pb.settings.pitch) != (0.0, 0.0));
-                        position_tab(ui, &mut pb.settings, flat, moved, v.actions);
+                        position_tab(ui, &mut pb.settings, flat, moved, place, v.actions);
                     }
                     2 => stereo_tab(ui, &mut pb.settings),
                     3 => picture_tab(ui, &mut pb.settings),
@@ -1289,14 +1341,18 @@ fn format_tab(
 }
 
 /// Position tab: where the picture is, and for a flat screen its size.
+/// `place` is the place showing round it, if any: a room sets the screen
+/// itself, and a place replaces the background colour.
 fn position_tab(
     ui: &mut egui::Ui,
     s: &mut ViewSettings,
     flat: bool,
     moved: bool,
+    place: Option<Place>,
     actions: &mut Vec<Action>,
 ) {
     let d = ViewSettings::default();
+    let room = place.is_some_and(|p| p.kind() == PlaceKind::Room);
     widgets::rows(ui, |r| {
         r.row(
             tr!("adjust-placement"),
@@ -1376,7 +1432,11 @@ fn position_tab(
         );
     });
     ui.label(RichText::new(tr!("adjust-position-hint")).color(theme::TEXT_3));
-    if flat {
+    if flat && room {
+        ui.add_space(6.0);
+        widgets::section_label(ui, tr!("adjust-screen"));
+        ui.label(RichText::new(tr!("place-sets-screen")).color(theme::TEXT_3));
+    } else if flat {
         ui.add_space(6.0);
         widgets::section_label(ui, tr!("adjust-screen"));
         widgets::rows(ui, |r| {
@@ -1409,9 +1469,166 @@ fn position_tab(
             );
         });
     }
-    ui.add_space(6.0);
-    widgets::section_label(ui, tr!("settings-background"));
-    background_controls(ui, &mut s.background);
+    // A place fills the background.
+    if place.is_none() {
+        ui.add_space(6.0);
+        widgets::section_label(ui, tr!("settings-background"));
+        background_controls(ui, &mut s.background);
+    }
+}
+
+/// What the place picker chooses between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlaceChoice {
+    /// The empty background.
+    Plain,
+    /// The real room, through passthrough.
+    YourRoom,
+    /// A room or a sky.
+    Place(Place),
+}
+
+/// What `settings` choose now: the real room if it is on and the runtime can
+/// show it, else the place they name, else Plain (also for a place this
+/// build lacks, and when places are switched off).
+pub(crate) fn place_choice(
+    settings: &Settings,
+    passthrough_available: bool,
+    places_enabled: bool,
+) -> PlaceChoice {
+    if settings.passthrough && passthrough_available {
+        return PlaceChoice::YourRoom;
+    }
+    match Place::from_id(&settings.environment) {
+        Some(place) if places_enabled => PlaceChoice::Place(place),
+        _ => PlaceChoice::Plain,
+    }
+}
+
+/// Makes `choice` the setting. A place or Plain turns the real room off; Your
+/// room turns it on and leaves the place chosen, so the Room button on the
+/// bar brings that place back.
+pub(crate) fn choose_place(settings: &mut Settings, choice: PlaceChoice) {
+    match choice {
+        PlaceChoice::Plain => {
+            settings.environment = PLAIN_PLACE.to_string();
+            settings.passthrough = false;
+        }
+        PlaceChoice::YourRoom => settings.passthrough = true,
+        PlaceChoice::Place(place) => {
+            settings.environment = place.id().to_string();
+            settings.passthrough = false;
+        }
+    }
+}
+
+/// Sits the viewer in seat `index` of `place`, or its last seat when there
+/// are fewer.
+pub(crate) fn pick_seat(settings: &mut Settings, place: Place, index: usize) {
+    let last = place.layout().seats.len().saturating_sub(1);
+    let index = u8::try_from(index.min(last)).unwrap_or(0);
+    settings.place_seats.insert(place.id().to_string(), index);
+}
+
+/// A choice's icon and label.
+fn place_label(choice: PlaceChoice) -> (&'static str, &'static str) {
+    match choice {
+        PlaceChoice::Plain => (icons::MONITOR, tr!("place-plain")),
+        PlaceChoice::YourRoom => (icons::ARMCHAIR, tr!("place-your-room")),
+        PlaceChoice::Place(Place::Cinema) => (icons::FILM_STRIP, tr!("place-cinema")),
+        PlaceChoice::Place(Place::Studio) => (icons::SUN, tr!("place-studio")),
+    }
+}
+
+fn seat_label(name: SeatName) -> &'static str {
+    match name {
+        SeatName::Front => tr!("seat-front"),
+        SeatName::Middle => tr!("seat-middle"),
+        SeatName::Back => tr!("seat-back"),
+        SeatName::Couch => tr!("seat-couch"),
+    }
+}
+
+/// The house lights slider is in percent of full light; these are
+/// [`HOUSE_PLAYING`] and `HOUSE_PLAYING_START` as that.
+const HOUSE_PERCENT: std::ops::RangeInclusive<f32> = 0.0..=40.0;
+const HOUSE_PERCENT_START: f32 = 4.0;
+
+/// The place picker: Plain, Your room and each place as chips, then for the
+/// place chosen its seat, house lights and screen light. Shared by the
+/// adjust panel's Position tab (`in_video`, for the open video's screen) and
+/// Settings > Places. Returns the place chosen, if any.
+pub(super) fn place_controls(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    passthrough_available: bool,
+    places_enabled: bool,
+    in_video: bool,
+) -> Option<Place> {
+    if in_video {
+        widgets::section_label(ui, tr!("place-heading"));
+    }
+    let current = place_choice(settings, passthrough_available, places_enabled);
+    let mut choices = vec![PlaceChoice::Plain];
+    if passthrough_available {
+        choices.push(PlaceChoice::YourRoom);
+    }
+    if places_enabled {
+        choices.extend(Place::ALL.iter().map(|&p| PlaceChoice::Place(p)));
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+        for choice in choices {
+            let (icon, label) = place_label(choice);
+            if widgets::chip_icon(ui, Some(icon), label, choice == current).clicked() {
+                choose_place(settings, choice);
+            }
+        }
+    });
+    if !places_enabled {
+        ui.label(RichText::new(tr!("place-switched-off")).color(theme::TEXT_3));
+    }
+    let chosen = place_choice(settings, passthrough_available, places_enabled);
+    let PlaceChoice::Place(place) = chosen else {
+        return None;
+    };
+    let layout = place.layout();
+    let seat = crate::app::places::seat_index(settings, place, &layout);
+    let mut picked = None;
+    let mut house = settings.house_lights_playing * 100.0;
+    widgets::rows(ui, |r| {
+        if layout.seats.len() > 1 {
+            r.row(tr!("place-seat"), None, |ui| {
+                // Right to left: the first seat shows first.
+                for (i, s) in layout.seats.iter().enumerate().rev() {
+                    if widgets::chip(ui, seat_label(s.name), i == seat).clicked() {
+                        picked = Some(i);
+                    }
+                }
+            });
+        }
+        if r.slider(
+            tr!("place-house-lights"),
+            Some(tr!("place-house-lights-desc")),
+            &mut house,
+            HOUSE_PERCENT,
+            HOUSE_PERCENT_START,
+            " %",
+            0,
+        ) {
+            let (low, high) = (*HOUSE_PLAYING.start(), *HOUSE_PLAYING.end());
+            settings.house_lights_playing = (house / 100.0).clamp(low, high);
+        }
+        r.switch(
+            tr!("place-screen-light"),
+            Some(tr!("place-screen-light-desc")),
+            &mut settings.screen_light,
+        );
+    });
+    if let Some(i) = picked {
+        pick_seat(settings, place, i);
+    }
+    Some(place)
 }
 
 fn stereo_tab(ui: &mut egui::Ui, s: &mut ViewSettings) {
@@ -2298,4 +2515,107 @@ fn stereo_pictures(
             textures.push(tex);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::HOUSE_PLAYING_START;
+
+    fn settings(environment: &str, passthrough: bool) -> Settings {
+        Settings {
+            environment: environment.into(),
+            passthrough,
+            ..Default::default()
+        }
+    }
+
+    fn shown(environment: &str, passthrough: bool, room: bool, places: bool) -> PlaceChoice {
+        place_choice(&settings(environment, passthrough), room, places)
+    }
+
+    #[test]
+    fn the_picker_shows_what_the_settings_choose() {
+        let cinema = PlaceChoice::Place(Place::Cinema);
+        assert_eq!(shown("void", false, true, true), PlaceChoice::Plain);
+        assert_eq!(shown("cinema", false, true, true), cinema);
+        // The real room wins over the place, but only where it can show.
+        assert_eq!(shown("cinema", true, true, true), PlaceChoice::YourRoom);
+        assert_eq!(shown("cinema", true, false, true), cinema);
+        // A place this build lacks, and places switched off, show Plain.
+        assert_eq!(shown("moon", false, true, true), PlaceChoice::Plain);
+        assert_eq!(shown("cinema", false, true, false), PlaceChoice::Plain);
+    }
+
+    #[test]
+    fn choosing_sets_the_room_and_the_place_together() {
+        let mut s = settings("cinema", false);
+        choose_place(&mut s, PlaceChoice::YourRoom);
+        // Your room leaves the place chosen, for the Room button to undo.
+        assert!(s.passthrough);
+        assert_eq!(s.environment, "cinema");
+        assert_eq!(place_choice(&s, true, true), PlaceChoice::YourRoom);
+        choose_place(&mut s, PlaceChoice::Place(Place::Studio));
+        assert!(!s.passthrough);
+        assert_eq!(s.environment, "studio");
+        choose_place(&mut s, PlaceChoice::YourRoom);
+        choose_place(&mut s, PlaceChoice::Plain);
+        assert!(!s.passthrough);
+        assert_eq!(s.environment, PLAIN_PLACE);
+        // Whatever is picked is what the picker then shows.
+        for place in Place::ALL {
+            let choice = PlaceChoice::Place(*place);
+            choose_place(&mut s, choice);
+            assert_eq!(place_choice(&s, true, true), choice);
+        }
+    }
+
+    #[test]
+    fn a_seat_is_kept_for_its_place_and_stays_on_offer() {
+        let mut s = Settings::default();
+        let layout = Place::Cinema.layout();
+        let seat = |s: &Settings| crate::app::places::seat_index(s, Place::Cinema, &layout);
+        assert_eq!(seat(&s), layout.default_seat);
+        pick_seat(&mut s, Place::Cinema, 0);
+        assert_eq!(seat(&s), 0);
+        assert_eq!(s.place_seats.get("cinema"), Some(&0));
+        // Past the last seat is the last seat.
+        pick_seat(&mut s, Place::Cinema, 99);
+        assert_eq!(seat(&s), layout.seats.len() - 1);
+        // A place with one seat only ever has seat 0.
+        pick_seat(&mut s, Place::Studio, 3);
+        let last = Place::Studio.layout().seats.len() - 1;
+        assert_eq!(usize::from(s.place_seats["studio"]), last);
+    }
+
+    #[test]
+    fn the_house_lights_slider_spans_the_setting() {
+        let percent = |v: f32| (v * 100.0).round();
+        assert_eq!(percent(*HOUSE_PLAYING.start()), *HOUSE_PERCENT.start());
+        assert_eq!(percent(*HOUSE_PLAYING.end()), *HOUSE_PERCENT.end());
+        assert_eq!(percent(HOUSE_PLAYING_START), HOUSE_PERCENT_START);
+    }
+
+    #[test]
+    fn every_place_and_seat_has_its_own_label() {
+        let mut labels = vec![
+            place_label(PlaceChoice::Plain),
+            place_label(PlaceChoice::YourRoom),
+        ];
+        for place in Place::ALL {
+            labels.push(place_label(PlaceChoice::Place(*place)));
+        }
+        for (i, (icon, label)) in labels.iter().enumerate() {
+            assert!(!icon.is_empty() && !label.is_empty());
+            for (other_icon, other) in &labels[..i] {
+                assert_ne!(label, other);
+                assert_ne!(icon, other_icon);
+            }
+        }
+        let seats: Vec<_> = SeatName::ALL.iter().map(|s| seat_label(*s)).collect();
+        for (i, label) in seats.iter().enumerate() {
+            assert!(!label.is_empty());
+            assert!(!seats[..i].contains(label));
+        }
+    }
 }

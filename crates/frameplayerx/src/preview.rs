@@ -36,6 +36,9 @@
 //! | `tracks` | open the audio and subtitles picker |
 //! | `filters` | open the Filters drawer of the source page shown (a Jellyfin grid, a feed) |
 //! | `chroma` | turn chroma key on for the open video |
+//! | `place ID` | choose a place as the picker's chips do: `cinema`, `studio`, `void` (Plain) or `room` (Your room) |
+//! | `seat N` | sit in the chosen place's seat N (a number from 0, or `front`, `middle`, `back`) |
+//! | `house LEVEL` / `house auto` | hold the house lights at LEVEL (0 dark to 1 full), or let playback dim and raise them again |
 //! | `panel PANEL NAME` | save a panel's image flat, pixel for pixel, as OUT_DIR/NAME.png |
 
 use crate::app::{App, FrameInput};
@@ -69,6 +72,14 @@ struct Sim {
 
 fn dir_quat(yaw: f32, pitch: f32) -> Quat {
     Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), pitch.to_radians(), 0.0)
+}
+
+/// The seat a `seat` command names: a number from 0, or a seat's name.
+fn seat_arg(place: fp_render::env::Place, arg: &str) -> Option<usize> {
+    arg.parse().ok().or_else(|| {
+        let name = fp_render::env::SeatName::from_id(arg)?;
+        place.layout().seat_index(name)
+    })
 }
 
 impl Sim {
@@ -261,6 +272,7 @@ impl Sim {
                         "general" => SettingsTab::General,
                         "playback" => SettingsTab::Playback,
                         "position" => SettingsTab::VideoPosition,
+                        "places" => SettingsTab::Places,
                         "sound" => SettingsTab::Sound,
                         "passthrough" => SettingsTab::Passthrough,
                         "controller" => SettingsTab::Controller,
@@ -469,6 +481,44 @@ impl Sim {
                 self.app.ui.languages_open = true;
                 self.app.repaint_all();
                 self.run_frames(3)?;
+            }
+            // `place cinema`, `place studio`, `place void` or `place room`, as
+            // the picker's chips choose.
+            Some("place") => {
+                use crate::ui::player::{PlaceChoice, choose_place};
+                use fp_render::env::Place;
+                let id = parts.get(1).ok_or("place needs a name")?;
+                let choice = match *id {
+                    "void" | "plain" => PlaceChoice::Plain,
+                    "room" => PlaceChoice::YourRoom,
+                    other => {
+                        let place = Place::from_id(other).ok_or(format!("no place {other}"))?;
+                        PlaceChoice::Place(place)
+                    }
+                };
+                choose_place(&mut self.app.settings, choice);
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // `seat 0` or `seat front`: where the chosen place seats you.
+            Some("seat") => {
+                let place = fp_render::env::Place::from_id(&self.app.settings.environment)
+                    .ok_or("seat needs a place: place cinema first")?;
+                let arg = parts.get(1).ok_or("seat needs a number or a name")?;
+                let index = seat_arg(place, arg).ok_or("no such seat")?;
+                crate::ui::player::pick_seat(&mut self.app.settings, place, index);
+                self.app.repaint_all();
+                self.run_frames(2)?;
+            }
+            // `house 0` holds the house lights dark and `house 1` full, as a
+            // short test clip ends and would bring them up; `house auto` lets
+            // playback dim and raise them again.
+            Some("house") => {
+                self.app.house_override = match parts.get(1).copied() {
+                    Some("auto") => None,
+                    _ => Some(num(1)?.clamp(0.0, 1.0)),
+                };
+                self.run_frames(2)?;
             }
             // Turns the global chroma key on, or off with `chroma-global off`
             // (Settings > Passthrough).

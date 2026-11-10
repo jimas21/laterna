@@ -594,6 +594,7 @@ impl App {
         }
         let devices = self.services.haptic_statuses();
         let passthrough_available = input.passthrough_available;
+        let (places_enabled, place_shown) = (self.places_enabled, self.place_shown);
         for idx in [MAIN, BAR, ADJUST, TRACKS, TOAST] {
             if !self.panels[idx].needs_paint() {
                 continue;
@@ -617,6 +618,8 @@ impl App {
                 playback: playback.as_mut(),
                 actions: &mut actions,
                 passthrough_available,
+                places_enabled,
+                place_shown,
                 devices: &devices,
             };
             let r = panels[idx].paint(renderer, input.time, |ctx| match idx {

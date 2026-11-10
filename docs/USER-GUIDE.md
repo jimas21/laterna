@@ -10,6 +10,7 @@ or your network.
 - [Video formats](#video-formats), [fisheye lenses](#fisheye-lenses) and
   [videos that stutter](#videos-that-stutter-av1-and-422)
 - [Controls](#controls), and [watching lying down](#watching-lying-down)
+- [Places](#places) round a flat video
 - [Passthrough videos](#passthrough-videos)
 - [Haptics](#haptics)
 - [Remote control](#remote-control)
@@ -835,6 +836,38 @@ under ⚙, or press the left thumbstick to undo them.
 Text fields bring up a keyboard below the panel you type in; **#+=**
 switches it to symbols (`! # $ % ( ) [ ] { }` and the rest) and **abc** back. You can also
 type on your phone through the web remote.
+
+## Places
+
+A place is a setting round a flat video, in place of the empty background: a
+cinema, or a studio. **Plain**, the empty background, is what you get until
+you pick one. 180°, 360° and fisheye videos fill your view, so they hide the
+place. **Your room** (see [Passthrough videos](#passthrough-videos)) wins over
+a place while it shows.
+
+- **Pick one while a video plays:** press the film button on the control bar,
+  beside the armchair. It opens the adjust panel's Position tab with the
+  picker at the top: Plain, Your room, Cinema and Studio.
+- **Or set it for every video** in Settings › Places. It is the same
+  choice: it stays until you change it, and a restart keeps it.
+- **Seat.** The cinema has three seats, Front, Middle and Back. The seat sets
+  how large the screen looks. Each place remembers its own seat.
+- **House lights while playing.** The lights dim in about two seconds when
+  the video plays, and come back up in about one when you pause, it ends or
+  you close it. A pause to buffer leaves them as they are. The slider sets how
+  bright they stay while playing (4 % to begin with; 0 is dark).
+- **Light from the screen.** The walls and seats take on the colours of the
+  picture. Turn it off to keep the place steady.
+- **The screen.** A room has a screen of its own, so the Position tab leaves
+  out the screen's distance, width and curvature there: pick a seat to change
+  how big it looks. The studio keeps your own screen settings. A place
+  replaces the background colour.
+- **Screen follows you** (the bed button) does nothing inside a place: the
+  place stays where it is, and the button's tip says so. Lie back and
+  **recenter** to bring the whole place in front of you, tilted with you.
+
+If a place ever gets in the way, set `FRAMEPLAYERX_PLACES=0` in the env file
+(see [DEVELOPMENT.md](DEVELOPMENT.md)) and Laterna never shows one.
 
 ## Passthrough videos
 

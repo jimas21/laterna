@@ -1423,3 +1423,41 @@ earbuds-restart = Restart the headset once to finish installing Tragus.
 earbuds-none = No earbuds connected.
 earbuds-pause = Pause when an earbud comes out
 earbuds-pause-desc = The video stays paused when the earbud goes back in.
+
+## Places: the picker on the bar, in the adjust panel and in Settings
+
+# Short: a tab, and the title of its page.
+settings-places = Places
+settings-places-desc = The place round flat videos and the menus. Plain is the empty background. The film button on the control bar changes it while a video plays. Your choice stays until you change it.
+# The picker's heading in the adjust panel, and a heading in Settings.
+place-heading = Place
+# Short: a chip. The empty background, no place.
+place-plain = Plain
+# Short: a chip. Your real room, seen through the headset.
+place-your-room = Your room
+# Short: a chip.
+place-cinema = Cinema
+# Short: a chip.
+place-studio = Studio
+# Under the chips when places are switched off for this run.
+place-switched-off = Places are switched off for this run.
+# A row: where you sit in the room.
+place-seat = Seat
+# Short: a chip.
+seat-front = Front
+# Short: a chip.
+seat-middle = Middle
+# Short: a chip.
+seat-back = Back
+# Short: a chip.
+seat-couch = Couch
+place-house-lights = House lights while playing
+place-house-lights-desc = How bright the room stays once the video starts. The lights come up when you pause.
+place-screen-light = Light from the screen
+place-screen-light-desc = The walls and seats take on the colours of the picture.
+# Under the adjust panel's Screen heading while a room is chosen.
+place-sets-screen = This place sets the screen. Pick a seat to change how big it looks.
+# A tooltip: opens the place picker.
+player-place = Place
+# A tooltip on the bed button while a place shows.
+player-follow-place = Screen follows you (not inside a place)

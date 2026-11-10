@@ -8,7 +8,7 @@ use super::{Action, SettingsTab, View, icons};
 use crate::settings::{HapticDeviceConfig, RenderScale};
 use egui::{Align2, Color32, RichText, Sense, Vec2};
 
-fn tabs() -> [(SettingsTab, &'static str, &'static str); 10] {
+fn tabs() -> [(SettingsTab, &'static str, &'static str); 11] {
     [
         (
             SettingsTab::General,
@@ -24,6 +24,11 @@ fn tabs() -> [(SettingsTab, &'static str, &'static str); 10] {
             SettingsTab::VideoPosition,
             icons::FRAME_CORNERS,
             tr!("settings-video-position"),
+        ),
+        (
+            SettingsTab::Places,
+            icons::FILM_STRIP,
+            tr!("settings-places"),
         ),
         (
             SettingsTab::Sound,
@@ -103,6 +108,7 @@ pub fn settings(ui: &mut egui::Ui, v: &mut View) {
                     SettingsTab::General => general(ui, v),
                     SettingsTab::Playback => playback(ui, v),
                     SettingsTab::VideoPosition => video_position(ui, v),
+                    SettingsTab::Places => places(ui, v),
                     SettingsTab::Sound => sound(ui, v),
                     SettingsTab::Passthrough => passthrough(ui, v),
                     SettingsTab::Controller => controller(ui, v),
@@ -517,6 +523,20 @@ fn video_position(ui: &mut egui::Ui, v: &mut View) {
     });
     heading(ui, tr!("settings-background"));
     super::player::background_controls(ui, &mut d.background);
+}
+
+/// The place round flat videos and the menus, for every video. The player's
+/// own picker (the film button on the control bar) is the same controls.
+fn places(ui: &mut egui::Ui, v: &mut View) {
+    note(ui, tr!("settings-places-desc"));
+    heading(ui, tr!("place-heading"));
+    super::player::place_controls(
+        ui,
+        v.settings,
+        v.passthrough_available,
+        v.places_enabled,
+        false,
+    );
 }
 
 fn sound(ui: &mut egui::Ui, v: &mut View) {

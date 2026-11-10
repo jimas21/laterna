@@ -108,8 +108,10 @@ const TRACKS: usize = 4;
 const TOAST: usize = 5;
 /// How long a toast stays over the video.
 const VIDEO_TOAST_SECS: f32 = 3.0;
-/// The control bar's body in pixels.
-const BAR_PX: [u32; 2] = [1400, 268];
+/// The control bar's body in pixels. Wide enough that the view keys (up to
+/// seven on a flat video: close, hide, room, place, follow, bookmark, adjust)
+/// stay clear of the transport keys in the middle.
+const BAR_PX: [u32; 2] = [1540, 268];
 /// Metres per pixel of the control bar and of the picker on it.
 const BAR_M_PER_PX: f32 = 1.2 / 1400.0;
 /// The performance overlay's quad layer (the panels' are their indices).
