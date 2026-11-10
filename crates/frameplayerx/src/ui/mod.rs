@@ -409,7 +409,8 @@ pub enum Action {
     /// back).
     HideControls,
     Quit,
-    /// Quit and start again, to run an installed update.
+    /// Quit and start again, to run an installed update or use a setting
+    /// that is read at start.
     Restart,
 }
 
@@ -832,6 +833,19 @@ pub struct UiState {
     pub keyboard_symbols: bool,
     /// Facts for the About tab (runtime, GPU, decoder...).
     pub about: Vec<(String, String)>,
+    /// What Settings › General › Render resolution shows, once the headset
+    /// has said what sizes it offers.
+    pub render: Option<RenderInfo>,
+}
+
+/// The eye picture sizes behind Settings › General › Render resolution.
+#[derive(Clone, Copy, Debug)]
+pub struct RenderInfo {
+    /// The choice the running session was created with.
+    pub started: crate::settings::RenderScale,
+    /// The pixels per eye each choice gives, in the order of
+    /// [`crate::settings::RenderScale::ALL`].
+    pub eye_px: [(u32, u32); 3],
 }
 
 pub struct HomeRows {
@@ -887,6 +901,7 @@ impl Default for UiState {
             keyboard_shift: false,
             keyboard_symbols: false,
             about: Vec::new(),
+            render: None,
         }
     }
 }

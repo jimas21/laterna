@@ -105,6 +105,10 @@ pub struct XrSession {
     quads: std::collections::HashMap<u64, QuadLayer>,
     /// The first quad layer's image count is logged once.
     quad_images_logged: bool,
+    /// The eyes' field of view is logged once, with the first located views.
+    fov_logged: bool,
+    /// When the session was created, for the state-change log.
+    created: Instant,
     pub stats: XrStats,
 }
 
@@ -122,10 +126,23 @@ pub struct FrameCtx {
 /// Preferred eye formats, sRGB first.
 const FORMATS: [vk::Format; 2] = [vk::Format::R8G8B8A8_SRGB, vk::Format::B8G8R8A8_SRGB];
 
+/// A view's field of view in degrees, and its total width and height.
+fn fov_text(fov: xr::Fovf) -> String {
+    let deg = f32::to_degrees;
+    let (left, right) = (deg(fov.angle_left), deg(fov.angle_right));
+    let (up, down) = (deg(fov.angle_up), deg(fov.angle_down));
+    format!(
+        "left {left:.1}, right {right:.1}, up {up:.1}, down {down:.1} ({:.1} x {:.1} degrees)",
+        right - left,
+        up - down
+    )
+}
+
 impl XrSession {
     /// Creates the session on `gpu` (which must have been created with
-    /// `ctx.creator()`).
-    pub fn new(ctx: Arc<XrContext>, gpu: Arc<Gpu>) -> Result<XrSession> {
+    /// `ctx.creator()`). The eye images are `render_scale` times the size the
+    /// runtime recommends (see [`crate::scaled_eye_size`]); 1 is that size.
+    pub fn new(ctx: Arc<XrContext>, gpu: Arc<Gpu>, render_scale: f32) -> Result<XrSession> {
         let mut actions = Actions::new(&ctx.instance)?;
         let info = xr::vulkan::SessionCreateInfo {
             instance: gpu.instance.handle().as_raw() as _,
@@ -166,7 +183,20 @@ impl XrSession {
             .copied()
             .find(|f| formats.contains(&(f.as_raw() as u32)))
             .ok_or_else(|| Error::Runtime(format!("no sRGB swapchain format among {formats:?}")))?;
-        let (w, h) = ctx.eye_size()?;
+        let offered: Vec<vk::Format> = formats
+            .iter()
+            .map(|&f| vk::Format::from_raw(f as i32))
+            .collect();
+        log::info!("swapchain formats offered: {offered:?}");
+        let sizes = ctx.eye_sizes()?;
+        let (w, h) = crate::scaled_eye_size(&sizes, render_scale);
+        log::info!(
+            "eye buffers {w}x{h} (recommended {}x{}, max {}x{}, scale {render_scale})",
+            sizes.recommended.0,
+            sizes.recommended.1,
+            sizes.max.0,
+            sizes.max.1
+        );
         let mut eyes = Vec::new();
         for _ in 0..2 {
             let swapchain = session
@@ -231,6 +261,8 @@ impl XrSession {
             launch_closed_at: None,
             quads: std::collections::HashMap::new(),
             quad_images_logged: false,
+            fov_logged: false,
+            created: Instant::now(),
             stats: XrStats::default(),
         })
     }
@@ -273,6 +305,11 @@ impl XrSession {
 
     pub fn state(&self) -> xr::SessionState {
         self.state
+    }
+
+    /// Whether the session has input focus (not covered by a dashboard).
+    pub fn focused(&self) -> bool {
+        self.state == xr::SessionState::FOCUSED
     }
 
     /// Whether the app is in front of the user's eyes (see [`is_worn`]).
@@ -338,7 +375,11 @@ impl XrSession {
             match event {
                 xr::Event::SessionStateChanged(e) => {
                     self.state = e.state();
-                    log::info!("XR session state: {:?}", self.state);
+                    log::info!(
+                        "XR session state: {:?} ({:.2} s after the session was created)",
+                        self.state,
+                        self.created.elapsed().as_secs_f32()
+                    );
                     match self.state {
                         xr::SessionState::READY => {
                             self.session
@@ -421,6 +462,11 @@ impl XrSession {
             .ctx("xrLocateViews")?;
         if !flags.contains(xr::ViewStateFlags::ORIENTATION_VALID) || views.len() < 2 {
             return Ok(ctx);
+        }
+        if !self.fov_logged {
+            self.fov_logged = true;
+            log::info!("left eye field of view: {}", fov_text(views[0].fov));
+            log::info!("right eye field of view: {}", fov_text(views[1].fov));
         }
         if let Ok(loc) = self
             .view_space
@@ -690,6 +736,20 @@ impl Drop for XrSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_field_of_view_is_written_in_degrees_with_its_totals() {
+        let fov = xr::Fovf {
+            angle_left: -50f32.to_radians(),
+            angle_right: 40f32.to_radians(),
+            angle_up: 45f32.to_radians(),
+            angle_down: -35f32.to_radians(),
+        };
+        assert_eq!(
+            fov_text(fov),
+            "left -50.0, right 40.0, up 45.0, down -35.0 (90.0 x 80.0 degrees)"
+        );
+    }
 
     #[test]
     fn only_visible_and_focused_count_as_worn() {

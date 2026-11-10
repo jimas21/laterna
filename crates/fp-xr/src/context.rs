@@ -9,6 +9,81 @@ use openxr as xr;
 /// Khronos registry yet; SteamVR on the Steam Frame provides it.
 pub const FRAME_CONTROLLER_EXTENSION: &[u8] = b"XR_VALVE_frame_controller_interaction\0";
 
+/// How the OpenXR instance is created.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct XrOptions {
+    /// Enable only what a frame loop needs (`XR_KHR_vulkan_enable2` and the
+    /// Steam Frame controller profile), none of the optional extensions
+    /// (hand and eye tracking, refresh rate, layer types). For finding out
+    /// whether one of them changes how the runtime paces the app.
+    pub minimal_extensions: bool,
+}
+
+/// The per-eye image sizes the runtime offers, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EyeSizes {
+    /// What the runtime recommends: SteamVR's own choice, from its
+    /// resolution settings.
+    pub recommended: (u32, u32),
+    /// The most it allows.
+    pub max: (u32, u32),
+}
+
+/// The eye image size for a render `scale`: the recommended size times the
+/// scale, each side a multiple of 8 within 64 and the runtime's maximum. A
+/// scale of 1 (and one that is not a number) gives the recommended size
+/// unchanged; others are limited to 0.5 to 2.
+pub fn scaled_eye_size(sizes: &EyeSizes, scale: f32) -> (u32, u32) {
+    let k = if scale.is_finite() {
+        scale.clamp(0.5, 2.0)
+    } else {
+        1.0
+    };
+    if k == 1.0 {
+        return sizes.recommended;
+    }
+    let side = |recommended: u32, max: u32| {
+        let max = if max == 0 { u32::MAX } else { max.max(64) };
+        let rounded = (recommended as f32 * k / 8.0).round() as u32 * 8;
+        rounded.clamp(64, max)
+    };
+    (
+        side(sizes.recommended.0, sizes.max.0),
+        side(sizes.recommended.1, sizes.max.1),
+    )
+}
+
+/// The names of the extensions in `set` that FramePlayerX can ask for.
+fn extension_names(set: &xr::ExtensionSet) -> Vec<String> {
+    let known = [
+        ("XR_KHR_vulkan_enable2", set.khr_vulkan_enable2),
+        ("XR_FB_display_refresh_rate", set.fb_display_refresh_rate),
+        ("XR_EXT_eye_gaze_interaction", set.ext_eye_gaze_interaction),
+        ("XR_EXT_hand_interaction", set.ext_hand_interaction),
+        ("XR_EXT_hand_tracking", set.ext_hand_tracking),
+        (
+            "XR_KHR_composition_layer_cylinder",
+            set.khr_composition_layer_cylinder,
+        ),
+        (
+            "XR_KHR_composition_layer_equirect2",
+            set.khr_composition_layer_equirect2,
+        ),
+        ("XR_KHR_visibility_mask", set.khr_visibility_mask),
+    ];
+    let mut names = Vec::new();
+    for (name, on) in known {
+        if on {
+            names.push(name.to_string());
+        }
+    }
+    for other in &set.other {
+        let name = String::from_utf8_lossy(other);
+        names.push(name.trim_end_matches('\0').to_string());
+    }
+    names
+}
+
 pub struct XrContext {
     pub instance: xr::Instance,
     pub system: xr::SystemId,
@@ -22,8 +97,9 @@ pub struct XrContext {
 
 impl XrContext {
     /// Loads the active runtime and creates an instance with the extensions
-    /// FramePlayerX uses when they are available.
-    pub fn new(app_name: &str) -> Result<XrContext> {
+    /// FramePlayerX uses when they are available (or only the ones it can't
+    /// do without, with [`XrOptions::minimal_extensions`]).
+    pub fn new(app_name: &str, opts: XrOptions) -> Result<XrContext> {
         let manifest = loader::find_active_runtime(&loader::SearchEnv::from_process())
             .map_err(Error::Runtime)?;
         let loaded = loader::load_runtime(&manifest).map_err(Error::Runtime)?;
@@ -36,13 +112,15 @@ impl XrContext {
         }
         let mut e = xr::ExtensionSet::default();
         e.khr_vulkan_enable2 = true;
-        e.fb_display_refresh_rate = avail.fb_display_refresh_rate;
-        e.ext_eye_gaze_interaction = avail.ext_eye_gaze_interaction;
-        e.ext_hand_interaction = avail.ext_hand_interaction;
-        e.ext_hand_tracking = avail.ext_hand_tracking;
-        e.khr_composition_layer_cylinder = avail.khr_composition_layer_cylinder;
-        e.khr_composition_layer_equirect2 = avail.khr_composition_layer_equirect2;
-        e.khr_visibility_mask = avail.khr_visibility_mask;
+        if !opts.minimal_extensions {
+            e.fb_display_refresh_rate = avail.fb_display_refresh_rate;
+            e.ext_eye_gaze_interaction = avail.ext_eye_gaze_interaction;
+            e.ext_hand_interaction = avail.ext_hand_interaction;
+            e.ext_hand_tracking = avail.ext_hand_tracking;
+            e.khr_composition_layer_cylinder = avail.khr_composition_layer_cylinder;
+            e.khr_composition_layer_equirect2 = avail.khr_composition_layer_equirect2;
+            e.khr_visibility_mask = avail.khr_visibility_mask;
+        }
         // The Steam Frame controller profile only exists with this enabled.
         if avail
             .other
@@ -90,6 +168,15 @@ impl XrContext {
             props.runtime_name,
             props.runtime_version,
             sp.system_name
+        );
+        log::info!(
+            "OpenXR extensions enabled (minimal {}): {:?}",
+            opts.minimal_extensions,
+            extension_names(&e)
+        );
+        log::info!(
+            "OpenXR blend modes {blend_modes:?}; XR_KHR_convert_timespec_time offered: {}",
+            avail.khr_convert_timespec_time
         );
         Ok(XrContext {
             instance,
@@ -151,8 +238,8 @@ impl XrContext {
         }
     }
 
-    /// Recommended per-eye render size.
-    pub fn eye_size(&self) -> Result<(u32, u32)> {
+    /// The per-eye image sizes the runtime recommends and allows.
+    pub fn eye_sizes(&self) -> Result<EyeSizes> {
         let views = self
             .instance
             .enumerate_view_configuration_views(
@@ -163,10 +250,13 @@ impl XrContext {
         let v = views
             .first()
             .ok_or_else(|| Error::Runtime("no views".into()))?;
-        Ok((
-            v.recommended_image_rect_width,
-            v.recommended_image_rect_height,
-        ))
+        Ok(EyeSizes {
+            recommended: (
+                v.recommended_image_rect_width,
+                v.recommended_image_rect_height,
+            ),
+            max: (v.max_image_rect_width, v.max_image_rect_height),
+        })
     }
 
     /// A [`fp_render::Creator`] that lets the runtime create Vulkan objects.
@@ -255,5 +345,83 @@ impl fp_render::Creator for XrCreator<'_> {
             result: vk::Result::from_raw(r),
         })?;
         Ok(vk::Device::from_raw(raw as u64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIZES: EyeSizes = EyeSizes {
+        recommended: (1440, 1440),
+        max: (4096, 4096),
+    };
+
+    #[test]
+    fn scale_one_is_the_recommended_size_exactly() {
+        let odd = EyeSizes {
+            recommended: (1441, 1587),
+            max: (4096, 4096),
+        };
+        assert_eq!(scaled_eye_size(&odd, 1.0), (1441, 1587));
+        assert_eq!(scaled_eye_size(&SIZES, 1.0), (1440, 1440));
+    }
+
+    #[test]
+    fn scales_round_to_multiples_of_eight() {
+        assert_eq!(scaled_eye_size(&SIZES, 1.5), (2160, 2160));
+        assert_eq!(scaled_eye_size(&SIZES, 1.25), (1800, 1800));
+        let odd = EyeSizes {
+            recommended: (1441, 1587),
+            max: (4096, 4096),
+        };
+        // 1441 x 1.25 = 1801.25, 1587 x 1.25 = 1983.75.
+        assert_eq!(scaled_eye_size(&odd, 1.25), (1800, 1984));
+    }
+
+    #[test]
+    fn the_runtimes_maximum_and_the_scale_limits_hold() {
+        let capped = EyeSizes {
+            recommended: (1440, 1440),
+            max: (2560, 2560),
+        };
+        assert_eq!(scaled_eye_size(&capped, 2.0), (2560, 2560));
+        assert_eq!(scaled_eye_size(&SIZES, 9.0), (2880, 2880));
+        assert_eq!(scaled_eye_size(&SIZES, 0.1), (720, 720));
+        assert_eq!(scaled_eye_size(&SIZES, -3.0), (720, 720));
+    }
+
+    #[test]
+    fn a_scale_that_is_not_a_number_is_one() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(scaled_eye_size(&SIZES, bad), (1440, 1440));
+        }
+    }
+
+    #[test]
+    fn a_runtime_reporting_no_maximum_does_not_limit_the_size() {
+        let none = EyeSizes {
+            recommended: (1440, 1440),
+            max: (0, 0),
+        };
+        assert_eq!(scaled_eye_size(&none, 1.5), (2160, 2160));
+    }
+
+    #[test]
+    fn extension_names_list_what_is_enabled() {
+        let mut set = xr::ExtensionSet::default();
+        assert!(extension_names(&set).is_empty());
+        set.khr_vulkan_enable2 = true;
+        set.ext_hand_tracking = true;
+        set.other
+            .push(b"XR_VALVE_frame_controller_interaction\0".to_vec());
+        assert_eq!(
+            extension_names(&set),
+            [
+                "XR_KHR_vulkan_enable2",
+                "XR_EXT_hand_tracking",
+                "XR_VALVE_frame_controller_interaction",
+            ]
+        );
     }
 }

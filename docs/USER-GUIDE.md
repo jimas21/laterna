@@ -935,6 +935,14 @@ The translations started as machine drafts. If one reads wrong, the
   - **Memory**: how much is in use.
 
   Without a video open, it shows only Display, CPU, GPU and Memory.
+- When the picture or the text looks soft, or fine detail shimmers as you
+  turn your head, try **Settings › General › Render resolution**. **Auto**
+  draws the picture for each eye at the size SteamVR recommends (the size
+  shows beside it). **Sharper** (1.25×) and **Sharpest** (1.5×) draw more
+  pixels for every eye, which costs battery and heat, so watch the
+  performance overlay's GPU line after the change. It takes effect after a
+  restart; the **Restart now** button appears when you change it. SteamVR's
+  own resolution settings for FramePlayerX still set what Auto starts from.
 - After a crash, the next start asks whether to send a crash report to
   FramePlayerX's developers, as a private issue on GitHub. It contains the
   versions of FramePlayerX and the headset's system, what went wrong, and

@@ -5,7 +5,7 @@
 use super::theme::{self, Weight};
 use super::widgets::{self, Kind, ListArea, Tip};
 use super::{Action, SettingsTab, View, icons};
-use crate::settings::HapticDeviceConfig;
+use crate::settings::{HapticDeviceConfig, RenderScale};
 use egui::{Align2, Color32, RichText, Sense, Vec2};
 
 fn tabs() -> [(SettingsTab, &'static str, &'static str); 10] {
@@ -292,6 +292,20 @@ fn general(ui: &mut egui::Ui, v: &mut View) {
             "×",
             2,
         );
+        if let Some(info) = v.state.render {
+            let restart = info.started != s.render_scale;
+            r.row_with(
+                tr!("settings-render-resolution"),
+                Some(tr!("settings-render-resolution-desc")),
+                |ui| render_choices(ui, &mut s.render_scale, info),
+                |ui| {
+                    let label = tr!("settings-update-restart");
+                    if restart && widgets::button(ui, None, label, Kind::Primary).clicked() {
+                        v.actions.push(Action::Restart);
+                    }
+                },
+            );
+        }
         r.switch(
             tr!("settings-follow"),
             Some(tr!("settings-follow-desc")),
@@ -358,6 +372,24 @@ fn general(ui: &mut egui::Ui, v: &mut View) {
             Some(tr!("settings-perf-panel-desc")),
             &mut s.perf_overlay,
         );
+    });
+}
+
+/// The Render resolution choices, each with the pixels per eye it gives.
+fn render_choices(ui: &mut egui::Ui, current: &mut RenderScale, info: super::RenderInfo) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+        for (scale, (w, h)) in RenderScale::ALL.into_iter().zip(info.eye_px) {
+            let size = format!("{w}×{h}");
+            let label = match scale {
+                RenderScale::Auto => tr!("settings-render-auto", size = size.as_str()),
+                RenderScale::Sharper => tr!("settings-render-sharper", size = size.as_str()),
+                RenderScale::Sharpest => tr!("settings-render-sharpest", size = size.as_str()),
+            };
+            if widgets::chip(ui, &label, *current == scale).clicked() {
+                *current = scale;
+            }
+        }
     });
 }
 

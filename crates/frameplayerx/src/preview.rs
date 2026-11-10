@@ -856,6 +856,12 @@ pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
             "Steam Frame, Touch, Simple controller, Hand tracking".into(),
         ),
     ]);
+    // The sizes a Steam Frame offers, so Settings › General shows the Render
+    // resolution row.
+    app.set_render_info(crate::ui::RenderInfo {
+        started: crate::settings::RenderScale::Auto,
+        eye_px: [(1440, 1440), (1800, 1800), (2160, 2160)],
+    });
     if let Some(o) = &args.open {
         app.open(crate::playback::OpenRequest {
             location: crate::location(o),
