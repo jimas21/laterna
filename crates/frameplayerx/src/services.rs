@@ -13,7 +13,7 @@ use fp_library::Library;
 use fp_remote::{RemoteEvent, RemoteHub};
 use fp_sources::{Source, SourceConfig};
 use ring::rand::SecureRandom;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -62,6 +62,36 @@ impl Opener {
         let mut map = HashMap::new();
         let mut errors = Vec::new();
         for c in builtin_sources().iter().chain(configs) {
+            match fp_sources::build(c) {
+                Ok(s) => {
+                    map.insert(c.id().to_string(), Arc::<dyn Source>::from(s));
+                }
+                Err(error) => errors.push(SourceError {
+                    id: c.id().to_string(),
+                    name: c.name().to_string(),
+                    error,
+                }),
+            }
+        }
+        *write(&self.sources) = map;
+        errors
+    }
+
+    /// Like [`Self::set_sources`], but only the sources in `rebuild` (and
+    /// any that are not built yet) are made again: the others keep the
+    /// object they have, with its live connection, its refresh state and
+    /// any credentials it refreshed and has not handed over yet.
+    pub fn update(&self, configs: &[SourceConfig], rebuild: &HashSet<String>) -> Vec<SourceError> {
+        let live = read(&self.sources).clone();
+        let mut map = HashMap::new();
+        let mut errors = Vec::new();
+        for c in builtin_sources().iter().chain(configs) {
+            if !rebuild.contains(c.id())
+                && let Some(source) = live.get(c.id())
+            {
+                map.insert(c.id().to_string(), source.clone());
+                continue;
+            }
             match fp_sources::build(c) {
                 Ok(s) => {
                     map.insert(c.id().to_string(), Arc::<dyn Source>::from(s));
@@ -328,6 +358,25 @@ fn device_id(path: &Path) -> String {
     id
 }
 
+/// Takes the credentials the live sources refreshed into `configs`; true
+/// when any changed.
+fn fold_updates(opener: &Opener, configs: &mut [SourceConfig]) -> bool {
+    let mut changed = false;
+    for current in configs {
+        let Some(source) = opener.source(current.id()) else {
+            continue;
+        };
+        if let Some(updated) = source.updated_config()
+            && updated.id() == current.id()
+            && updated.kind() == current.kind()
+        {
+            *current = updated;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Keep record IDs and their user data while replacing transport addresses.
 /// Canonicalizers inspect configuration or cached metadata; migration does no I/O.
 fn migrate_source_locations(library: &Library, opener: &Opener, configs: &[SourceConfig]) {
@@ -364,19 +413,7 @@ impl Services {
 
     /// Persists refreshed source credentials without rebuilding active sources.
     pub fn poll_source_updates(&mut self) {
-        let mut changed = false;
-        for current in &mut self.source_configs {
-            if let Some(updated) = self
-                .opener
-                .source(current.id())
-                .and_then(|s| s.updated_config())
-                && updated.id() == current.id()
-                && updated.kind() == current.kind()
-            {
-                *current = updated;
-                changed = true;
-            }
-        }
+        let changed = fold_updates(&self.opener, &mut self.source_configs);
         let retry = self
             .source_save_retry
             .is_some_and(|at| at.elapsed() >= std::time::Duration::from_secs(10));
@@ -483,17 +520,36 @@ impl Services {
         self.source_configs.iter().find(|c| c.id() == id)
     }
 
-    /// Persists the source list (mode 0600) and rebuilds the sources. The
-    /// list is used even when it can't be saved, until FramePlayerX quits.
-    pub fn set_sources(&mut self, configs: Vec<SourceConfig>) -> SourcesChange {
+    /// Changes the source list with `edit`, which returns the ids of the
+    /// sources whose settings it changed or added. Credentials a source
+    /// refreshed since the last save are folded in first, so `edit` starts
+    /// from the current list. The list is saved (mode 0600) once and only
+    /// those sources are built again; every other source stays as it is,
+    /// connection and all. The list is used even when it can't be saved,
+    /// until FramePlayerX quits.
+    pub fn replace_sources(
+        &mut self,
+        edit: impl FnOnce(&mut Vec<SourceConfig>) -> HashSet<String>,
+    ) -> SourcesChange {
+        self.poll_source_updates();
+        let mut configs = self.source_configs.clone();
+        let rebuild = edit(&mut configs);
+        let touched = |list: &[SourceConfig]| -> Vec<SourceConfig> {
+            list.iter()
+                .filter(|c| rebuild.contains(c.id()))
+                .cloned()
+                .collect()
+        };
         // Convert legacy references while the old endpoint/root is still known.
-        migrate_source_locations(&self.library, &self.opener, &self.source_configs);
+        let before = touched(&self.source_configs);
+        migrate_source_locations(&self.library, &self.opener, &before);
         let save_error = fp_sources::save_configs(&Settings::sources_path(), &configs)
             .inspect_err(|e| log::error!("saving sources: {e}"))
             .err()
             .map(|e| e.to_string());
-        let errors = self.opener.set_sources(&configs);
-        migrate_source_locations(&self.library, &self.opener, &configs);
+        let errors = self.opener.update(&configs, &rebuild);
+        let after = touched(&configs);
+        migrate_source_locations(&self.library, &self.opener, &after);
         self.source_configs = configs;
         SourcesChange { errors, save_error }
     }
@@ -813,6 +869,96 @@ mod tests {
         }
         assert_eq!(owner_calls.load(Ordering::SeqCst), 3);
         assert_eq!(other_calls.load(Ordering::SeqCst), 0);
+    }
+
+    fn http_config(id: &str, url: &str) -> SourceConfig {
+        SourceConfig::Http(fp_sources::HttpConfig {
+            id: id.into(),
+            name: id.into(),
+            url: url.into(),
+            credentials: None,
+            insecure_tls: false,
+            parallel_downloads: false,
+        })
+    }
+
+    /// A live source that refreshed its settings and has not handed them over.
+    struct Refreshed {
+        id: &'static str,
+        fresh: SourceConfig,
+    }
+
+    impl Source for Refreshed {
+        fn id(&self) -> &str {
+            self.id
+        }
+        fn name(&self) -> &str {
+            self.id
+        }
+        fn kind(&self) -> fp_sources::SourceKind {
+            fp_sources::SourceKind::Http
+        }
+        fn describe(&self) -> String {
+            self.id.into()
+        }
+        fn updated_config(&self) -> Option<SourceConfig> {
+            Some(self.fresh.clone())
+        }
+        fn list(&self, _: Option<&str>) -> fp_sources::Result<Vec<fp_core::Entry>> {
+            Ok(Vec::new())
+        }
+        fn open(&self, _: &str) -> fp_sources::Result<Arc<dyn ByteSource>> {
+            Ok(Arc::new(Dribble(4)))
+        }
+    }
+
+    #[test]
+    fn changing_one_source_keeps_the_others_live() {
+        let opener = Opener::new();
+        let opens = Arc::new(AtomicUsize::new(0));
+        for id in ["kept", "changed"] {
+            opener.insert_source(Arc::new(CountingSource {
+                id,
+                opens: opens.clone(),
+            }));
+        }
+        let kept = opener.source("kept").unwrap();
+        let changed = opener.source("changed").unwrap();
+        let configs = [
+            http_config("kept", "http://127.0.0.1:1/a/"),
+            http_config("changed", "http://127.0.0.1:1/b/"),
+            http_config("added", "http://127.0.0.1:1/c/"),
+        ];
+        let rebuild = HashSet::from(["changed".to_string(), "added".to_string()]);
+        assert!(opener.update(&configs, &rebuild).is_empty());
+        assert!(Arc::ptr_eq(&kept, &opener.source("kept").unwrap()));
+        assert!(!Arc::ptr_eq(&changed, &opener.source("changed").unwrap()));
+        assert!(opener.source("added").is_some());
+        // A source missing from the list is gone, as with a full rebuild.
+        assert!(opener.update(&configs[..1], &HashSet::new()).is_empty());
+        assert!(opener.source("changed").is_none());
+        assert!(opener.source("kept").is_some());
+    }
+
+    #[test]
+    fn a_pending_credential_change_survives_an_add() {
+        let opener = Opener::new();
+        let fresh = http_config("kept", "http://127.0.0.1:1/fresh/");
+        opener.insert_source(Arc::new(Refreshed {
+            id: "kept",
+            fresh: fresh.clone(),
+        }));
+        let live = opener.source("kept").unwrap();
+        let mut configs = vec![http_config("kept", "http://127.0.0.1:1/old/")];
+        // What replace_sources does before it lets the edit run.
+        assert!(fold_updates(&opener, &mut configs));
+        assert_eq!(configs, [fresh]);
+        configs.push(http_config("added", "http://127.0.0.1:1/c/"));
+        let rebuild = HashSet::from(["added".to_string()]);
+        assert!(opener.update(&configs, &rebuild).is_empty());
+        let still = opener.source("kept").unwrap();
+        assert!(Arc::ptr_eq(&live, &still));
+        assert!(still.updated_config().is_some());
     }
 
     #[test]

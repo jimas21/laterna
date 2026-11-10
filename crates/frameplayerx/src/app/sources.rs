@@ -345,9 +345,7 @@ impl App {
     // ---- editing sources ----
 
     pub(super) fn add_source(&mut self, cfg: fp_sources::SourceConfig) {
-        let mut list = self.services.source_configs.clone();
-        list.push(cfg.clone());
-        let change = self.services.set_sources(list);
+        let change = self.add_sources(vec![cfg.clone()]);
         match change.errors.into_iter().find(|e| e.id == cfg.id()) {
             Some(e) => self.ui.toast(e.to_string()),
             None => {
@@ -358,6 +356,27 @@ impl App {
                 self.open_source(cfg.id().to_string(), Screen::Sources);
             }
         }
+    }
+
+    /// Adds sources together: one save, and only they are built. One whose
+    /// id is already in the list takes its place.
+    pub(super) fn add_sources(
+        &mut self,
+        new: Vec<fp_sources::SourceConfig>,
+    ) -> crate::services::SourcesChange {
+        use std::collections::HashSet;
+        let ids: HashSet<String> = new.iter().map(|c| c.id().to_string()).collect();
+        let change = self.services.replace_sources(|list| {
+            for cfg in new {
+                match list.iter_mut().find(|c| c.id() == cfg.id()) {
+                    Some(slot) => *slot = cfg,
+                    None => list.push(cfg),
+                }
+            }
+            ids
+        });
+        self.ui.home = None;
+        change
     }
 
     pub(super) fn update_source(&mut self, cfg: fp_sources::SourceConfig) {
@@ -375,13 +394,12 @@ impl App {
             ) => old.root() != new.root(),
             _ => false,
         };
-        let list = self
-            .services
-            .source_configs
-            .iter()
-            .map(|c| if c.id() == id { cfg.clone() } else { c.clone() })
-            .collect();
-        let change = self.services.set_sources(list);
+        let change = self.services.replace_sources(|list| {
+            if let Some(slot) = list.iter_mut().find(|c| c.id() == id) {
+                *slot = cfg.clone();
+            }
+            std::collections::HashSet::from([id.clone()])
+        });
         if moved {
             // Its next scan takes back the videos still in the new folder.
             let lib = &self.services.library;
@@ -422,14 +440,11 @@ impl App {
             Err(e) => log::warn!("forgetting the videos of {id}: {e}"),
         }
         self.ui.invalidate();
-        let list = self
-            .services
-            .source_configs
-            .iter()
-            .filter(|c| c.id() != id)
-            .cloned()
-            .collect();
-        if let Some(e) = self.services.set_sources(list).save_error {
+        let change = self.services.replace_sources(|list| {
+            list.retain(|c| c.id() != id);
+            std::collections::HashSet::new()
+        });
+        if let Some(e) = change.save_error {
             self.ui.toast(tr!("source-removed-unsaved", error = e));
         }
     }
