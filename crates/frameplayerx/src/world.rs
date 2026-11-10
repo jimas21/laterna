@@ -648,11 +648,14 @@ impl Pointer {
                     handles.iter().any(|r| r.contains(h.2))
                 };
                 if let Some((pi, _, _)) = target.filter(on_handle) {
-                    routed.grab.get_or_insert(Grab {
-                        panel: pi,
-                        hand: self.active,
-                        by: GrabBy::Trigger,
-                    });
+                    // (A grip squeezed on the same frame keeps its grab.)
+                    if routed.grab.is_none() {
+                        routed.grab = Some(Grab {
+                            panel: pi,
+                            hand: self.active,
+                            by: GrabBy::Trigger,
+                        });
+                    }
                 } else if let Some((pi, _, pos)) = target {
                     panels[pi].push(Event::PointerButton {
                         pos,

@@ -716,7 +716,11 @@ impl App {
                 quads.push(q);
             }
         }
-        let extra = [&mut self.perf, &mut self.chrome.bar, &mut self.chrome.corner];
+        let extra = [
+            &mut self.perf,
+            &mut self.chrome.bar,
+            &mut self.chrome.corner,
+        ];
         for p in self.panels.iter_mut().chain(extra) {
             p.update_fade(input.dt);
         }

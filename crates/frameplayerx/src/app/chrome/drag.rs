@@ -249,7 +249,9 @@ impl ScreenDrag {
         };
         let mut width = self.now.width;
         let mut limit = false;
-        let met = f.aim.and_then(|aim| on_plane(f.picture, aim, curve - distance));
+        let met = f
+            .aim
+            .and_then(|aim| on_plane(f.picture, aim, curve - distance));
         // A ray that misses the plane leaves the width where it was.
         if let Some(g) = met
             && self.grabbed > 1e-3
