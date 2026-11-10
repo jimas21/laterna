@@ -112,11 +112,13 @@ pub struct ScreenDrag {
     start: (f32, f32),
     reach: Option<f32>,
     follow: Damped<3>,
-    /// Resizing: the curve's angle, the direction from the screen's middle to
-    /// its corner, how far along it the hand's ray met the screen's plane
-    /// when it took hold, and the scale the hand has asked for since,
-    /// following it smoothly. `limited`: the width is at a limit.
-    arc: f32,
+    /// Resizing: how far the screen's corner stands in front of its middle
+    /// (the curve's depth) as the screen was shaped when taken hold of, the
+    /// direction from the screen's middle to its corner, how far along it the
+    /// hand's ray met the screen's plane when it took hold, and the scale the
+    /// hand has asked for since, following it smoothly. `limited`: the width
+    /// is at a limit.
+    curve: f32,
     chord: Vec2,
     grabbed: f32,
     scale: Damped<1>,
@@ -178,7 +180,7 @@ impl ScreenDrag {
             start: angles(aim.1, room),
             reach: head.map(|head| reach(head, aim.0)),
             follow: Damped::at([0.0; 3]),
-            arc: shape.arc,
+            curve,
             chord,
             grabbed,
             scale: Damped::at([1.0]),
@@ -242,8 +244,11 @@ impl ScreenDrag {
     fn resizing(&mut self, f: &Frame) -> bool {
         let base = self.from.distance;
         let distance = self.distance(base);
-        let curve = if self.arc >= 1e-3 {
-            self.now.width / self.arc * (1.0 - (self.arc / 2.0).cos())
+        // The curve's depth grows with the width setting from the shape it
+        // began with. (The setting is the picture's longer side, not
+        // always the arc's length, so it cannot give the depth itself.)
+        let curve = if self.from.width > 1e-3 {
+            self.curve * (self.now.width / self.from.width)
         } else {
             0.0
         };
@@ -477,6 +482,24 @@ mod tests {
             let off = at.angle_between(to.1 * Vec3::NEG_Z).to_degrees();
             assert!(off < 0.7, "{curvature}: {off}");
         }
+    }
+
+    #[test]
+    fn a_portrait_curved_screen_does_not_jump_on_its_first_frame() {
+        // Taller than wide: the width setting (6 m) is the longer side, the
+        // height, while the arc along the shape is 3.375 m.
+        let s = ScreenShape {
+            width: 3.375,
+            height: 6.0,
+            arc: 2.09,
+        };
+        let corner = towards_corner(&s, 1.0);
+        let mut d = ScreenDrag::begin(start(Part::Resize, GrabBy::Trigger, corner, s));
+        let first = d.step(&frame(Some(corner), 0.0));
+        assert!(near(first.view.width, 6.0, 1e-3), "{:?}", first.view);
+        // And holds still while the hand does.
+        let step = hold(&mut d, corner, 0.0, 0.5);
+        assert!(near(step.view.width, 6.0, 1e-3), "{:?}", step.view);
     }
 
     #[test]

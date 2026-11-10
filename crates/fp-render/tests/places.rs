@@ -13,6 +13,8 @@ use fp_render::env::{
 use fp_render::{Renderer, VideoParams};
 use glam::{Mat4, Quat, Vec3};
 use std::f32::consts::FRAC_PI_2;
+use std::thread;
+use std::time::Duration;
 
 mod common;
 use common::{
@@ -389,5 +391,35 @@ fn no_place_is_unchanged() {
     );
     assert!(never == before, "Plain differs with no place pass");
     fresh_eyes.destroy(&fresh);
+    e.destroy(&r);
+}
+
+#[test]
+fn a_place_built_on_a_worker_shows_when_it_is_ready() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // As in the app: asked for on the first frame, Plain until it is built
+    // off the render thread, then drawn.
+    r.set_inline_places(false);
+    let red = frame(160, 90, |_, _| [230, 20, 20]);
+    let env = place_frame(Place::Cinema, SeatName::Middle, 1.0);
+    let p = cinema_params(ViewSettings::default(), env);
+    let mut shown_at = None;
+    for n in 0..500 {
+        let [l, _] = render(&mut r, &mut e, Some(&red), &p, &[]);
+        if corners(&l).iter().all(|&c| c != [0, 0, 0]) {
+            shown_at = Some(n);
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(shown_at.is_some(), "the cinema was never shown");
+    // And stays.
+    let [l, _] = render(&mut r, &mut e, Some(&red), &p, &[]);
+    assert!(is_red(centre(&l)), "centre {:?}", centre(&l));
+    for c in corners(&l) {
+        assert_ne!(c, [0, 0, 0], "a corner is the background");
+    }
     e.destroy(&r);
 }

@@ -16,6 +16,8 @@
 //!   catalogue, seats, meshes and lighting as plain data, no GPU.
 //! - `env_pass`: draws a place (its meshes, then its sky) inside each eye's
 //!   pass, behind the picture.
+//! - `place_builder`: builds places on a worker thread, so the first frame
+//!   that shows one does not stall on it.
 //! - [`testcard`]: a generated test card and test patterns, with their mip
 //!   chains.
 //! - [`hdr`]: HDR on the SDR screen: tone curve, gamut compression and the
@@ -31,6 +33,7 @@ pub mod mem;
 pub mod params;
 mod peak;
 mod pipeline;
+mod place_builder;
 mod q10c;
 pub mod renderer;
 mod shared;

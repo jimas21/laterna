@@ -24,7 +24,9 @@ pub fn setup_sized(size: u32) -> Option<(Renderer, OffscreenEyes)> {
             return None;
         }
     };
-    let r = Renderer::new(gpu, ash::vk::Format::R8G8B8A8_SRGB).expect("renderer");
+    let mut r = Renderer::new(gpu, ash::vk::Format::R8G8B8A8_SRGB).expect("renderer");
+    // A frame that shows a place shows it: the tests draw one at a time.
+    r.set_inline_places(true);
     let eyes = OffscreenEyes::new(&r, size, size).expect("eyes");
     Some((r, eyes))
 }
