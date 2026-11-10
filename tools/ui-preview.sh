@@ -563,4 +563,27 @@ cargo build -p frameplayerx
 HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
   XDG_CACHE_HOME="$home/.cache" \
   "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" --script "$script" --size 1400
+
+# The generated test card, a 3840x2160 picture shown on the eye buffers' two
+# sizes: what SteamVR picks (1440) and what the panel can show (2160). Not in
+# another language (it has no text), and in a fresh home so nothing above
+# leaks into it. The player's controls are hidden, so the card is all there is.
+if [ -z "${UI_LANGUAGE:-}" ] && [ "${UI_PREVIEW_PLEX_ONLY:-0}" != 1 ]; then
+  card_home="$(mktemp -d)"
+  for size in 1440 2160; do
+    cat >"$card_home/card.fps" <<EOF
+testcard 2160
+wait-playing
+hide-controls
+wait 1
+shot testcard-$size
+EOF
+    HOME="$card_home" XDG_CONFIG_HOME="$card_home/.config" XDG_DATA_HOME="$card_home/.local/share" \
+      XDG_CACHE_HOME="$card_home/.cache" \
+      "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
+      --script "$card_home/card.fps" --size "$size"
+  done
+  cp "$card_home/.cache/frameplayerx/testcard-2160p.png" "$out/testcard-source-2160p.png"
+  rm -rf "$card_home"
+fi
 ls -l "$out"

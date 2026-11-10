@@ -20,6 +20,8 @@
 //! | `grip V` / `trigger V` | hold the grip / trigger at V (0..1) until changed |
 //! | `status` | print what is playing and the view settings |
 //! | `open LOCATION` | open a file or URL |
+//! | `testcard HEIGHT` | make the test card (HEIGHT 1080 or 2160) and open it |
+//! | `hide-controls` | hide the player's panels, as the Hide button does |
 //! | `close` | close the open video, as its Close button does |
 //! | `seek SECONDS` | play the open video from SECONDS |
 //! | `quality NAME` | play `automatic`, `original` or a transcode by its label (`1440p`) |
@@ -341,6 +343,10 @@ impl Sim {
                 self.app.apply(crate::ui::Action::ClosePlayback);
                 self.run_frames(3)?;
             }
+            Some("hide-controls") => {
+                self.app.apply(crate::ui::Action::HideControls);
+                self.run_frames(6)?;
+            }
             // The library's videos as a grid opens them, from the first.
             Some("open-list") => {
                 let list = self.library_requests();
@@ -555,6 +561,15 @@ impl Sim {
                 let loc = crate::location(arg);
                 self.app.open(crate::playback::OpenRequest {
                     location: loc,
+                    ..Default::default()
+                });
+            }
+            // The generated test card as a picture of its own: `testcard 2160`.
+            Some("testcard") => {
+                let height = num(1)? as u32;
+                let path = crate::testcard::write_png(height)?;
+                self.app.open(crate::playback::OpenRequest {
+                    location: path.display().to_string(),
                     ..Default::default()
                 });
             }

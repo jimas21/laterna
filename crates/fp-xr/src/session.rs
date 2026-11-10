@@ -46,6 +46,10 @@ struct QuadLayer {
     images: Vec<vk::Image>,
     width: u32,
     height: u32,
+    /// The mip levels the caller asked for, and the swapchain has: fewer
+    /// (1) if the runtime refused to make one with mips.
+    asked_mips: u32,
+    mips: u32,
     /// Acquired this frame, to release before xrEndFrame.
     acquired: bool,
     /// An image has been released at least once: the layer can be shown.
@@ -105,6 +109,9 @@ pub struct XrSession {
     quads: std::collections::HashMap<u64, QuadLayer>,
     /// The first quad layer's image count is logged once.
     quad_images_logged: bool,
+    /// The runtime refused a swapchain with mips once: later ones are made
+    /// with 1 level without asking.
+    mips_refused: bool,
     pub stats: XrStats,
 }
 
@@ -117,6 +124,28 @@ pub struct FrameCtx {
     pub head: Option<(Vec3, Quat)>,
     pub targets: Option<[EyeTarget; 2]>,
     views: Vec<xr::View>,
+}
+
+/// What a quad layer's swapchain is made from: colour attachment and copy
+/// target, one face, no array, `mip_count` levels.
+fn quad_swapchain_info(
+    format: vk::Format,
+    width: u32,
+    height: u32,
+    mip_count: u32,
+) -> xr::SwapchainCreateInfo<xr::Vulkan> {
+    xr::SwapchainCreateInfo {
+        create_flags: xr::SwapchainCreateFlags::EMPTY,
+        usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
+            | xr::SwapchainUsageFlags::TRANSFER_DST,
+        format: format.as_raw() as u32,
+        sample_count: 1,
+        width,
+        height,
+        face_count: 1,
+        array_size: 1,
+        mip_count,
+    }
 }
 
 /// Preferred eye formats, sRGB first.
@@ -231,6 +260,7 @@ impl XrSession {
             launch_closed_at: None,
             quads: std::collections::HashMap::new(),
             quad_images_logged: false,
+            mips_refused: false,
             stats: XrStats::default(),
         })
     }
@@ -273,6 +303,11 @@ impl XrSession {
 
     pub fn state(&self) -> xr::SessionState {
         self.state
+    }
+
+    /// Whether the app has the user's input focus.
+    pub fn is_focused(&self) -> bool {
+        self.state == xr::SessionState::FOCUSED
     }
 
     /// Whether the app is in front of the user's eyes (see [`is_worn`]).
@@ -471,30 +506,48 @@ impl XrSession {
         self.format == vk::Format::R8G8B8A8_SRGB
     }
 
-    fn quad_layer(&mut self, key: u64, width: u32, height: u32) -> Result<&mut QuadLayer> {
+    /// A swapchain for a quad layer of `mips` levels (1 for none). If the
+    /// runtime refuses the levels, it is made with 1 and that is logged
+    /// once; the levels it has are returned with it.
+    fn quad_swapchain(
+        &mut self,
+        width: u32,
+        height: u32,
+        mips: u32,
+    ) -> Result<(xr::Swapchain<xr::Vulkan>, u32)> {
+        let format = self.format;
+        let info = |mip_count| quad_swapchain_info(format, width, height, mip_count);
+        let mut mips = if self.mips_refused { 1 } else { mips };
+        let mut made = self.session.create_swapchain(&info(mips));
+        if let Err(e) = &made
+            && mips > 1
+        {
+            log::warn!("quad layer swapchain with {mips} mips refused ({e:?}); using 1 level");
+            self.mips_refused = true;
+            mips = 1;
+            made = self.session.create_swapchain(&info(1));
+        }
+        let swapchain = made.ctx("xrCreateSwapchain (quad layer)")?;
+        Ok((swapchain, mips))
+    }
+
+    fn quad_layer(
+        &mut self,
+        key: u64,
+        width: u32,
+        height: u32,
+        mips: u32,
+    ) -> Result<&mut QuadLayer> {
+        let asked = mips.max(1);
         let stale = self
             .quads
             .get(&key)
-            .is_some_and(|q| (q.width, q.height) != (width, height));
+            .is_some_and(|q| (q.width, q.height, q.asked_mips) != (width, height, asked));
         if stale {
             self.quads.remove(&key);
         }
         if !self.quads.contains_key(&key) {
-            let swapchain = self
-                .session
-                .create_swapchain(&xr::SwapchainCreateInfo {
-                    create_flags: xr::SwapchainCreateFlags::EMPTY,
-                    usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
-                        | xr::SwapchainUsageFlags::TRANSFER_DST,
-                    format: self.format.as_raw() as u32,
-                    sample_count: 1,
-                    width,
-                    height,
-                    face_count: 1,
-                    array_size: 1,
-                    mip_count: 1,
-                })
-                .ctx("xrCreateSwapchain (quad layer)")?;
+            let (swapchain, mips) = self.quad_swapchain(width, height, asked)?;
             let images = swapchain
                 .enumerate_images()
                 .ctx("xrEnumerateSwapchainImages")?
@@ -506,6 +559,9 @@ impl XrSession {
                 let n = images.len();
                 log::info!("quad swapchain images: {n} ({width}x{height})");
             }
+            if asked > 1 {
+                log::info!("quad layer {key}: {width}x{height} with {mips} of {asked} mip levels");
+            }
             self.quads.insert(
                 key,
                 QuadLayer {
@@ -513,6 +569,8 @@ impl XrSession {
                     images,
                     width,
                     height,
+                    asked_mips: asked,
+                    mips,
                     acquired: false,
                     ready: false,
                 },
@@ -522,11 +580,19 @@ impl XrSession {
     }
 
     /// The image to draw a quad layer's new picture into this frame
-    /// (created on first use, `width`x`height`). The caller records the
-    /// writes into this frame's GPU work; [`XrSession::end_frame`] releases
-    /// it. Call at most once per key and frame.
-    pub fn quad_layer_image(&mut self, key: u64, width: u32, height: u32) -> Result<vk::Image> {
-        let q = self.quad_layer(key, width, height)?;
+    /// (created on first use, `width`x`height`, with `mips` levels if the
+    /// runtime allows: see [`XrSession::quad_layer_mips`]). The caller
+    /// records the writes into this frame's GPU work;
+    /// [`XrSession::end_frame`] releases it. Call at most once per key and
+    /// frame.
+    pub fn quad_layer_image(
+        &mut self,
+        key: u64,
+        width: u32,
+        height: u32,
+        mips: u32,
+    ) -> Result<vk::Image> {
+        let q = self.quad_layer(key, width, height, mips)?;
         let t = Instant::now();
         let i = q
             .swapchain
@@ -541,25 +607,34 @@ impl XrSession {
         Ok(image)
     }
 
+    /// The mip levels a quad layer's swapchain has (1 when it was made
+    /// without, or the runtime refused them), once it exists.
+    pub fn quad_layer_mips(&self, key: u64) -> Option<u32> {
+        self.quads.get(&key).map(|q| q.mips)
+    }
+
     /// Whether a quad layer has a picture to show.
     pub fn quad_layer_ready(&self, key: u64) -> bool {
         self.quads.get(&key).is_some_and(|q| q.ready || q.acquired)
     }
 
     /// A quad layer whose picture never changes: `fill` writes it once,
-    /// waiting for the GPU, and it is released straight away.
+    /// waiting for the GPU, and it is released straight away. `fill` is
+    /// given the image and how many of the `mips` levels asked for it has.
     pub fn static_quad_layer(
         &mut self,
         key: u64,
         width: u32,
         height: u32,
-        fill: impl FnOnce(vk::Image) -> std::result::Result<(), String>,
+        mips: u32,
+        fill: impl FnOnce(vk::Image, u32) -> std::result::Result<(), String>,
     ) -> Result<()> {
         if self.quad_layer_ready(key) {
             return Ok(());
         }
-        let image = self.quad_layer_image(key, width, height)?;
-        fill(image).map_err(Error::Runtime)?;
+        let image = self.quad_layer_image(key, width, height, mips)?;
+        let levels = self.quads.get(&key).map_or(1, |q| q.mips);
+        fill(image, levels).map_err(Error::Runtime)?;
         let q = self.quads.get_mut(&key).expect("created above");
         q.swapchain
             .release_image()

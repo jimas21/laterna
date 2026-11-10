@@ -29,6 +29,7 @@ mod services;
 mod settings;
 mod shuffle;
 mod subtitles;
+mod testcard;
 mod ui;
 mod watch;
 mod world;
@@ -352,6 +353,8 @@ fn bench(file: &str, opts: &fp_media::bench::BenchOptions) -> Result<(), Error> 
 /// Quad layer keys of the two pointer rays (panels use their index).
 const RAY_LAYER: u64 = 100;
 const RAY_PX: [u32; 2] = [64, 8];
+/// The test card's quad layer (`FRAMEPLAYERX_TESTCARD_LAYER`).
+const CARD_LAYER: u64 = 102;
 
 /// The pointer ray's picture: light blue, soft across its width, fainter
 /// for the hand that isn't pointing. Premultiplied, as the compositor
@@ -400,6 +403,13 @@ struct Switches {
     /// `FRAMEPLAYERX_REQUEST_HZ=<rate>`: ask the runtime for this display
     /// refresh rate once the session runs.
     request_hz: Option<f32>,
+    /// `FRAMEPLAYERX_TESTCARD=1080|2160`: open the generated test card
+    /// (a PNG of that height) instead of the library.
+    testcard: Option<u32>,
+    /// `FRAMEPLAYERX_TESTCARD_LAYER=plain|mips`: also show the card as a
+    /// compositor layer beside the one in the eyes, to compare how the
+    /// two are filtered. `plain` has one level, `mips` the whole chain.
+    testcard_layer: Option<testcard::LayerMode>,
 }
 
 impl Switches {
@@ -407,15 +417,24 @@ impl Switches {
         Switches::parse(
             std::env::var("FRAMEPLAYERX_UI_IN_EYES").ok().as_deref(),
             std::env::var("FRAMEPLAYERX_REQUEST_HZ").ok().as_deref(),
+            std::env::var("FRAMEPLAYERX_TESTCARD").ok().as_deref(),
+            std::env::var("FRAMEPLAYERX_TESTCARD_LAYER").ok().as_deref(),
         )
     }
 
-    fn parse(ui_in_eyes: Option<&str>, request_hz: Option<&str>) -> Switches {
+    fn parse(
+        ui_in_eyes: Option<&str>,
+        request_hz: Option<&str>,
+        card: Option<&str>,
+        card_layer: Option<&str>,
+    ) -> Switches {
         Switches {
             ui_in_eyes: ui_in_eyes.is_some_and(|v| !matches!(v.trim(), "" | "0")),
             request_hz: request_hz
                 .and_then(|v| v.trim().parse::<f32>().ok())
                 .filter(|hz| hz.is_finite() && *hz >= 0.0),
+            testcard: testcard::parse_height(card),
+            testcard_layer: testcard::LayerMode::parse(card_layer),
         }
     }
 
@@ -426,6 +445,12 @@ impl Switches {
         }
         if let Some(hz) = self.request_hz {
             on.push(format!("FRAMEPLAYERX_REQUEST_HZ={hz}"));
+        }
+        if let Some(height) = self.testcard {
+            on.push(format!("FRAMEPLAYERX_TESTCARD={height}"));
+        }
+        if let Some(mode) = self.testcard_layer {
+            on.push(format!("FRAMEPLAYERX_TESTCARD_LAYER={}", mode.label()));
         }
         if on.is_empty() {
             "none".into()
@@ -564,6 +589,17 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             location: location(o),
             ..Default::default()
         });
+    } else if let Some(height) = switches.testcard {
+        match testcard::write_png(height) {
+            Ok(path) => {
+                log::info!("test card {height}p: {}", path.display());
+                app.open(playback::OpenRequest {
+                    location: path.display().to_string(),
+                    ..Default::default()
+                });
+            }
+            Err(e) => log::warn!("test card: {e}"),
+        }
     }
     let start = Instant::now();
     let mut last = Instant::now();
@@ -586,6 +622,21 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             "no (drawn into the eyes)"
         }
     );
+    // The test card as a compositor layer too, hung where the head faces
+    // when the app first has focus.
+    let card_layer = match switches.testcard_layer {
+        Some(mode) if session.supports_quad_layers() => {
+            let height = switches.testcard.unwrap_or(testcard::HEIGHTS[0]);
+            log::info!("test card layer: {height}p, {}", mode.label());
+            Some(testcard::LayerCard::new(height, mode))
+        }
+        Some(mode) => {
+            log::warn!("test card layer {}: no quad layers here", mode.label());
+            None
+        }
+        None => None,
+    };
+    let mut card_pose: Option<(glam::Vec3, glam::Quat)> = None;
     let mut request_hz = switches.request_hz;
     let mut pacing = Pacing::default();
     // Panel picture each quad layer holds: (panel, paint version).
@@ -657,6 +708,25 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         let mut submits = Vec::new();
         if let (Some(targets), Some(eyes)) = (frame.targets, frame.eyes) {
             renderer.draw(&targets, &eyes, &out.video, &out.quads)?;
+            if let Some(card) = &card_layer {
+                if card_pose.is_none() && session.is_focused() {
+                    card_pose = frame.head.map(testcard::layer_pose);
+                }
+                if let Some(pose) = card_pose {
+                    let (w, h, mips) = (card.width, card.height, card.mips());
+                    session.static_quad_layer(CARD_LAYER, w, h, mips, |image, granted| {
+                        renderer
+                            .upload_rgba_levels(image, &card.levels(granted))
+                            .map_err(|e| e.to_string())
+                    })?;
+                    let size = card.size();
+                    submits.push(QuadSubmit {
+                        key: CARD_LAYER,
+                        pose,
+                        size,
+                    });
+                }
+            }
             for l in &out.layers {
                 match *l {
                     LayerDraw::Panel {
@@ -675,7 +745,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                         if copied.get(&key) != Some(&(panel, version))
                             || !session.quad_layer_ready(key)
                         {
-                            let image = session.quad_layer_image(key, px[0], px[1])?;
+                            let image = session.quad_layer_image(key, px[0], px[1], 1)?;
                             renderer.copy_panel_to(panel, image)?;
                             copied.insert(key, (panel, version));
                         }
@@ -688,7 +758,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                     }
                     LayerDraw::Ray { active, pose, size } => {
                         let key = RAY_LAYER + active as u64;
-                        session.static_quad_layer(key, RAY_PX[0], RAY_PX[1], |image| {
+                        session.static_quad_layer(key, RAY_PX[0], RAY_PX[1], 1, |image, _| {
                             renderer
                                 .upload_rgba(image, RAY_PX[0], RAY_PX[1], &ray_picture(active))
                                 .map_err(|e| e.to_string())
@@ -780,14 +850,14 @@ mod tests {
 
     #[test]
     fn switches_default_to_off() {
-        let s = Switches::parse(None, None);
+        let s = Switches::parse(None, None, None, None);
         assert_eq!(s, Switches::default());
         assert_eq!(s.describe(), "none");
     }
 
     #[test]
     fn switches_parse_the_environment_values() {
-        let s = Switches::parse(Some("1"), Some(" 90 "));
+        let s = Switches::parse(Some("1"), Some(" 90 "), None, None);
         assert!(s.ui_in_eyes);
         assert_eq!(s.request_hz, Some(90.0));
         let want = "FRAMEPLAYERX_UI_IN_EYES, FRAMEPLAYERX_REQUEST_HZ=90";
@@ -795,12 +865,30 @@ mod tests {
     }
 
     #[test]
+    fn switches_parse_the_test_card() {
+        let s = Switches::parse(None, None, Some("2160"), Some("mips"));
+        assert_eq!(s.testcard, Some(2160));
+        assert_eq!(s.testcard_layer, Some(testcard::LayerMode::Mips));
+        let want = "FRAMEPLAYERX_TESTCARD=2160, FRAMEPLAYERX_TESTCARD_LAYER=mips";
+        assert_eq!(s.describe(), want);
+        // The layer alone is a switch too; the card then defaults to 1080.
+        let s = Switches::parse(None, None, None, Some("plain"));
+        assert_eq!(s.testcard, None);
+        assert_eq!(s.describe(), "FRAMEPLAYERX_TESTCARD_LAYER=plain");
+        for bad in ["", "0", "720", "4k", "yes"] {
+            let s = Switches::parse(None, None, Some(bad), Some(bad));
+            assert_eq!(s, Switches::default(), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn switches_ignore_off_and_bad_values() {
         for off in ["", "0", " 0 "] {
-            assert!(!Switches::parse(Some(off), None).ui_in_eyes);
+            assert!(!Switches::parse(Some(off), None, None, None).ui_in_eyes);
         }
         for bad in ["", "fast", "-72", "NaN", "inf"] {
-            assert_eq!(Switches::parse(None, Some(bad)).request_hz, None);
+            let s = Switches::parse(None, Some(bad), None, None);
+            assert_eq!(s.request_hz, None);
         }
     }
 
