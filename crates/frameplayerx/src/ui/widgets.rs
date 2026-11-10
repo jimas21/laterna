@@ -938,16 +938,46 @@ impl Rows<'_> {
 /// degrees small beside it, `current` lit. Returns the size clicked.
 pub fn size_row(r: &mut Rows, current: Option<ScreenSize>) -> Option<ScreenSize> {
     let mut picked = None;
-    r.row(tr!("screen-size"), Some(tr!("screen-size-desc")), |ui| {
-        // Laid out right to left.
-        for size in ScreenSize::ALL.into_iter().rev() {
-            let name = super::size::name(size);
-            let degrees = super::size::degrees_label(size);
-            if chip_sub(ui, name, &degrees, current == Some(size)).clicked() {
-                picked = Some(size);
+    let chip_of = |ui: &mut Ui, size: ScreenSize| {
+        let name = super::size::name(size);
+        let degrees = super::size::degrees_label(size);
+        chip_sub(ui, name, &degrees, current == Some(size)).clicked()
+    };
+    // The three chips need about 500 points beside the text: a narrow panel
+    // (the adjust panel) puts them under it instead.
+    if r.ui.available_width() < 960.0 {
+        r.content(|ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.label(
+                egui::RichText::new(tr!("screen-size"))
+                    .font(theme::font(Weight::Medium, 18.0))
+                    .color(theme::TEXT),
+            );
+            ui.label(
+                egui::RichText::new(tr!("screen-size-desc"))
+                    .font(theme::font(Weight::Regular, 15.0))
+                    .color(theme::TEXT_2),
+            );
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                for size in ScreenSize::ALL {
+                    if chip_of(ui, size) {
+                        picked = Some(size);
+                    }
+                }
+            });
+        });
+    } else {
+        r.row(tr!("screen-size"), Some(tr!("screen-size-desc")), |ui| {
+            // Laid out right to left.
+            for size in ScreenSize::ALL.into_iter().rev() {
+                if chip_of(ui, size) {
+                    picked = Some(size);
+                }
             }
-        }
-    });
+        });
+    }
     picked
 }
 
