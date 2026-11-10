@@ -137,11 +137,34 @@ protocol is implemented in Rust and looks like a file to FFmpeg. H.264 and
 HEVC go to the Frame's V4L2 stateful decoder; anything it can't take is
 decoded in software. Frames are uploaded to Vulkan as YUV and converted in
 the shader, which maps each pixel of each eye onto the video for the chosen
-projection and stereo layout. HDR is tone mapped there too. 10-bit HEVC
+projection and stereo layout. HDR is tone mapped there too, with BT.2390's
+curve to the scene's peak, after compressing BT.2020 colours into BT.709
+(`fp-render/src/hdr.rs`); a small compute pass counts each new HDR frame's
+brightness into a histogram the peak comes from (`peak.rs`). 10-bit HEVC
 comes out of the decoder as Q10C (Qualcomm's compressed TP10), which only
 the GPU can read: `fp-render/src/q10c.rs` reads it through TP10 texture
 descriptors made from Turnip's own (`VK_EXT_descriptor_buffer`) and turns
 it into P010 planes in a compute pass.
+
+The player's hardware-decoded frames aren't copied at all on the Frame:
+the decoder lends each frame its buffer, exported as a DMA-BUF
+(`VideoFrame::shared`), and the renderer imports each buffer once and
+reads it where it is (`fp-render/src/shared.rs`), NV12 by the eye passes
+and Q10C by the conversion. A frame holds its buffer until the GPU is done
+with it, then the decoder has it back. When the driver would be left with
+fewer buffers than it needs, or an import fails, frames are copied out as
+before. So are 8-bit HDR frames, whose scenes are measured in the planes
+the renderer uploads.
+
+An SDR 10-bit frame read in place isn't converted either: the eye passes
+sample its Q10C planes through TP10 descriptors (`fp-render/src/tp10_eyes.rs`,
+`shaders/planes_tp10.wgsl`), which saves the conversion pass, 5.7 ms for an
+8K frame. A descriptor reads at most 2^24 samples, so each plane is read in
+overlapping bands of rows, and a sample comes from the band whose middle is
+nearest, where its bilinear neighbours are too. TP10 descriptors exist only
+as bytes, so this pipeline takes all its descriptors from descriptor
+buffers, the scene's parameters included. HDR 10-bit frames are still
+converted, as their scenes are measured in the converted planes.
 
 **Sources and browsing.** Every source implements one `Source` trait
 (`list`, `open`, `details`). Each kind gets its own browser in `ui/`:
@@ -418,6 +441,15 @@ frameplayerx --seek-test URL --rounds 5 --seeks 0 --play 0               # first
 
 A skip slower than 2 s counts as a failure, so a slow route ends in `FAIL`; the numbers are still good. "Read speed while the buffer fills" counts only bursts of at least 16 MiB with no gap over 5 ms, so time the demuxer spends waiting with a full queue doesn't lower it, and reads served from the block cache don't raise it. A link's speed can swing 2x between runs, so compare builds in one session, on medians.
 
+### Measuring GPU time
+
+Every 10 s the log has a `frame GPU ms` line beside `frame CPU ms`: the GPU's time per frame (median, 95th percentile, longest) and the median of each part of a frame (`video`: an upload, a 10-bit conversion and HDR measuring; `eyes`: both eye passes; `panels`: painting the menus; `layers`: copying them into the compositor's layers), from timestamps the renderer writes between the parts. The compositor's own work isn't in it. The same work takes longer at a lower GPU clock, so the line ends with the clock. In `--preview`, the `gpu` script command prints the same line for the frames since the last one, and the run ends with one for the rest; `--size 2160` renders the eyes at the headset's size.
+
+```bash
+printf 'open clip_8k.mp4\nwait-playing 30\nwait 2\ngpu\nwait 10\ngpu\n' > /tmp/gpu.fps
+frameplayerx --preview /tmp/shots --size 2160 --script /tmp/gpu.fps
+```
+
 ## On the headset
 
 ```bash
@@ -444,6 +476,8 @@ Steam can't pass environment variables to an app, so the launcher reads
 | `FRAMEPLAYERX_DEBUG_INPUT` | | `1` logs each controller's input when it changes |
 | `FRAMEPLAYERX_V4L2` | | `0` turns off the native V4L2 decoder |
 | `FRAMEPLAYERX_V4L2_DEVICE` | | The V4L2 device to decode with, instead of the one found |
+| `FRAMEPLAYERX_ZERO_COPY` | | `0` copies hardware-decoded frames out of the decoder's buffers instead of reading them there, as before; for comparing the two |
+| `FRAMEPLAYERX_TP10_EYES` | | `0` converts SDR 10-bit frames read in place into P010 planes instead of sampling them in the eye passes, as before; for comparing the two |
 
 ### Steam Frame notes
 
