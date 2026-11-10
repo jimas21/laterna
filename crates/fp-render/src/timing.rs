@@ -110,9 +110,12 @@ pub(crate) enum Mark {
     /// span (before the first pass).
     Pyramid,
     PyramidDone,
+    /// Around the picture's light for the place, inside the eye passes' time.
+    Glow,
+    GlowDone,
 }
 
-const MARKS: usize = 8;
+const MARKS: usize = 10;
 
 /// One frame's GPU time per part, in milliseconds. A part the frame didn't
 /// have (no video, no eye passes) is `None`.
@@ -126,6 +129,8 @@ pub struct GpuTimes {
     pub eyes: Option<f32>,
     /// Building the video pyramid: only for a frame that built one.
     pub pyramid: Option<f32>,
+    /// The picture's light for a place, which `eyes` includes.
+    pub glow: Option<f32>,
     /// Copying panels into the compositor's layers.
     pub layers: Option<f32>,
     /// The whole frame.
@@ -152,6 +157,7 @@ fn parts(ticks: [Option<u64>; MARKS], bits: u32, period_ns: f32) -> GpuTimes {
         video: ms(Mark::Video, Mark::VideoDone),
         eyes: eyes.map(|e| (e - pyramid.unwrap_or(0.0)).max(0.0)),
         pyramid,
+        glow: ms(Mark::Glow, Mark::GlowDone),
         layers: ms(Mark::EyesDone, Mark::End),
         total: ms(Mark::Start, Mark::End),
     }
@@ -353,7 +359,7 @@ mod tests {
         assert!(s.take().unwrap().max >= 0.0);
     }
 
-    /// Ticks for the marks up to `End`, the pyramid's two not written.
+    /// Ticks for the marks up to `End`, the pyramid's and the glow's not written.
     fn at(ticks: [u64; 6]) -> [Option<u64>; MARKS] {
         let mut all = [None; MARKS];
         for (mark, tick) in all.iter_mut().zip(ticks) {
@@ -365,11 +371,15 @@ mod tests {
     #[test]
     fn parts_are_the_gaps_between_marks() {
         // 52 ns a tick, as on Adreno: 19.2 MHz.
-        let t = parts(at([0, 1000, 21_000, 21_000, 81_000, 85_000]), 64, 52.083);
+        let mut ticks = at([0, 1000, 21_000, 21_000, 81_000, 85_000]);
+        ticks[Mark::Glow as usize] = Some(30_000);
+        ticks[Mark::GlowDone as usize] = Some(32_000);
+        let t = parts(ticks, 64, 52.083);
         let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-3);
         assert!(near(t.panels, 0.052), "{t:?}");
         assert!(near(t.video, 1.042), "{t:?}");
         assert!(near(t.eyes, 3.125), "{t:?}");
+        assert!(near(t.glow, 0.104), "{t:?}");
         assert!(near(t.layers, 0.208), "{t:?}");
         assert!(near(t.total, 4.427), "{t:?}");
     }

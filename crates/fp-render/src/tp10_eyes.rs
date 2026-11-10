@@ -34,6 +34,10 @@ pub(crate) struct Tp10Eyes {
     set_layout: vk::DescriptorSetLayout,
     pub layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
+    /// The picture-light pass's pipeline (`fs_glow`), made when first asked
+    /// for; `glow_failed` once making it has failed.
+    glow_pipeline: vk::Pipeline,
+    glow_failed: bool,
     set_size: u64,
     /// Where each binding's descriptor is in a slot's buffer.
     offsets: Vec<usize>,
@@ -61,6 +65,8 @@ impl Tp10Eyes {
             set_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
+            glow_pipeline: vk::Pipeline::null(),
+            glow_failed: false,
             set_size: 0,
             offsets: Vec::new(),
             sampled_size: 0,
@@ -308,6 +314,61 @@ impl Tp10Eyes {
         }
     }
 
+    /// Makes the pipeline that measures the picture for the light it gives its
+    /// place, if it isn't made yet. False when it can't be made.
+    pub fn ensure_glow(&mut self, gpu: &Gpu) -> bool {
+        if self.glow_pipeline == vk::Pipeline::null() && !self.glow_failed {
+            let desc = crate::glow::desc(crate::SCENE_TP10_SPV, self.layout, true);
+            match pipeline::create_entry(gpu, &desc, c"fs_glow") {
+                Ok(p) => self.glow_pipeline = p,
+                Err(e) => {
+                    log::warn!("the picture won't light its place: {e}");
+                    self.glow_failed = true;
+                }
+            }
+        }
+        self.glow_pipeline != vk::Pipeline::null()
+    }
+
+    /// Binds the glow pipeline and slot `slot`'s descriptors, as [`bind`]
+    /// does for the eye passes; the pipeline layout to push constants with,
+    /// or `None` when there is nothing to bind.
+    ///
+    /// [`bind`]: Tp10Eyes::bind
+    pub fn bind_glow(
+        &self,
+        gpu: &Gpu,
+        cmd: vk::CommandBuffer,
+        slot: usize,
+    ) -> Option<vk::PipelineLayout> {
+        let s = self.slots.get(slot)?;
+        if self.glow_pipeline == vk::Pipeline::null() {
+            return None;
+        }
+        let binding = [vk::DescriptorBufferBindingInfoEXT::default()
+            .address(s.descriptor_address)
+            .usage(
+                vk::BufferUsageFlags::RESOURCE_DESCRIPTOR_BUFFER_EXT
+                    | vk::BufferUsageFlags::SAMPLER_DESCRIPTOR_BUFFER_EXT,
+            )];
+        let d = &gpu.device;
+        // SAFETY: recording; the pipeline, layout and buffer are valid, and
+        // the slot's descriptors were written for this frame.
+        unsafe {
+            d.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.glow_pipeline);
+            self.db.cmd_bind_descriptor_buffers(cmd, &binding);
+            self.db.cmd_set_descriptor_buffer_offsets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.layout,
+                0,
+                &[0],
+                &[0],
+            );
+        }
+        Some(self.layout)
+    }
+
     fn free_slot(gpu: &Gpu, s: &mut SlotBuffers) {
         // SAFETY: not in use; freeing memory unmaps it; nulls are ignored.
         unsafe {
@@ -327,6 +388,7 @@ impl Tp10Eyes {
         unsafe {
             let d = &gpu.device;
             d.destroy_pipeline(std::mem::take(&mut self.pipeline), None);
+            d.destroy_pipeline(std::mem::take(&mut self.glow_pipeline), None);
             d.destroy_pipeline_layout(std::mem::take(&mut self.layout), None);
             d.destroy_descriptor_set_layout(std::mem::take(&mut self.set_layout), None);
         }

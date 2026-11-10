@@ -18,6 +18,8 @@
 //!   pass, behind the picture.
 //! - `place_builder`: builds places on a worker thread, so the first frame
 //!   that shows one does not stall on it.
+//! - `glow`: measures the picture's colour, in a tiny pass of its own, for the
+//!   light it gives a place (`env::light` eases it).
 //! - [`testcard`]: a generated test card and test patterns, with their mip
 //!   chains.
 //! - `pyramid`: a half-size mip chain of each video frame, built for the scene
@@ -28,6 +30,7 @@
 pub mod capture;
 pub mod env;
 mod env_pass;
+mod glow;
 pub mod gpu;
 pub mod hdr;
 pub mod math;

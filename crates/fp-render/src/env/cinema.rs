@@ -143,7 +143,7 @@ fn materials() -> Vec<Material> {
         material([1.0, 0.55, 0.12], Pattern::Emissive, 1.5, 0.0),
         material([1.0, 0.85, 0.6], Pattern::EmissiveHouse, 4.0, 0.0),
         material([1.0, 0.9, 0.7], Pattern::EmissiveHouse, 6.0, 0.0),
-        material([0.6, 0.8, 1.0], Pattern::Emissive, 0.6, 0.0),
+        material([0.6, 0.8, 1.0], Pattern::EmissivePicture, 3.0, 0.0),
         material([0.04, 0.03, 0.025], Pattern::Wood, 0.0, 0.1),
         material([0.04, 0.05, 0.07], Pattern::Fabric, 0.0, 0.1),
     ]
@@ -559,7 +559,7 @@ mod tests {
         for v in &data.vertices {
             match pattern(v) {
                 Pattern::EmissiveHouse => assert_eq!(v.house, 1.0),
-                Pattern::Emissive => assert_eq!(v.house, 0.0),
+                Pattern::Emissive | Pattern::EmissivePicture => assert_eq!(v.house, 0.0),
                 _ => lit.push(v.house),
             }
             darkest = darkest.min(v.ao);

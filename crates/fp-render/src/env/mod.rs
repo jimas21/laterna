@@ -21,6 +21,7 @@
 
 pub mod cinema;
 pub mod kit;
+pub mod light;
 pub mod studio;
 
 use glam::{Mat4, Vec2, Vec3};
@@ -215,6 +216,10 @@ pub enum Pattern {
     Screen,
     /// Glows by itself at a constant level.
     Emissive,
+    /// Glows with the picture's mean colour (its strength is a gain on it):
+    /// a projector's window. Dark with no picture, and when the picture's
+    /// light is off.
+    EmissivePicture,
     /// Glows with the house lights: dark when they are down.
     EmissiveHouse,
 }
@@ -222,7 +227,10 @@ pub enum Pattern {
 impl Pattern {
     /// Whether the surface makes its own light.
     pub fn is_emissive(self) -> bool {
-        matches!(self, Pattern::Emissive | Pattern::EmissiveHouse)
+        matches!(
+            self,
+            Pattern::Emissive | Pattern::EmissivePicture | Pattern::EmissiveHouse
+        )
     }
 }
 

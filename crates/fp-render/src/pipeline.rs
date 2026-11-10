@@ -3,6 +3,7 @@
 use crate::gpu::Gpu;
 use crate::{Result, VkContext};
 use ash::vk;
+use std::ffi::CStr;
 
 /// What a pipeline does with the depth attachment of the rendering instance it
 /// is bound in. Vulkan wants every pipeline bound in one instance to name the
@@ -60,13 +61,10 @@ pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
     create_entry(gpu, d, c"fs_main")
 }
 
-/// [`create`] with the module's fragment entry point named `fragment`
-/// (`vs_main` is always the vertex one).
-pub(crate) fn create_entry(
-    gpu: &Gpu,
-    d: &PipelineDesc,
-    fragment: &std::ffi::CStr,
-) -> Result<vk::Pipeline> {
+/// [`create`] with the fragment stage's entry point `fragment` instead of
+/// `fs_main`: one module can hold several fragment shaders (the scene's
+/// `fs_glow`).
+pub(crate) fn create_entry(gpu: &Gpu, d: &PipelineDesc, fragment: &CStr) -> Result<vk::Pipeline> {
     let module = gpu.shader(d.spv)?;
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()

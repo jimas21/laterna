@@ -10,6 +10,7 @@
 //! slots; replaced ones go to a slot's garbage). Made on the first frame that
 //! shows a place, so users who never pick one pay nothing.
 
+use crate::env::light::PATCHES;
 use crate::env::{Lighting, Pattern, Place, PlaceData, PlaceKind, Sky, Vertex};
 use crate::gpu::Gpu;
 use crate::mem::Buffer;
@@ -21,8 +22,6 @@ use gpu_allocator::MemoryLocation;
 
 /// Materials a place has, at most (`palette` in envcommon.wgsl).
 const MATERIALS: usize = 16;
-/// Patches of the picture's light (`patch_pos` in envcommon.wgsl).
-const PATCHES: usize = 8;
 
 /// `struct Env` in envcommon.wgsl: every member is a vec4 or mat4, so the
 /// uniform block's layout is this struct's.
@@ -46,6 +45,17 @@ pub(crate) struct EnvUniform {
     pub palette2: [Vec4; MATERIALS],
 }
 
+/// The picture's light on the place this frame, in room space.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LitScreen {
+    /// xyz the middle of each cell of the screen, w its area in m^2.
+    pub patches: [Vec4; PATCHES],
+    /// Each cell's linear colour, eased.
+    pub rgb: [Vec3; PATCHES],
+    /// The screen's normal towards the audience.
+    pub normal: Vec3,
+}
+
 /// What changes from frame to frame.
 pub(crate) struct EnvInput {
     /// Clip <- room space, for each eye.
@@ -58,6 +68,8 @@ pub(crate) struct EnvInput {
     pub floor_drop: f32,
     /// Seconds.
     pub time: f64,
+    /// The picture's light, if it lights the place.
+    pub screen: Option<LitScreen>,
 }
 
 /// How bright a sky place's backdrop (and its fog, which fades to it) is at a
@@ -78,6 +90,7 @@ fn pattern_code(p: Pattern) -> u32 {
         Pattern::Screen => 5,
         Pattern::Emissive => 6,
         Pattern::EmissiveHouse => 7,
+        Pattern::EmissivePicture => 8,
     }
 }
 
@@ -124,6 +137,14 @@ impl Look {
             u.fog = vec4(fog.rgb.map(|c| c * dim), 1.0);
             u.fog_range.x = fog.start;
             u.fog_range.y = fog.end;
+        }
+        if let Some(s) = &input.screen {
+            u.patch_pos = s.patches;
+            for (out, c) in u.patch_rgb.iter_mut().zip(s.rgb) {
+                *out = vec4(c.to_array().map(|v| v * l.spill), 0.0);
+            }
+            // w: how much of the picture's light lands here; 0 is off.
+            u.screen_n = s.normal.extend(l.spill);
         }
         u.fog_range.z = input.floor_drop;
         u.fog_range.w = (input.time % 3600.0) as f32;
@@ -442,6 +463,7 @@ impl EnvPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env::light::{COLS, ROWS};
     use std::mem::offset_of;
 
     fn input(house: f32) -> EnvInput {
@@ -451,6 +473,7 @@ mod tests {
             house,
             floor_drop: 0.0,
             time: 12.5,
+            screen: None,
         }
     }
 
@@ -490,6 +513,7 @@ mod tests {
             ("WOOD", Pattern::Wood),
             ("EMISSIVE", Pattern::Emissive),
             ("EMISSIVE_HOUSE", Pattern::EmissiveHouse),
+            ("EMISSIVE_PICTURE", Pattern::EmissivePicture),
         ];
         for (name, pattern) in named {
             let line = format!("const {name}: u32 = {}u;", pattern_code(pattern));
@@ -560,6 +584,46 @@ mod tests {
         assert_eq!(u.eye_pos[1], Vec4::new(0.03, 1.0, 2.0, 1.0));
         let id = Mat4::IDENTITY;
         assert_eq!(u.inv_room_view_proj, [id; 2]);
+    }
+
+    #[test]
+    fn the_pictures_light_reaches_the_uniform_and_off_leaves_it_zero() {
+        let look = Look::new(&Place::Cinema.build());
+        let off = look.uniform(&input(1.0));
+        assert_eq!(off.patch_pos, [Vec4::ZERO; PATCHES]);
+        assert_eq!(off.patch_rgb, [Vec4::ZERO; PATCHES]);
+        assert_eq!(off.screen_n, Vec4::ZERO);
+
+        let mut i = input(1.0);
+        let patches = std::array::from_fn(|k| Vec4::new(k as f32, 4.0, 0.0, 1.5));
+        let rgb = std::array::from_fn(|k| Vec3::new(0.1, 0.2, 0.4) * (k + 1) as f32);
+        i.screen = Some(LitScreen {
+            patches,
+            rgb,
+            normal: Vec3::Z,
+        });
+        let on = look.uniform(&i);
+        assert_eq!(on.patch_pos, patches);
+        let spill = Place::Cinema.build().lighting.spill;
+        for (k, (got, want)) in on.patch_rgb.iter().zip(rgb).enumerate() {
+            assert!(got.truncate().abs_diff_eq(want * spill, 1e-6), "{k}");
+        }
+        assert_eq!(on.screen_n, Vec4::new(0.0, 0.0, 1.0, spill));
+    }
+
+    #[test]
+    fn there_are_as_many_patches_as_the_shader_loops_over() {
+        let shader = include_str!("../shaders/envcommon.wgsl");
+        let line = format!("patch_pos: array<vec4<f32>, {PATCHES}>");
+        assert!(shader.contains(&line), "envcommon.wgsl lacks `{line}`");
+        let env_shader = include_str!("../shaders/env.wgsl");
+        let loops = env_shader.matches("i < 8u").count();
+        assert_eq!(loops, 3, "env.wgsl loops over the patches three times");
+        let glow = include_str!("../shaders/scene.wgsl");
+        for (name, n) in [("GLOW_COLS", COLS), ("GLOW_ROWS", ROWS)] {
+            let line = format!("const {name}: u32 = {n}u;");
+            assert!(glow.contains(&line), "scene.wgsl lacks `{line}`");
+        }
     }
 
     #[test]

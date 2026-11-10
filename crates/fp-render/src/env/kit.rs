@@ -307,16 +307,18 @@ impl MeshBuilder {
     /// Bakes the share of the house lights that reaches each vertex: the sum
     /// over `lights` of `intensity / (1 + d^2)` times the cosine of the angle
     /// to the surface (no shadows), divided by `full` and clamped to 0 to 1.
-    /// Constant glows get 0 (`Emissive`) or 1 (`EmissiveHouse`), which scale
-    /// with the house-light level themselves.
+    /// Constant glows get 0 (`Emissive`, and `EmissivePicture`, which follows
+    /// the picture) or 1 (`EmissiveHouse`), which scale with the house-light
+    /// level themselves.
     pub fn bake_house(&mut self, lights: &[PointLight], palette: &[Material], full: f32) {
         for v in &mut self.vertices {
             let pattern = palette.get(v.material as usize).map(|m| m.pattern);
-            if pattern == Some(Pattern::Emissive) {
+            let follows_house = pattern == Some(Pattern::EmissiveHouse);
+            if pattern.is_some_and(Pattern::is_emissive) && !follows_house {
                 v.house = 0.0;
                 continue;
             }
-            if pattern == Some(Pattern::EmissiveHouse) {
+            if follows_house {
                 v.house = 1.0;
                 continue;
             }
