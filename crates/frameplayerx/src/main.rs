@@ -432,6 +432,11 @@ struct Switches {
     /// compositor layer beside the one in the eyes, to compare how the
     /// two are filtered. `plain` has one level, `mips` the whole chain.
     testcard_layer: Option<testcard::LayerMode>,
+    /// `FRAMEPLAYERX_PLACES=0`: never show a place (a room or a sky) around
+    /// the picture. The app reads it itself when it starts (so the desktop
+    /// preview sees it too); it is here so the log says it is set. It does
+    /// not undo the change to the eye pass that makes places possible.
+    no_places: bool,
 }
 
 impl Switches {
@@ -459,6 +464,7 @@ impl Switches {
             testcard_layer: testcard::LayerMode::parse(
                 get("FRAMEPLAYERX_TESTCARD_LAYER").as_deref(),
             ),
+            no_places: !app::places::enabled(&get),
         }
     }
 
@@ -491,6 +497,9 @@ impl Switches {
         }
         if let Some(mode) = self.testcard_layer {
             on.push(format!("FRAMEPLAYERX_TESTCARD_LAYER={}", mode.label()));
+        }
+        if self.no_places {
+            on.push("FRAMEPLAYERX_PLACES=0".to_string());
         }
         if on.is_empty() {
             "none".into()
@@ -1144,6 +1153,25 @@ mod tests {
             let s = with("FRAMEPLAYERX_TESTCARD_LAYER", bad);
             assert_eq!(s, Switches::default(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn switches_turn_places_off_only_when_asked() {
+        // Places are on by default.
+        assert!(!Switches::parse(env(&[])).no_places);
+        for off in ["0", " 0 ", "off", "OFF", "false", "no"] {
+            let s = with("FRAMEPLAYERX_PLACES", off);
+            assert!(s.no_places, "{off:?}");
+            assert_eq!(s.describe(), "FRAMEPLAYERX_PLACES=0", "{off:?}");
+        }
+        for on in ["", "1", "yes", "on", "garbage"] {
+            let s = with("FRAMEPLAYERX_PLACES", on);
+            assert_eq!(s, Switches::default(), "{on:?}");
+        }
+        // The app and the switches read the one rule.
+        let vars = [("FRAMEPLAYERX_PLACES", "0")];
+        let s = Switches::parse(env(&vars));
+        assert_eq!(s.no_places, !app::places::enabled(env(&vars)));
     }
 
     #[test]

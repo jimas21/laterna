@@ -253,7 +253,7 @@ impl App {
                 });
                 self.reanchor = false;
             } else if let Some(anchor) = self.anchor
-                && self.follows()
+                && self.follows(input.passthrough_available)
             {
                 self.anchor = Some(follow(anchor, (pos, rot), input.dt));
             }
@@ -276,14 +276,63 @@ impl App {
 
     /// Whether the flat screen and panels follow the head: the setting is
     /// on, the video (if any) is flat (around a 180°/360° one you look
-    /// about), and no panel is being moved.
-    fn follows(&self) -> bool {
+    /// about), no panel is being moved, and no place is shown. A place
+    /// stays where it is, menus included: a room that turned with the head
+    /// would swim, and so would a sky and its floor.
+    fn follows(&self, passthrough_available: bool) -> bool {
         self.settings.follow
             && self.panel_drag.is_none()
-            && self
-                .playback
-                .as_ref()
-                .is_none_or(|p| p.format.projection == Projection::Flat)
+            && self.active_place(passthrough_available).is_none()
+            && self.flat_or_none()
+    }
+
+    /// Whether there is no video, or it is a flat one.
+    fn flat_or_none(&self) -> bool {
+        self.playback
+            .as_ref()
+            .is_none_or(|p| p.format.projection == Projection::Flat)
+    }
+
+    /// Whether the real room shows: the runtime can show it, and either
+    /// Settings › Passthrough is on for a flat video (or the menus), or the
+    /// video is chroma-keyed or alpha-packed, which show the room where their
+    /// background was, whatever their projection.
+    fn passthrough_shown(&self, available: bool) -> bool {
+        let keyed = self.playback.as_ref().is_some_and(|p| {
+            p.shown_settings(&self.settings.default_view).chroma_key
+                || p.format.alpha_pack_scale().is_some()
+        });
+        let wanted = self.settings.passthrough;
+        places::passthrough_shown(available, wanted, self.flat_or_none(), keyed)
+    }
+
+    /// The place to show around the picture and the menus: the one picked in
+    /// Settings, unless the real room shows, the video fills the view, or
+    /// places are off.
+    fn active_place(&self, passthrough_available: bool) -> Option<Place> {
+        let passthrough = self.passthrough_shown(passthrough_available);
+        places::active_place(
+            &self.settings.environment,
+            passthrough,
+            self.flat_or_none(),
+            self.places_enabled,
+        )
+    }
+
+    /// Whether a room (not a sky) is shown: it sets where its screen is.
+    pub(super) fn in_room(&self) -> bool {
+        self.place_shown
+            .is_some_and(|p| p.kind() == fp_render::env::PlaceKind::Room)
+    }
+
+    /// Moves the house lights towards where playback wants them: down while
+    /// a video plays, up when it pauses or ends, and where they are while it
+    /// rebuffers.
+    fn update_house_lights(&mut self, dt: f32) {
+        let state = self.playback.as_ref().map(|p| p.player.state());
+        if let Some(goal) = places::house_target(state).goal() {
+            self.house_ease = places::house_step(self.house_ease, goal, dt);
+        }
     }
 
     /// The picture: what its yaw and pitch turn (by dragging it, or the
@@ -609,31 +658,49 @@ impl App {
             ..VideoParams::default()
         };
         let mut frame = None;
-        let flat_or_none = self
-            .playback
-            .as_ref()
-            .is_none_or(|p| p.format.projection == Projection::Flat);
-        // A chroma-keyed or alpha-packed video shows the room where its
+        // A chroma-keyed or alpha-packed video shows the real room where its
         // background was, whatever its projection and whether or not
-        // passthrough is on.
-        let keyed = shown.is_some_and(|s| s.chroma_key)
-            || self
-                .playback
-                .as_ref()
-                .is_some_and(|p| p.format.alpha_pack_scale().is_some());
-        let passthrough =
-            input.passthrough_available && ((self.settings.passthrough && flat_or_none) || keyed);
+        // passthrough is on, and the real room wins over a place.
+        let passthrough = self.passthrough_shown(input.passthrough_available);
         if passthrough {
             video.background = [0.0; 4];
         }
+        let in_place = self.active_place(input.passthrough_available);
+        self.place_shown = in_place;
+        self.update_house_lights(input.dt);
         let anchor_rot = anchor.to_scale_rotation_translation().1;
         let player = self.picture_anchor(anchor);
+        // A room sits round the viewer in a seat and turns with the picture;
+        // a sky stays with the plain anchor.
+        let room = in_place.and_then(|pl| {
+            let layout = pl.layout();
+            let seat = places::seat_index(&self.settings, pl, &layout);
+            places::room_frame(player, &layout, seat)
+        });
+        video.env = in_place.map(|place| fp_render::env::EnvFrame {
+            place,
+            room_to_world: room.map_or(anchor, |r| r.room_to_world),
+            house: places::house_shown(
+                self.house_ease,
+                self.house_override,
+                self.settings.house_lights_playing,
+            ),
+            screen_light: self.settings.screen_light,
+            time: input.time,
+        });
         if let (Some(p), Some(s)) = (&self.playback, shown) {
             frame = p.player.current_frame();
             video.format = p.format;
             video.screen_pose = place(player, 0.0, s.screen_distance, 0.0, 0.0);
             video.anchor = anchor_rot;
             video.settings = s;
+            // A room has its own screen: its size, its curve and where it
+            // hangs, whatever the picture's own screen settings say.
+            if let Some(r) = room {
+                video.screen_pose = r.screen_pose;
+                video.screen_fit = Some(r.fit);
+                video.settings.screen_curvature = r.curvature;
+            }
             if let Some(v) = p.player.info().video_stream() {
                 video.rotation = v.rotation;
                 video.pixel_aspect = v.pixel_aspect as f32;
@@ -642,7 +709,16 @@ impl App {
                 let rel = anchor_rot.inverse() * rot;
                 p.player.set_head_orientation(rel.to_array());
             }
-            self.subtitles(renderer, input.time, player, &s, input.eye_px_per_tan);
+            // In a room the subtitles hang on the screen, not at the distance
+            // set for a screen of your own.
+            self.subtitles(
+                renderer,
+                input.time,
+                player,
+                &s,
+                room.as_ref(),
+                input.eye_px_per_tan,
+            );
         } else {
             self.subs.visible = false;
         }
@@ -727,6 +803,7 @@ impl App {
         time: f64,
         anchor: Mat4,
         s: &fp_core::view::ViewSettings,
+        room: Option<&places::RoomFrame>,
         px_per_tan: Option<f32>,
     ) {
         if self.sub_shaper.is_none() {
@@ -747,10 +824,19 @@ impl App {
             .chain(stereo.map(|s| format!("{s:?}")))
             .collect();
         self.subs.visible = !cues.is_empty();
-        let d = s.subtitle_distance.clamp(0.5, 20.0);
-        let w = 0.9 * d;
-        self.subs.size = Vec2::new(w, w * SUBTITLE_POINTS[1] / SUBTITLE_POINTS[0]);
-        self.subs.pose = place(anchor, 0.0, d, -0.2 * d, 0.0);
+        let aspect = SUBTITLE_POINTS[1] / SUBTITLE_POINTS[0];
+        let d = room
+            .map_or(s.subtitle_distance, |r| r.distance)
+            .clamp(0.5, 20.0);
+        if let Some(r) = room {
+            let spot = places::subtitle_spot(r, d, aspect);
+            self.subs.size = spot.size;
+            self.subs.pose = spot.pose;
+        } else {
+            let w = 0.9 * d;
+            self.subs.size = Vec2::new(w, w * aspect);
+            self.subs.pose = place(anchor, 0.0, d, -0.2 * d, 0.0);
+        }
         // Painted at the size the eyes show it, so the glyphs are drawn
         // sharp rather than drawn big and minified.
         // The last size the eyes were known to have stands in while the runtime
