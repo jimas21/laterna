@@ -111,7 +111,7 @@ pub struct Grid {
     pub facets: Facets,
     pub filters_open: bool,
     /// How the drawer's long sections are narrowed, by title.
-    pub lists: std::collections::HashMap<&'static str, page::ListState>,
+    pub lists: HashMap<&'static str, page::ListState>,
     /// The tags the page is for ("Tagged ..."), which are not filters.
     pub base_tags: Vec<String>,
     /// Sorted or filtered anew: the grid goes back to its top.

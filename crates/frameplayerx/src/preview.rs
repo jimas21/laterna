@@ -347,9 +347,12 @@ impl Sim {
             Some("library-tab") => {
                 use crate::ui::SourcePage;
                 let tab = parts.get(1).ok_or("library-tab needs a tab")?;
-                match self.app.ui.source.as_mut().map(|s| &mut s.page) {
-                    Some(SourcePage::Catalog(j)) if j.show_tab(tab) => {}
-                    _ => return Err("library-tab needs a library page open".into()),
+                let shown = match self.app.ui.source.as_mut().map(|s| &mut s.page) {
+                    Some(SourcePage::Catalog(j)) => j.show_tab(tab),
+                    _ => false,
+                };
+                if !shown {
+                    return Err("library-tab needs a library page open".into());
                 }
                 self.app.repaint_all();
                 self.run_frames(6)?;
