@@ -1406,16 +1406,18 @@ mod tests {
     #[test]
     fn test_mediabrowser_header() {
         let unauthed = mediabrowser_header(None);
-        assert!(unauthed.starts_with(
-            "MediaBrowser Client=\"Laterna\", Device=\"SteamFrame\", DeviceId=\""
-        ));
+        assert!(
+            unauthed
+                .starts_with("MediaBrowser Client=\"Laterna\", Device=\"SteamFrame\", DeviceId=\"")
+        );
         assert!(unauthed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(!unauthed.contains("Token="));
 
         let authed = mediabrowser_header(Some("test_access_token"));
-        assert!(authed.starts_with(
-            "MediaBrowser Client=\"Laterna\", Device=\"SteamFrame\", DeviceId=\""
-        ));
+        assert!(
+            authed
+                .starts_with("MediaBrowser Client=\"Laterna\", Device=\"SteamFrame\", DeviceId=\"")
+        );
         assert!(authed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(authed.contains("Token=\"test_access_token\""));
     }
