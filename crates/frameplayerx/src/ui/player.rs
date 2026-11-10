@@ -3,6 +3,7 @@
 use super::theme::Weight;
 use super::widgets::{Kind, ListArea, Tip};
 use super::{Action, View, depth, fmt_time, icons, premium, theme, widgets};
+use crate::app::places;
 use crate::playback::Quality;
 use crate::settings::{HOUSE_PLAYING, PLAIN_PLACE, Settings};
 use crate::subtitles::Pick;
@@ -1530,6 +1531,18 @@ pub(crate) fn pick_seat(settings: &mut Settings, place: Place, index: usize) {
     settings.place_seats.insert(place.id().to_string(), index);
 }
 
+/// Remembers how far above or below its seat's own height the viewer sits in
+/// `place`: held to the range and the step offered, and forgotten at 0 (the
+/// file only holds what was changed).
+pub(crate) fn set_seat_height(settings: &mut Settings, place: Place, cm: i32) {
+    let cm = places::snap_height_cm(cm);
+    if cm == 0 {
+        settings.place_height.remove(place.id());
+    } else if let Ok(cm) = i8::try_from(cm) {
+        settings.place_height.insert(place.id().to_string(), cm);
+    }
+}
+
 /// A choice's icon and label.
 fn place_label(choice: PlaceChoice) -> (&'static str, &'static str) {
     match choice {
@@ -1593,8 +1606,10 @@ pub(super) fn place_controls(
         return None;
     };
     let layout = place.layout();
-    let seat = crate::app::places::seat_index(settings, place, &layout);
+    let seat = places::seat_index(settings, place, &layout);
     let mut picked = None;
+    let mut height = places::seat_height_cm(settings, place) as f32;
+    let mut new_height = None;
     let mut house = settings.house_lights_playing * 100.0;
     widgets::rows(ui, |r| {
         if layout.seats.len() > 1 {
@@ -1606,6 +1621,20 @@ pub(super) fn place_controls(
                     }
                 }
             });
+        }
+        // Only a room has a seat to raise or lower; a sky has no eye to move.
+        if layout.screen.is_some()
+            && r.slider(
+                tr!("place-height"),
+                Some(tr!("place-height-desc")),
+                &mut height,
+                *places::HEIGHT_CM.start() as f32..=*places::HEIGHT_CM.end() as f32,
+                0.0,
+                " cm",
+                0,
+            )
+        {
+            new_height = Some(places::snap_height_cm(height.round() as i32));
         }
         if r.slider(
             tr!("place-house-lights"),
@@ -1627,6 +1656,9 @@ pub(super) fn place_controls(
     });
     if let Some(i) = picked {
         pick_seat(settings, place, i);
+    }
+    if let Some(cm) = new_height {
+        set_seat_height(settings, place, cm);
     }
     Some(place)
 }
@@ -2574,7 +2606,7 @@ mod tests {
     fn a_seat_is_kept_for_its_place_and_stays_on_offer() {
         let mut s = Settings::default();
         let layout = Place::Cinema.layout();
-        let seat = |s: &Settings| crate::app::places::seat_index(s, Place::Cinema, &layout);
+        let seat = |s: &Settings| places::seat_index(s, Place::Cinema, &layout);
         assert_eq!(seat(&s), layout.default_seat);
         pick_seat(&mut s, Place::Cinema, 0);
         assert_eq!(seat(&s), 0);
@@ -2586,6 +2618,24 @@ mod tests {
         pick_seat(&mut s, Place::Studio, 3);
         let last = Place::Studio.layout().seats.len() - 1;
         assert_eq!(usize::from(s.place_seats["studio"]), last);
+    }
+
+    #[test]
+    fn a_seat_height_is_kept_per_place_in_steps_and_forgotten_at_zero() {
+        let mut s = Settings::default();
+        set_seat_height(&mut s, Place::Cinema, 15);
+        assert_eq!(places::seat_height_cm(&s, Place::Cinema), 15);
+        assert_eq!(places::seat_height_cm(&s, Place::Studio), 0);
+        // Between steps goes to the nearest; past the ends is held.
+        set_seat_height(&mut s, Place::Cinema, -13);
+        assert_eq!(places::seat_height_cm(&s, Place::Cinema), -15);
+        set_seat_height(&mut s, Place::Cinema, 500);
+        assert_eq!(places::seat_height_cm(&s, Place::Cinema), 30);
+        set_seat_height(&mut s, Place::Cinema, -500);
+        assert_eq!(places::seat_height_cm(&s, Place::Cinema), -30);
+        // Back to 0 leaves nothing in the file.
+        set_seat_height(&mut s, Place::Cinema, 2);
+        assert!(s.place_height.is_empty());
     }
 
     #[test]

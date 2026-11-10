@@ -1498,6 +1498,9 @@ seat-middle = Middle
 seat-back = Back
 # Short: a chip.
 seat-couch = Couch
+# A row: how high the eyes sit in the seat. Shown as a number of cm, up or down.
+place-height = Seat height
+place-height-desc = Raise or lower where you sit in the room, in steps of 5 cm. It is remembered for each place.
 place-house-lights = House lights while playing
 place-house-lights-desc = How bright the room stays once the video starts. The lights come up when you pause.
 place-screen-light = Light from the screen

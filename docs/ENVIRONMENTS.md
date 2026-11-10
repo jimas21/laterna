@@ -214,6 +214,11 @@ What shipped first, and where it differs from the sketch above.
 - **The picker** is the film button on the control bar (the Position tab) and
   Settings › Places. The preview harness has `place`, `seat` and `house`
   commands, and `tools/ui-preview.sh` takes the shots.
+- **Seat height and lying down.** `Settings::place_height` (place id to
+  centimetres, -30 to 30 in steps of 5, 0 not stored) moves the eye in room
+  space: `places::room_frame` takes it. A recenter inside a place builds the
+  anchor from the gaze (`world::anchor_facing_within`, level band 10 degrees,
+  the head's own up near straight up), so the room and its screen tip together.
 - **Off switch.** `FRAMEPLAYERX_PLACES=0` stops the app asking for a place. It
   does not undo the depth buffer and the blended picture in the eye pass.
 

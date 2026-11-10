@@ -408,22 +408,56 @@ pub fn anchor_from_head(position: Vec3, orientation: Quat) -> Mat4 {
 /// with the glance. Lying back looks further up than this.
 const LEVEL_WITHIN_DEG: f32 = 20.0;
 
+/// In a place a recenter levels out only within this far of level: lying
+/// back to watch starts a little sooner than it does for a flat screen.
+pub const PLACE_LEVEL_WITHIN_DEG: f32 = 10.0;
+
+/// Looking this close to straight up or down (degrees from the pole) the
+/// direction you face has no steady heading, so the frame takes its turn from
+/// the head's own up instead of from where the gaze leans.
+const POLE_WITHIN_DEG: f32 = 10.0;
+
 /// The anchor a recenter sets: at the head position, facing where it looks,
 /// up or down too (level when nearly so, see [`LEVEL_WITHIN_DEG`]), but
 /// never rolled.
 pub fn anchor_facing(position: Vec3, orientation: Quat) -> Mat4 {
-    let d = orientation * Vec3::NEG_Z;
-    let yaw = (-d.x).atan2(-d.z);
-    let pitch = d.y.clamp(-1.0, 1.0).asin();
-    let pitch = if pitch.abs() < LEVEL_WITHIN_DEG.to_radians() {
-        0.0
+    anchor_facing_within(position, orientation, LEVEL_WITHIN_DEG)
+}
+
+/// [`anchor_facing`] with the level band `level_within_deg` (a place uses
+/// [`PLACE_LEVEL_WITHIN_DEG`]). The frame is built from the gaze: its forward
+/// is where the head looks, its up is the world's up as far as the gaze
+/// leaves one, so there is no roll. Looking within [`POLE_WITHIN_DEG`] of
+/// straight up (or down), where the world's up says nothing about the turn,
+/// the up is the head's own up, so the result is steady rather than flipping
+/// with the last decimal of the gaze.
+pub fn anchor_facing_within(position: Vec3, orientation: Quat, level_within_deg: f32) -> Mat4 {
+    let gaze = (orientation * Vec3::NEG_Z).normalize_or_zero();
+    if gaze == Vec3::ZERO {
+        return Mat4::from_translation(position);
+    }
+    let pitch = gaze.y.clamp(-1.0, 1.0).asin();
+    let rotation = if pitch.abs() < level_within_deg.to_radians() {
+        // Level: turned to face the gaze, upright.
+        Quat::from_rotation_y((-gaze.x).atan2(-gaze.z))
     } else {
-        pitch
+        let up = if pitch.abs() > (90.0 - POLE_WITHIN_DEG).to_radians() {
+            orientation * Vec3::Y
+        } else {
+            Vec3::Y
+        };
+        // Up, made square to the gaze.
+        let up = (up - gaze * up.dot(gaze)).normalize_or_zero();
+        let up = if up == Vec3::ZERO {
+            gaze.any_orthonormal_vector()
+        } else {
+            up
+        };
+        let z = -gaze;
+        let x = up.cross(z).normalize();
+        Quat::from_mat3(&glam::Mat3::from_cols(x, z.cross(x), z))
     };
-    Mat4::from_rotation_translation(
-        Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch),
-        position,
-    )
+    Mat4::from_rotation_translation(rotation, position)
 }
 
 /// How closely a followed anchor trails the head: the gap halves every this
@@ -1541,6 +1575,83 @@ mod tests {
         // Lying back looks further up: that is kept.
         let a = anchor_facing(head, Quat::from_rotation_x(60f32.to_radians()));
         assert!(a.transform_vector3(Vec3::NEG_Z).y > 0.8);
+    }
+
+    fn looking(yaw: f32, pitch: f32) -> Quat {
+        Quat::from_euler(
+            glam::EulerRot::YXZ,
+            yaw.to_radians(),
+            pitch.to_radians(),
+            0.0,
+        )
+    }
+
+    #[test]
+    fn lying_back_pitches_the_anchor_to_the_gaze_in_a_place() {
+        let head = Vec3::new(0.1, 0.4, 0.2);
+        // Within about 10 degrees of level a place levels out, as before.
+        for deg in [-9.0_f32, -4.0, 0.0, 7.0, 9.5] {
+            let a = anchor_facing_within(head, looking(25.0, deg), PLACE_LEVEL_WITHIN_DEG);
+            assert!(a.transform_vector3(Vec3::NEG_Z).y.abs() < 1e-5, "{deg}");
+            let up = a.transform_vector3(Vec3::Y);
+            assert!(up.abs_diff_eq(Vec3::Y, 1e-5), "{deg}");
+        }
+        // Beyond it the whole frame tips with the gaze, without rolling.
+        for deg in [-60.0_f32, 12.0, 35.0, 60.0, 80.0] {
+            let want = looking(25.0, deg);
+            let a = anchor_facing_within(head, want, PLACE_LEVEL_WITHIN_DEG);
+            let ahead = a.transform_vector3(Vec3::NEG_Z);
+            let gaze = want * Vec3::NEG_Z;
+            assert!((ahead - gaze).length() < 1e-4, "{deg}: {ahead}");
+            assert!(a.transform_vector3(Vec3::X).y.abs() < 1e-4, "{deg}: rolled");
+            assert_eq!(a.w_axis.truncate(), head);
+        }
+        // A place's band is tighter than a flat screen's.
+        let glance = looking(0.0, 15.0);
+        let flat = anchor_facing(head, glance).transform_vector3(Vec3::NEG_Z);
+        assert!(flat.y.abs() < 1e-5);
+        let place = anchor_facing_within(head, glance, PLACE_LEVEL_WITHIN_DEG);
+        assert!(place.transform_vector3(Vec3::NEG_Z).y > 0.2);
+    }
+
+    #[test]
+    fn looking_straight_up_gives_a_steady_frame() {
+        let head = Vec3::ZERO;
+        // Lying on the back, face to the ceiling: the head's up points
+        // along the floor, towards the head end of the bed.
+        for head_end in [0.0_f32, 90.0, 200.0, -140.0] {
+            let turn = Quat::from_rotation_y(head_end.to_radians());
+            let lying = turn * Quat::from_rotation_x(90f32.to_radians());
+            let a = anchor_facing_within(head, lying, PLACE_LEVEL_WITHIN_DEG);
+            let ahead = a.transform_vector3(Vec3::NEG_Z);
+            assert!(ahead.abs_diff_eq(Vec3::Y, 1e-4), "{head_end}: {ahead}");
+            let up = a.transform_vector3(Vec3::Y);
+            assert!(up.abs_diff_eq(lying * Vec3::Y, 1e-4), "{head_end}: {up}");
+            assert!(a.to_cols_array().iter().all(|v| v.is_finite()));
+        }
+        // A hair either side of straight up gives nearly the same frame.
+        let rot = |nudge: f32| {
+            let look = Quat::from_rotation_x((90.0_f32 + nudge).to_radians());
+            let a = anchor_facing_within(head, look, PLACE_LEVEL_WITHIN_DEG);
+            a.to_scale_rotation_translation().1
+        };
+        assert!(rot(0.0).angle_between(rot(0.05)) < 0.01);
+        assert!(rot(0.0).angle_between(rot(-0.05)) < 0.01);
+        // Straight down is as steady.
+        let down = Quat::from_rotation_x(-90f32.to_radians());
+        let a = anchor_facing_within(head, down, PLACE_LEVEL_WITHIN_DEG);
+        assert!(
+            a.transform_vector3(Vec3::NEG_Z)
+                .abs_diff_eq(Vec3::NEG_Y, 1e-4)
+        );
+        assert!(a.to_cols_array().iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn a_gaze_with_no_direction_changes_nothing_but_the_position() {
+        let a = anchor_facing_within(Vec3::ONE, Quat::from_xyzw(0.0, 0.0, 0.0, 0.0), 10.0);
+        assert!(a.to_cols_array().iter().all(|v| v.is_finite()));
+        assert_eq!(a.w_axis.truncate(), Vec3::ONE);
     }
 
     #[test]

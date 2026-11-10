@@ -204,6 +204,11 @@ pub struct Settings {
     /// empty.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub place_seats: std::collections::BTreeMap<String, u8>,
+    /// How far above (or below, negative) its seat's own height the viewer's
+    /// eye sits in each room, in centimetres, by place id: -30 to +30 in
+    /// steps of 5 (`app::places::HEIGHT_CM`). Left out of the file when empty.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub place_height: std::collections::BTreeMap<String, i8>,
     /// How bright a place's house lights stay while a video plays, in
     /// [`HOUSE_PLAYING`].
     pub house_lights_playing: f32,
@@ -336,6 +341,7 @@ impl Default for Settings {
             source_pins: Default::default(),
             environment: PLAIN_PLACE.to_string(),
             place_seats: Default::default(),
+            place_height: Default::default(),
             house_lights_playing: HOUSE_PLAYING_START,
             screen_light: true,
         }
@@ -454,6 +460,7 @@ mod tests {
         // light on.
         assert_eq!(p.environment, PLAIN_PLACE);
         assert!(p.place_seats.is_empty());
+        assert!(p.place_height.is_empty());
         assert_eq!(p.house_lights_playing, HOUSE_PLAYING_START);
         assert_eq!(HOUSE_PLAYING_START, 0.04);
         assert!(p.screen_light);
@@ -514,6 +521,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains(r#""environment": "void""#), "{text}");
         assert!(!text.contains("place_seats"), "{text}");
+        assert!(!text.contains("place_height"), "{text}");
         let mut s = Settings {
             environment: "cinema".into(),
             house_lights_playing: 0.1,
@@ -521,6 +529,7 @@ mod tests {
             ..Default::default()
         };
         s.place_seats.insert("cinema".into(), 2);
+        s.place_height.insert("cinema".into(), -15);
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         // A place this build lacks (from a newer one) loads with every other

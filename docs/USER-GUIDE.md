@@ -852,7 +852,10 @@ its turn; the panel's **Reset** puts the picture's own adjustments back). The fo
 ### Watching lying down
 
 Lie back, look where you want the picture, and hold the Steam button to
-recenter: it comes up to where you look. Or turn on **Screen follows you**
+recenter: it comes up to where you look. Inside a place, the whole place
+tips with you, so the room and its screen face you however far back you lie,
+even looking straight up. (A glance within about 10 degrees of level doesn't
+tip it.) Or turn on **Screen follows you**
 (the bed button on the control bar, or Settings › General): a flat video
 and the menus then follow your head and stay in front of you as you turn,
 lie back or roll onto your side. 180° and 360° videos don't follow, since
@@ -890,6 +893,11 @@ a place while it shows.
 - **Seat.** The cinema has three seats, Front, Middle and Back. The seat sets
   how large the screen looks; Front, the first choice, shows it largest.
   Each place remembers its own seat.
+- **Seat height.** Beside the seats, a slider raises or lowers where your
+  eyes sit in the room, from 30 cm lower to 30 cm higher in steps of 5 cm.
+  Use it if you sit low in a bed or a deep couch and the screen looks too
+  high or too low. Each place remembers its own. It is for rooms; the studio
+  has no seat to move.
 - **House lights while playing.** The lights dim in about two seconds when
   the video plays, and come back up in about one when you pause, it ends or
   you close it. A pause to buffer leaves them as they are. The slider sets how
@@ -902,7 +910,9 @@ a place while it shows.
   replaces the background colour.
 - **Screen follows you** (the bed button) does nothing inside a place: the
   place stays where it is, and the button's tip says so. Lie back and
-  **recenter** to bring the whole place in front of you, tilted with you.
+  **recenter** to bring the whole place in front of you, tilted with you,
+  so the screen faces where you look. A recenter with your head near level
+  only turns the place, as before.
 
 If a place ever gets in the way, set `FRAMEPLAYERX_PLACES=0` in the env file
 (see [DEVELOPMENT.md](DEVELOPMENT.md)) and Laterna never shows one.
