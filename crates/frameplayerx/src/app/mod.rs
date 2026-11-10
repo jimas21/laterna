@@ -379,7 +379,7 @@ impl App {
     }
 
     /// The eye picture sizes Settings › General › Render resolution shows.
-    pub fn set_render_info(&mut self, info: crate::ui::RenderInfo) {
+    pub fn set_render_info(&mut self, info: ui::RenderInfo) {
         self.ui.render = Some(info);
     }
 
