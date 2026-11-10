@@ -8,10 +8,12 @@
 use fp_core::format::{Projection, StereoLayout, VideoFormat};
 use fp_render::capture::OffscreenEyes;
 use fp_render::math::{Fov, projection, view};
-use fp_render::{EyeView, Gpu, Renderer, VideoParams};
+use fp_render::{EyeView, Renderer, VideoParams};
 use glam::{EulerRot, Quat, Vec3};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+mod common;
 
 const SIZE: u32 = 192;
 
@@ -21,15 +23,7 @@ struct Rig {
 }
 
 fn rig() -> Option<Rig> {
-    let gpu = match Gpu::headless() {
-        Ok(g) => Arc::new(g),
-        Err(e) => {
-            eprintln!("skipping: no Vulkan device ({e})");
-            return None;
-        }
-    };
-    let r = Renderer::new(gpu, ash::vk::Format::R8G8B8A8_SRGB).expect("renderer");
-    let eyes = OffscreenEyes::new(&r, SIZE, SIZE).expect("eyes");
+    let (r, eyes) = common::setup_sized(SIZE)?;
     Some(Rig { r, eyes })
 }
 

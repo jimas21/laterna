@@ -1,91 +1,19 @@
 //! Stereo eye selection, flat/curved screens, picture controls and egui
 //! panels, rendered on a real (software) Vulkan device.
 
-use fp_core::format::{Projection, StereoLayout, VideoFormat};
+use fp_core::format::{Projection, StereoLayout};
 use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_render::capture::OffscreenEyes;
 use fp_render::math::{Fov, projection, view};
-use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Quality, Renderer, VideoParams};
+use fp_render::{EyeView, QuadDraw, QuadTexture, Quality, Renderer, VideoParams};
 use glam::{Mat4, Quat, Vec3};
 use std::sync::Arc;
 
-const SIZE: u32 = 128;
-
-fn setup() -> Option<(Renderer, OffscreenEyes)> {
-    let gpu = match Gpu::headless() {
-        Ok(g) => Arc::new(g),
-        Err(e) => {
-            eprintln!("skipping: no Vulkan device ({e})");
-            return None;
-        }
-    };
-    let r = Renderer::new(gpu, ash::vk::Format::R8G8B8A8_SRGB).expect("renderer");
-    let eyes = OffscreenEyes::new(&r, SIZE, SIZE).expect("eyes");
-    Some((r, eyes))
-}
-
-/// Frame whose pixel colour is a function of normalised (u, v).
-fn frame(w: u32, h: u32, f: impl Fn(f32, f32) -> [u8; 3]) -> Arc<fp_media::VideoFrame> {
-    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let c = f((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
-            rgba.extend_from_slice(&[c[0], c[1], c[2], 255]);
-        }
-    }
-    Arc::new(fp_media::VideoFrame::from_rgba(w, h, &rgba).expect("frame"))
-}
-
-fn eyes_at(height: f32) -> [EyeView; 2] {
-    let ev = |x: f32| EyeView {
-        view: view(Vec3::new(x, height, 0.0), Quat::IDENTITY),
-        proj: projection(Fov::symmetric(90.0), 0.05, 100.0),
-    };
-    [ev(-0.032), ev(0.032)]
-}
-
-fn render(
-    r: &mut Renderer,
-    e: &mut OffscreenEyes,
-    f: Option<&Arc<fp_media::VideoFrame>>,
-    p: &VideoParams,
-    quads: &[QuadDraw],
-) -> [Vec<u8>; 2] {
-    r.begin_frame().unwrap();
-    r.set_video(f).unwrap();
-    r.draw(&e.targets(), &eyes_at(1.6), p, quads).unwrap();
-    r.end_frame().unwrap();
-    [e.read(r, 0).unwrap(), e.read(r, 1).unwrap()]
-}
-
-fn px(img: &[u8], x: u32, y: u32) -> [u8; 3] {
-    let i = ((y * SIZE + x) * 4) as usize;
-    [img[i], img[i + 1], img[i + 2]]
-}
-
-fn alpha(img: &[u8], x: u32, y: u32) -> u8 {
-    img[((y * SIZE + x) * 4 + 3) as usize]
-}
-
-fn centre(img: &[u8]) -> [u8; 3] {
-    px(img, SIZE / 2, SIZE / 2)
-}
-
-fn is_red(c: [u8; 3]) -> bool {
-    c[0] > 200 && c[1] < 60 && c[2] < 60
-}
-fn is_blue(c: [u8; 3]) -> bool {
-    c[2] > 200 && c[0] < 60 && c[1] < 60
-}
-
-fn params(projection: Projection, stereo: StereoLayout, settings: ViewSettings) -> VideoParams {
-    VideoParams {
-        format: VideoFormat::new(projection, stereo),
-        settings,
-        ..Default::default()
-    }
-}
+mod common;
+use common::{
+    SIZE, alpha, centre, eyes_at, frame, is_blue, is_red, near, params, px, render, setup, srgb,
+};
 
 #[test]
 fn chroma_key_makes_the_green_screen_see_through() {
@@ -553,23 +481,6 @@ fn pq_frame(
     f.color.transfer = fp_media::info::Transfer::Pq;
     f.color.wide_gamut = wide;
     Arc::new(f)
-}
-
-/// What the eye target holds for linear `c` (1.0 the screen's white).
-fn srgb(c: [f32; 3]) -> [u8; 3] {
-    c.map(|l| {
-        let l = l.clamp(0.0, 1.0);
-        let e = if l <= 0.003_130_8 {
-            12.92 * l
-        } else {
-            1.055 * l.powf(1.0 / 2.4) - 0.055
-        };
-        (e * 255.0).round() as u8
-    })
-}
-
-fn near(got: [u8; 3], want: [u8; 3], tol: u8) -> bool {
-    got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= tol)
 }
 
 /// The PQ code a test frame's 8-bit level stands for.
