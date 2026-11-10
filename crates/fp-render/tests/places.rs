@@ -38,7 +38,7 @@ fn place_frame(place: Place, seat: SeatName, house: f32) -> EnvFrame {
         place,
         room_to_world: layout.seat(index).room_to_world(anchor),
         house,
-        screen_light: false,
+        screen_light: 0.0,
         time: 0.0,
     }
 }
@@ -176,7 +176,7 @@ fn nearer_geometry_hides_farther() {
         place: Place::Cinema,
         room_to_world: anchor,
         house: 1.0,
-        screen_light: false,
+        screen_light: 0.0,
         time: 0.0,
     };
     let mut p = plain_params();
@@ -426,11 +426,47 @@ fn a_place_built_on_a_worker_shows_when_it_is_ready() {
     }
     e.destroy(&r);
 }
+#[test]
+fn switching_places_never_shows_plain_in_between() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    r.set_inline_places(false);
+    let red = frame(160, 90, |_, _| [230, 20, 20]);
+    let cinema = cinema_params(
+        ViewSettings::default(),
+        place_frame(Place::Cinema, SeatName::Middle, 1.0),
+    );
+    let mut shown = false;
+    for _ in 0..500 {
+        let [l, _] = render(&mut r, &mut e, Some(&red), &cinema, &[]);
+        if corners(&l).iter().all(|&c| c != [0, 0, 0]) {
+            shown = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(shown, "the cinema was never shown");
+    // Asked for the studio, which is not built yet: the cinema stays up
+    // until the studio is ready, so no frame is the Plain one.
+    let mut studio = cinema;
+    studio.env = Some(place_frame(Place::Studio, SeatName::Middle, 1.0));
+    let mut plain = studio;
+    plain.env = None;
+    let [bare, _] = render(&mut r, &mut e, Some(&red), &plain, &[]);
+    for n in 0..60 {
+        let [l, _] = render(&mut r, &mut e, Some(&red), &studio, &[]);
+        assert!(l != bare, "frame {n} after the switch is Plain");
+        thread::sleep(Duration::from_millis(5));
+    }
+    e.destroy(&r);
+}
+
 /// The cinema playing, as the picture's light sees it: the house lights down
 /// to their level while a film plays, the light on or off, `time` seconds in.
 fn lit_params(time: f64, light: bool) -> VideoParams {
     let mut env = place_frame(Place::Cinema, SeatName::Middle, 0.04);
-    env.screen_light = light;
+    env.screen_light = if light { 1.0 } else { 0.0 };
     env.time = time;
     cinema_params(ViewSettings::default(), env)
 }
@@ -473,6 +509,81 @@ fn lower_mean(img: &[u8], first: u32) -> [f32; 3] {
     }
     let n = ((SIZE - first) * SIZE) as f32;
     sum.map(|s| s as f32 / n)
+}
+
+/// The mean colour of the pixels in `cols` and `rows`.
+fn region_mean(img: &[u8], cols: std::ops::Range<u32>, rows: std::ops::Range<u32>) -> [f32; 3] {
+    let mut sum = [0u32; 3];
+    let n = ((cols.end - cols.start) * (rows.end - rows.start)) as f32;
+    for y in rows {
+        for x in cols.clone() {
+            for (s, v) in sum.iter_mut().zip(px(img, x, y)) {
+                *s += u32::from(v);
+            }
+        }
+    }
+    sum.map(|s| s as f32 / n)
+}
+
+/// What the middle seat sees either side of the screen (the side walls and
+/// the front wall's corners, rows 40 to 90) and on the stage below it (rows
+/// 84 to 90, between the screen's sides): the places the picture's light is
+/// meant to show in. The screen and its panel fill the columns between.
+fn side_and_stage(img: &[u8]) -> ([f32; 3], [f32; 3]) {
+    let sides = [
+        region_mean(img, 0..22, 40..90),
+        region_mean(img, 106..128, 40..90),
+    ];
+    let side = [0, 1, 2].map(|c| (sides[0][c] + sides[1][c]) / 2.0);
+    (side, region_mean(img, 36..92, 84..90))
+}
+
+#[test]
+fn the_walls_and_stage_visibly_take_the_pictures_colour() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let red = frame(160, 90, |_, _| [230, 20, 20]);
+    let blue = frame(160, 90, |_, _| [20, 20, 230]);
+    let (wall_red, stage_red) = side_and_stage(&watch(&mut r, &mut e, &red, 1, true));
+    let (wall_blue, stage_blue) = side_and_stage(&watch(&mut r, &mut e, &blue, 5, true));
+    // Red then blue turns the walls and the stage from one colour to the
+    // other by several codes in 255, clearly and not by a rounding error
+    // (beta.6's light moved the room by about one).
+    for (name, in_red, in_blue) in [
+        ("walls", wall_red, wall_blue),
+        ("stage", stage_red, stage_blue),
+    ] {
+        let red_up = in_red[0] - in_blue[0];
+        let blue_up = in_blue[2] - in_red[2];
+        assert!(
+            red_up > 4.0,
+            "{name}: red {in_red:?}, then blue {in_blue:?}"
+        );
+        assert!(
+            blue_up > 4.0,
+            "{name}: red {in_red:?}, then blue {in_blue:?}"
+        );
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn a_dark_scene_does_not_black_the_room_out() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let black = frame(160, 90, |_, _| [0, 0, 0]);
+    let (_, off) = side_and_stage(&watch(&mut r, &mut e, &black, 1, false));
+    let (_, on) = side_and_stage(&watch(&mut r, &mut e, &black, 5, true));
+    // The light's floor keeps some of it on the stage even with nothing on
+    // the screen, and never takes any away.
+    let lifted: f32 = (0..3).map(|c| on[c] - off[c]).sum();
+    assert!(lifted > 1.0, "off {off:?}, on {on:?}");
+    for c in 0..3 {
+        assert!(on[c] >= off[c], "off {off:?}, on {on:?}");
+    }
+    e.destroy(&r);
 }
 
 #[test]

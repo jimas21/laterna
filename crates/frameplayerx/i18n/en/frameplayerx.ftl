@@ -1517,8 +1517,8 @@ place-height = Seat height
 place-height-desc = Raise or lower where you sit in the room, in steps of 5 cm. It is remembered for each place.
 place-house-lights = House lights while playing
 place-house-lights-desc = How bright the room stays once the video starts. The lights come up when you pause.
-place-screen-light = Light from the screen
-place-screen-light-desc = The walls and seats take on the colours of the picture.
+place-screen-light = Screen light
+place-screen-light-desc = How much the walls, ceiling and seats take on the colours of the picture. 0 turns it off.
 # Under the adjust panel's Screen heading while a room is chosen.
 place-sets-screen = This place sets the screen. Pick a seat to change how big it looks.
 # A tooltip: opens the place picker.

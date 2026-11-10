@@ -296,8 +296,9 @@ pub struct EnvFrame {
     pub room_to_world: Mat4,
     /// House-light level: 0 dark, 1 full.
     pub house: f32,
-    /// Whether the picture lights the place.
-    pub screen_light: bool,
+    /// How strongly the picture lights the place: 0 is off, 1 the strength
+    /// the place is tuned for (the Settings slider's middle), 2 its top.
+    pub screen_light: f32,
     /// Seconds, for slow effects.
     pub time: f64,
 }

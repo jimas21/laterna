@@ -794,7 +794,7 @@ impl App {
                 self.house_override,
                 self.settings.house_lights_playing,
             ),
-            screen_light: self.settings.screen_light,
+            screen_light: crate::settings::screen_light_gain(self.settings.screen_light_level),
             time: input.time,
         });
         if let (Some(p), Some(s)) = (&self.playback, shown) {

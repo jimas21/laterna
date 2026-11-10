@@ -953,8 +953,10 @@ a place while it shows.
   the video plays, and come back up in about one when you pause, it ends or
   you close it. A pause to buffer leaves them as they are. The slider sets how
   bright they stay while playing (4 % to begin with; 0 is dark).
-- **Light from the screen.** The walls and seats take on the colours of the
-  picture. Turn it off to keep the place steady.
+- **Screen light.** The walls, ceiling, curtains and seats take on the colours of the
+  picture, and a dark scene never leaves the room completely black. The
+  slider sets how much (50 % to begin with; 0 turns it off to keep the place
+  steady).
 - **The screen.** A room has a screen of its own, so the Position tab leaves
   out the screen's distance, width and curvature there: pick a seat to change
   how big it looks. The studio keeps your own screen settings. A place

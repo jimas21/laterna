@@ -45,6 +45,11 @@ const PI: f32 = 3.14159265358979;
 // glossy floor gives back, times its sheen.
 const GLOSS_NORM: f32 = 2.228;
 const GLOSS_GAIN: f32 = 0.25;
+// How much more of the picture's light a surface takes than the measured
+// colours alone give it (see `screen_light`); times the Screen light slider's
+// strength (`screen_n.w`, 1 at its start). Keep in step with SCREEN_BOOST in
+// env_pass.rs.
+const SCREEN_BOOST: f32 = 5.0;
 
 // How much of the screen's light `i` reaches `p`: the light from patch `i`
 // comes with `l` (towards it, shortened when the patch is close, which keeps
@@ -79,7 +84,11 @@ fn screen_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
         let lamp = lamp_at(i, p);
         e += env.patch_rgb[i].rgb * (lamp.amount * max(dot(n, lamp.l), 0.0));
     }
-    return e;
+    // The room's albedos are low (a wall is a few percent), so the same
+    // light that would be plenty on white paper hardly shows: the boost
+    // brings it up to where the walls visibly take the film's colour. The
+    // slider's strength is in screen_n.w.
+    return e * (SCREEN_BOOST * env.screen_n.w);
 }
 
 // A glossy floor's mirror image of the picture: each patch through a lobe
@@ -97,7 +106,7 @@ fn screen_gloss(p: vec3<f32>, n: vec3<f32>, view_dir: vec3<f32>) -> vec3<f32> {
         // The patch's solid angle (without the 1/pi) times the lobe.
         s += env.patch_rgb[i].rgb * (lamp.amount * PI * c8 * c4);
     }
-    return s * GLOSS_NORM;
+    return s * (GLOSS_NORM * env.screen_n.w);
 }
 
 @vertex

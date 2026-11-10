@@ -105,6 +105,17 @@ pub const HOUSE_PLAYING: std::ops::RangeInclusive<f32> = 0.0..=0.4;
 /// The level the house lights stay at while a video plays, to begin with.
 pub const HOUSE_PLAYING_START: f32 = 0.04;
 
+/// Settings > Places > Screen light: the level to begin with, as a share of
+/// the slider (0 is off). Half the slider is the strength the places are
+/// tuned for; the top of it is twice that.
+pub const SCREEN_LIGHT_START: f32 = 0.5;
+
+/// What a screen light level (0 to 1) asks of the renderer: 0 is off, and
+/// [`SCREEN_LIGHT_START`] is 1, the places' own strength.
+pub fn screen_light_gain(level: f32) -> f32 {
+    level.clamp(0.0, 1.0) / SCREEN_LIGHT_START
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -222,8 +233,10 @@ pub struct Settings {
     /// How bright a place's house lights stay while a video plays, in
     /// [`HOUSE_PLAYING`].
     pub house_lights_playing: f32,
-    /// Rooms take the light of the picture.
-    pub screen_light: bool,
+    /// How strongly rooms take the light of the picture, 0 (off) to 1; see
+    /// [`screen_light_gain`]. A file from when this was a switch has it off
+    /// as 0 (see [`Settings::load`]).
+    pub screen_light_level: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -359,7 +372,7 @@ impl Default for Settings {
             place_seats: Default::default(),
             place_height: Default::default(),
             house_lights_playing: HOUSE_PLAYING_START,
-            screen_light: true,
+            screen_light_level: SCREEN_LIGHT_START,
         }
     }
 }
@@ -413,6 +426,25 @@ impl Settings {
                     {
                         s.controls.right.grip_y = crate::bindings::AxisAction::Height;
                     }
+                    // Saved when the picture's light was a switch: off stays
+                    // off.
+                    let value = serde_json::from_str::<serde_json::Value>(&text).ok();
+                    let had_level = value
+                        .as_ref()
+                        .is_some_and(|v| v.get("screen_light_level").is_some());
+                    let switched_off = value
+                        .as_ref()
+                        .and_then(|v| v.get("screen_light"))
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(false);
+                    if switched_off && !had_level {
+                        s.screen_light_level = 0.0;
+                    }
+                    s.screen_light_level = if s.screen_light_level.is_finite() {
+                        s.screen_light_level.clamp(0.0, 1.0)
+                    } else {
+                        SCREEN_LIGHT_START
+                    };
                     s
                 }
                 Err(e) => {
@@ -501,7 +533,7 @@ mod tests {
         assert!(p.place_height.is_empty());
         assert_eq!(p.house_lights_playing, HOUSE_PLAYING_START);
         assert_eq!(HOUSE_PLAYING_START, 0.04);
-        assert!(p.screen_light);
+        assert_eq!(p.screen_light_level, SCREEN_LIGHT_START);
         // Saved before the global chroma key: the old green default goes.
         std::fs::write(
             &path,
@@ -563,7 +595,7 @@ mod tests {
         let mut s = Settings {
             environment: "cinema".into(),
             house_lights_playing: 0.1,
-            screen_light: false,
+            screen_light_level: 0.0,
             ..Default::default()
         };
         s.place_seats.insert("cinema".into(), 2);
@@ -578,6 +610,36 @@ mod tests {
         assert_eq!(p.environment, "moon");
         let shown = crate::app::places::active_place(&p.environment, false, true, true);
         assert_eq!(shown, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_screen_light_level_replaces_the_old_switch() {
+        // The starting level is the places' own strength; 0 is off and the
+        // top of the slider is twice the start.
+        assert_eq!(screen_light_gain(SCREEN_LIGHT_START), 1.0);
+        assert_eq!(screen_light_gain(0.0), 0.0);
+        assert_eq!(screen_light_gain(1.0), 2.0);
+        assert_eq!(screen_light_gain(7.0), 2.0);
+        assert_eq!(screen_light_gain(-1.0), 0.0);
+        let name = format!("fp-screen-light-{}", std::process::id());
+        let dir = std::env::temp_dir().join(name);
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The old switch, off: the light stays off. On: the starting level.
+        std::fs::write(&path, r#"{"screen_light": false}"#).unwrap();
+        assert_eq!(Settings::load(&path).screen_light_level, 0.0);
+        std::fs::write(&path, r#"{"screen_light": true}"#).unwrap();
+        assert_eq!(Settings::load(&path).screen_light_level, SCREEN_LIGHT_START);
+        // A level chosen since wins, and a silly one is held to the slider.
+        std::fs::write(
+            &path,
+            r#"{"screen_light": false, "screen_light_level": 0.8}"#,
+        )
+        .unwrap();
+        assert_eq!(Settings::load(&path).screen_light_level, 0.8);
+        std::fs::write(&path, r#"{"screen_light_level": 9.0}"#).unwrap();
+        assert_eq!(Settings::load(&path).screen_light_level, 1.0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
