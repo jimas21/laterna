@@ -75,6 +75,7 @@ pub fn build() -> PlaceData {
             zenith: ZENITH,
             horizon: HORIZON,
         },
+        baked: None,
     }
 }
 

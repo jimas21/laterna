@@ -11,7 +11,9 @@
 //! shows a place, so users who never pick one pay nothing.
 
 use crate::env::light::PATCHES;
+use crate::env::pack::BakedVertex;
 use crate::env::{Lighting, Pattern, Place, PlaceData, PlaceKind, Sky, Vertex};
+use crate::env_baked::{self, BakedGpu};
 use crate::gpu::Gpu;
 use crate::mem::Buffer;
 use crate::pipeline::{self, Depth, PipelineDesc};
@@ -43,6 +45,8 @@ pub(crate) struct EnvUniform {
     pub sky_horizon: Vec4,
     pub palette: [Vec4; MATERIALS],
     pub palette2: [Vec4; MATERIALS],
+    /// A baked place: x its basis gain.
+    pub baked: Vec4,
 }
 
 /// The picture's light on the place this frame, in room space.
@@ -113,6 +117,8 @@ struct Look {
     palette2: [Vec4; MATERIALS],
     lighting: Lighting,
     sky: Sky,
+    /// A baked place's gain on its basis textures, else 0.
+    baked_gain: f32,
 }
 
 fn vec4(c: [f32; 3], w: f32) -> Vec4 {
@@ -132,6 +138,7 @@ impl Look {
             palette2,
             lighting: data.lighting,
             sky: data.sky,
+            baked_gain: data.baked.as_ref().map_or(0.0, |b| b.basis_gain),
         }
     }
 
@@ -167,6 +174,7 @@ impl Look {
         }
         u.palette = self.palette;
         u.palette2 = self.palette2;
+        u.baked = Vec4::new(self.baked_gain, 0.0, 0.0, 0.0);
         u
     }
 }
@@ -181,6 +189,8 @@ struct Loaded {
     indices: Buffer,
     index_count: u32,
     look: Look,
+    /// A pack's textures and sets: it is drawn with the baked pipeline.
+    baked: Option<BakedGpu>,
 }
 
 struct SlotEnv {
@@ -196,6 +206,11 @@ pub(crate) struct EnvPass {
     sky_pipe: vk::Pipeline,
     slots: Vec<SlotEnv>,
     loaded: Option<Loaded>,
+    /// What the baked pipeline is made with, when a pack first needs it.
+    target: (vk::Format, vk::Format, vk::SampleCountFlags),
+    baked_set_layout: vk::DescriptorSetLayout,
+    baked_layout: vk::PipelineLayout,
+    baked_pipe: vk::Pipeline,
 }
 
 fn attribute(
@@ -208,6 +223,19 @@ fn attribute(
         .binding(0)
         .format(format)
         .offset(offset as u32)
+}
+
+/// `VsIn` in env_baked.wgsl, from the layout of [`BakedVertex`].
+fn baked_attributes() -> [vk::VertexInputAttributeDescription; 2] {
+    use std::mem::offset_of;
+    [
+        attribute(
+            0,
+            vk::Format::R32G32B32_SFLOAT,
+            offset_of!(BakedVertex, pos),
+        ),
+        attribute(1, vk::Format::R32G32_SFLOAT, offset_of!(BakedVertex, uv)),
+    ]
 }
 
 /// `VsIn` in env.wgsl, from the layout of [`Vertex`].
@@ -243,6 +271,10 @@ impl EnvPass {
             sky_pipe: vk::Pipeline::null(),
             slots: Vec::new(),
             loaded: None,
+            target: (color_format, depth, samples),
+            baked_set_layout: vk::DescriptorSetLayout::null(),
+            baked_layout: vk::PipelineLayout::null(),
+            baked_pipe: vk::Pipeline::null(),
         };
         if let Err(e) = p.create(gpu, color_format, depth, samples, slots) {
             p.destroy(gpu);
@@ -341,6 +373,33 @@ impl EnvPass {
         Ok(())
     }
 
+    /// Makes the baked pipeline the first time a pack is loaded: users with
+    /// no pack never pay for it.
+    fn ensure_baked_pipe(&mut self, gpu: &Gpu) -> Result<()> {
+        if self.baked_pipe != vk::Pipeline::null() {
+            return Ok(());
+        }
+        let (color_format, depth, samples) = self.target;
+        self.baked_set_layout = pipeline::set_layout(gpu, &env_baked::BINDINGS)?;
+        self.baked_layout = pipeline::layout(gpu, self.baked_set_layout, 4)?;
+        let attributes = baked_attributes();
+        self.baked_pipe = pipeline::create(
+            gpu,
+            &PipelineDesc {
+                spv: crate::ENV_BAKED_SPV,
+                layout: self.baked_layout,
+                color_format,
+                vertex_stride: size_of::<BakedVertex>() as u32,
+                attributes: &attributes,
+                blend: false,
+                descriptor_buffer: false,
+                depth: Depth::TestWrite(depth),
+                samples,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Whether `place` is the one loaded. (The renderer gets it built off the
     /// render thread and `load`s it when it is ready.)
     pub fn has(&self, place: Place) -> bool {
@@ -365,8 +424,30 @@ impl EnvPass {
         for v in &mut data.vertices {
             v.material = v.material.min(last);
         }
-        let vertex_bytes: &[u8] = bytemuck::cast_slice(&data.vertices);
-        let index_bytes: &[u8] = bytemuck::cast_slice(&data.indices);
+        // A pack brings its own mesh in its own vertex layout, and textures.
+        let (vertex_bytes, index_bytes): (&[u8], &[u8]) = match &data.baked {
+            Some(b) => (
+                bytemuck::cast_slice(&b.vertices),
+                bytemuck::cast_slice(&b.indices),
+            ),
+            None => (
+                bytemuck::cast_slice(&data.vertices),
+                bytemuck::cast_slice(&data.indices),
+            ),
+        };
+        let index_count = (index_bytes.len() / size_of::<u32>()) as u32;
+        let baked = match &data.baked {
+            Some(b) => {
+                self.ensure_baked_pipe(gpu)?;
+                let uniforms: Vec<(vk::Buffer, u64)> = self
+                    .slots
+                    .iter()
+                    .map(|s| (s.uniform.buffer, size_of::<EnvUniform>() as u64))
+                    .collect();
+                Some(BakedGpu::new(gpu, self.baked_set_layout, &uniforms, b)?)
+            }
+            None => None,
+        };
         let mut vertices = Buffer::new(
             gpu,
             vertex_bytes.len() as u64,
@@ -384,6 +465,10 @@ impl EnvPass {
             Ok(b) => b,
             Err(e) => {
                 vertices.destroy(gpu);
+                if let Some(mut b) = baked {
+                    gpu.wait_idle();
+                    b.destroy(gpu);
+                }
                 return Err(e);
             }
         };
@@ -395,12 +480,20 @@ impl EnvPass {
             floor_y: place.layout().floor_y,
             vertices,
             indices,
-            index_count: data.indices.len() as u32,
+            index_count,
             look: Look::new(&data),
+            baked,
         };
-        if let Some(old) = self.loaded.replace(loaded) {
+        if let Some(mut old) = self.loaded.replace(loaded) {
             garbage.push(old.vertices);
             garbage.push(old.indices);
+            // Textures and sets can't wait for a slot's fence like the
+            // buffers: a frame in flight may still be reading them. A pack
+            // being replaced is rare, so the device goes idle once.
+            if let Some(mut b) = old.baked.take() {
+                gpu.wait_idle();
+                b.destroy(gpu);
+            }
         }
         Ok(())
     }
@@ -431,6 +524,27 @@ impl EnvPass {
         };
         let d = &gpu.device;
         let bind = vk::PipelineBindPoint::GRAPHICS;
+        if let Some(set) = l.baked.as_ref().and_then(|b| b.set(slot)) {
+            // A pack: one pipeline, no sky (the room is all there is).
+            // SAFETY: as below; the baked sets point at the same uniforms.
+            unsafe {
+                d.cmd_bind_pipeline(cmd, bind, self.baked_pipe);
+                d.cmd_bind_descriptor_sets(cmd, bind, self.baked_layout, 0, &[set], &[]);
+                d.cmd_push_constants(
+                    cmd,
+                    self.baked_layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &eye.to_le_bytes(),
+                );
+                if l.index_count > 0 {
+                    d.cmd_bind_vertex_buffers(cmd, 0, &[l.vertices.buffer], &[0]);
+                    d.cmd_bind_index_buffer(cmd, l.indices.buffer, 0, vk::IndexType::UINT32);
+                    d.cmd_draw_indexed(cmd, l.index_count, 1, 0, 0, 0);
+                }
+            }
+            return;
+        }
         // SAFETY: recording with valid pipelines, sets and buffers; the
         // slot's uniform was written before this frame was submitted.
         unsafe {
@@ -463,8 +577,11 @@ impl EnvPass {
         unsafe {
             d.destroy_pipeline(self.env_pipe, None);
             d.destroy_pipeline(self.sky_pipe, None);
+            d.destroy_pipeline(self.baked_pipe, None);
             d.destroy_pipeline_layout(self.layout, None);
+            d.destroy_pipeline_layout(self.baked_layout, None);
             d.destroy_descriptor_set_layout(self.set_layout, None);
+            d.destroy_descriptor_set_layout(self.baked_set_layout, None);
             d.destroy_descriptor_pool(self.pool, None);
         }
         for mut s in self.slots.drain(..) {
@@ -473,6 +590,9 @@ impl EnvPass {
         if let Some(mut l) = self.loaded.take() {
             l.vertices.destroy(gpu);
             l.indices.destroy(gpu);
+            if let Some(mut b) = l.baked.take() {
+                b.destroy(gpu);
+            }
         }
     }
 }
@@ -508,7 +628,8 @@ mod tests {
         assert_eq!(offset_of!(EnvUniform, sky_horizon), 656);
         assert_eq!(offset_of!(EnvUniform, palette), 672);
         assert_eq!(offset_of!(EnvUniform, palette2), 928);
-        assert_eq!(size_of::<EnvUniform>(), 1184);
+        assert_eq!(offset_of!(EnvUniform, baked), 1184);
+        assert_eq!(size_of::<EnvUniform>(), 1200);
     }
 
     #[test]
@@ -518,6 +639,34 @@ mod tests {
         let locations: Vec<u32> = vertex_attributes().iter().map(|a| a.location).collect();
         assert_eq!(locations, [0, 1, 2, 3, 4, 5]);
         assert_eq!(size_of::<Vertex>(), 44);
+    }
+
+    #[test]
+    fn the_baked_vertex_attributes_follow_the_pack_vertex_layout() {
+        let a = baked_attributes();
+        assert_eq!([a[0].location, a[0].offset], [0, 0]);
+        assert_eq!([a[1].location, a[1].offset], [1, 12]);
+        // mesh.bin's vertices are these 20 bytes.
+        assert_eq!(size_of::<BakedVertex>(), 20);
+    }
+
+    #[test]
+    fn a_packs_basis_gain_reaches_the_uniform_and_a_built_in_room_has_none() {
+        let data = Place::Cinema.build_builtin();
+        assert_eq!(Look::new(&data).uniform(&input(1.0)).baked, Vec4::ZERO);
+        let baked = crate::env::pack::Baked {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            size: 4,
+            house: Vec::new(),
+            dark: Vec::new(),
+            basis: Vec::new(),
+            basis_gain: 2.5,
+        };
+        let mut data = data;
+        data.baked = Some(std::sync::Arc::new(baked));
+        let u = Look::new(&data).uniform(&input(1.0));
+        assert_eq!(u.baked.x, 2.5);
     }
 
     #[test]

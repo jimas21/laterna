@@ -38,6 +38,8 @@ struct Env {
     // strength, y sheen.
     palette: array<vec4<f32>, 16>,
     palette2: array<vec4<f32>, 16>,
+    // A baked place pack (env_baked.wgsl): x its basis gain.
+    baked: vec4<f32>,
 };
 
 struct PushConstants {

@@ -88,7 +88,9 @@ pub struct Image {
     pub format: vk::Format,
     pub extent: vk::Extent2D,
     pub mips: u32,
-    /// One view per requested format, all mips.
+    /// Array layers: 1 for every image but [`Image::array`]'s.
+    pub layers: u32,
+    /// One view per requested format, all mips (and all layers).
     pub views: Vec<vk::ImageView>,
     /// Single-mip view of level 0 in the first format (render target).
     pub level0: vk::ImageView,
@@ -123,6 +125,33 @@ impl Image {
                 .push_next(&mut format_list);
         }
         Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, view_formats, name)
+    }
+
+    /// A 2D array image of `layers` layers and `mips` levels in `format`,
+    /// to be sampled and filled by transfers (and mip blits). Its one view
+    /// (`views[0]`) is a 2D array view of everything.
+    pub fn array(
+        gpu: &Gpu,
+        width: u32,
+        height: u32,
+        layers: u32,
+        format: vk::Format,
+        mips: u32,
+        name: &str,
+    ) -> Result<Image> {
+        let usage = vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::TRANSFER_SRC;
+        let info = image_info(
+            format,
+            width,
+            height,
+            mips,
+            usage,
+            vk::SampleCountFlags::TYPE_1,
+        )
+        .array_layers(layers.max(1));
+        Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, &[format], name)
     }
 
     /// A depth attachment image of `format` with `samples` samples a pixel,
@@ -178,6 +207,7 @@ impl Image {
                 height: info.extent.height,
             },
             mips: info.mip_levels,
+            layers: info.array_layers,
             views: Vec::new(),
             level0: vk::ImageView::null(),
             alloc: None,
@@ -218,8 +248,15 @@ impl Image {
         }
         .ctx("bind image")?;
         for &f in view_formats {
-            self.views
-                .push(view_of(gpu, self.image, f, aspect, 0, self.mips)?);
+            self.views.push(view_of(
+                gpu,
+                self.image,
+                f,
+                aspect,
+                0,
+                self.mips,
+                self.layers,
+            )?);
         }
         // A depth image has no single-mip colour view: it is only ever
         // attached through `views[0]`.
@@ -286,9 +323,12 @@ pub fn view(
         vk::ImageAspectFlags::COLOR,
         base_mip,
         mips,
+        1,
     )
 }
 
+/// A view of `layers` layers from the first: a 2D view of one, else a 2D
+/// array view.
 fn view_of(
     gpu: &Gpu,
     image: vk::Image,
@@ -296,20 +336,26 @@ fn view_of(
     aspect: vk::ImageAspectFlags,
     base_mip: u32,
     mips: u32,
+    layers: u32,
 ) -> Result<vk::ImageView> {
     let sub = vk::ImageSubresourceRange {
         aspect_mask: aspect,
         base_mip_level: base_mip,
         level_count: mips,
         base_array_layer: 0,
-        layer_count: 1,
+        layer_count: layers,
+    };
+    let view_type = if layers > 1 {
+        vk::ImageViewType::TYPE_2D_ARRAY
+    } else {
+        vk::ImageViewType::TYPE_2D
     };
     // SAFETY: valid image and format compatible with it.
     unsafe {
         gpu.device.create_image_view(
             &vk::ImageViewCreateInfo::default()
                 .image(image)
-                .view_type(vk::ImageViewType::TYPE_2D)
+                .view_type(view_type)
                 .format(format)
                 .subresource_range(sub),
             None,

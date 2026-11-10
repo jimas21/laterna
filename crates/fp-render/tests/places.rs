@@ -123,6 +123,7 @@ fn red_and_blue() -> PlaceData {
             fog: None,
         },
         sky: Sky::None,
+        baked: None,
     }
 }
 
@@ -814,4 +815,197 @@ fn msaa_smooths_a_room_edge() {
             px(img, 3, 3)
         );
     }
+}
+
+// ---- Place packs: baked rooms (a mesh and an atlas of baked light) ----
+
+/// A pack folder holding one wall, an 8 m square 2 m in front of the viewer
+/// at the origin: its house texture `house`, its lights-off texture `dark`,
+/// the light of patch 0 white and the other seven patches black. All the
+/// textures are 4 texels square, so every pixel of the wall is one colour.
+fn wall_pack(name: &str, house: [u8; 3], dark: [u8; 3]) -> std::path::PathBuf {
+    use std::io::BufWriter;
+    let dir = std::env::temp_dir().join(format!("fp-gpu-pack-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("pack dir");
+    let png = |file: &str, rgb: [u8; 3]| {
+        let out = BufWriter::new(std::fs::File::create(dir.join(file)).expect("png file"));
+        let mut e = png::Encoder::new(out, 4, 4);
+        e.set_color(png::ColorType::Rgb);
+        e.set_depth(png::BitDepth::Eight);
+        let texels: Vec<u8> = (0..16).flat_map(|_| rgb).collect();
+        e.write_header()
+            .expect("png header")
+            .write_image_data(&texels)
+            .expect("png data");
+    };
+    png("house.png", house);
+    png("dark.png", dark);
+    for i in 0..8 {
+        png(&format!("basis{i}.png"), [255 * u8::from(i == 0); 3]);
+    }
+    let corners = [
+        [-4.0f32, -4.0, -2.0, 0.0, 1.0],
+        [4.0, -4.0, -2.0, 1.0, 1.0],
+        [4.0, 4.0, -2.0, 1.0, 0.0],
+        [-4.0, 4.0, -2.0, 0.0, 0.0],
+    ];
+    let mut mesh = b"LPM1".to_vec();
+    mesh.extend(4u32.to_le_bytes());
+    mesh.extend(6u32.to_le_bytes());
+    for f in corners.iter().flatten() {
+        mesh.extend(f.to_le_bytes());
+    }
+    for i in [0u32, 1, 2, 0, 2, 3] {
+        mesh.extend(i.to_le_bytes());
+    }
+    std::fs::write(dir.join("mesh.bin"), mesh).expect("mesh");
+    let basis: Vec<String> = (0..8).map(|i| format!("\"basis{i}.png\"")).collect();
+    let manifest = format!(
+        r#"{{ "format": 1, "id": "cinema-v2", "name": "Cinema", "version": "test",
+  "screen": {{ "centre": [0.0, 3.5, 0.0], "max": [9.0, 3.8] }},
+  "seats": [ {{ "name": "front", "eye": [0, 2.9, 5.0] }},
+             {{ "name": "middle", "eye": [0, 3.2, 9.0] }},
+             {{ "name": "back", "eye": [0, 3.6, 13.0] }} ],
+  "default_seat": 1,
+  "mesh": {{ "file": "mesh.bin", "vertices": 4, "triangles": 2 }},
+  "textures": {{ "size": 4, "house": "house.png", "dark": "dark.png", "basis": [{}] }},
+  "basis_gain": 1.0, "sky": null }}"#,
+        basis.join(", ")
+    );
+    std::fs::write(dir.join("manifest.json"), manifest).expect("manifest");
+    dir
+}
+
+/// The eye image's mean colour over the four corners, which the wall fills
+/// and the small picture in the middle does not reach.
+fn wall_colour(img: &[u8]) -> [u8; 3] {
+    let spots = corners(img);
+    let sum = |ch: usize| (spots.iter().map(|c| u32::from(c[ch])).sum::<u32>() / 4) as u8;
+    [sum(0), sum(1), sum(2)]
+}
+
+/// The baked wall with the house lights at `house` and the picture's light
+/// at `screen_light`, after five frames of `picture` a second apart (the
+/// colours are measured a little behind and ease). The last left eye.
+fn baked_wall(
+    r: &mut Renderer,
+    e: &mut OffscreenEyes,
+    house: f32,
+    screen_light: f32,
+    picture: Option<&Arc<VideoFrame>>,
+) -> Vec<u8> {
+    let mut last = Vec::new();
+    for k in 0..5 {
+        let env = EnvFrame {
+            place: Place::Cinema,
+            room_to_world: Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0)),
+            house,
+            screen_light,
+            time: f64::from(k),
+        };
+        let mut p = plain_params();
+        p.background = [0.0, 0.0, 0.0, 1.0];
+        p.env = Some(env);
+        let [left, _] = render(r, e, picture, &p, &[]);
+        last = left;
+    }
+    last
+}
+
+fn load_wall(r: &mut Renderer, name: &str, house: [u8; 3], dark: [u8; 3]) {
+    let dir = wall_pack(name, house, dark);
+    let pack = fp_render::env::pack::load(&dir).expect("the fixture pack loads");
+    r.set_place_data(Place::Cinema, pack.into_place_data());
+}
+
+#[test]
+fn a_baked_place_shows_the_house_texture_with_the_lights_up_and_the_dark_one_without() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let (house, dark) = ([180, 90, 30], [12, 24, 36]);
+    load_wall(&mut r, "textures", house, dark);
+    let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    assert!(near(up, house, 4), "lights up: {up:?}, wanted {house:?}");
+    let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
+    assert!(
+        near(down, dark, 4),
+        "lights down: {down:?}, wanted {dark:?}"
+    );
+    // Between the two the colour is the mix, in light (not in codes).
+    let lin = |c: u8| (f32::from(c) / 255.0).powf(2.2);
+    let half = wall_colour(&baked_wall(&mut r, &mut e, 0.5, 0.0, None));
+    let want = srgb([0, 1, 2].map(|k| 0.5 * (lin(house[k]) + lin(dark[k]))));
+    assert!(near(half, want, 6), "half: {half:?}, wanted about {want:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn a_baked_places_light_follows_the_pictures_colour() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let dark = [10, 10, 10];
+    load_wall(&mut r, "light", [180, 90, 30], dark);
+    // Only the top left cell of the picture is lit, red or blue; basis 0
+    // (the white one) is that cell's light, the others are black.
+    let cell = |c: [u8; 3]| {
+        frame(
+            160,
+            90,
+            move |u, v| {
+                if u < 0.25 && v < 0.5 { c } else { [0, 0, 0] }
+            },
+        )
+    };
+    let (red, blue) = (cell([230, 20, 20]), cell([20, 20, 230]));
+    let in_red = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(
+        in_red[0] > 180 && in_red[1] < 90 && in_red[2] < 90,
+        "red: {in_red:?}"
+    );
+    let in_blue = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&blue)));
+    assert!(
+        in_blue[2] > 180 && in_blue[0] < 90 && in_blue[1] < 90,
+        "blue: {in_blue:?}"
+    );
+    // The light off, the picture changes nothing: the dark texture alone.
+    let off = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, Some(&red)));
+    assert!(near(off, dark, 4), "light off: {off:?}");
+    // A stronger Screen light slider makes the wall brighter still.
+    let weak = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.25, Some(&red)));
+    let strong = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(weak[0] + 20 < strong[0], "weak {weak:?}, strong {strong:?}");
+    // And the house lights add to it (a lit room under a film).
+    let both = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 1.0, Some(&red)));
+    assert!(
+        both[1] > strong[1] + 30,
+        "house on: {both:?}, off: {strong:?}"
+    );
+    e.destroy(&r);
+}
+
+#[test]
+fn a_baked_place_replaced_by_another_shows_the_new_one() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    load_wall(&mut r, "first", [200, 20, 20], [0; 3]);
+    let first = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    assert!(is_red(first), "{first:?}");
+    // The pack replaced by another, then by a built-in room, then back.
+    load_wall(&mut r, "second", [20, 20, 200], [0; 3]);
+    let second = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    assert!(is_blue(second), "{second:?}");
+    r.set_place_data(Place::Cinema, Place::Cinema.build_builtin());
+    let room = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    assert!(
+        !is_blue(room) && !is_red(room),
+        "the built-in room: {room:?}"
+    );
+    load_wall(&mut r, "third", [20, 200, 20], [0; 3]);
+    let third = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    assert!(third[1] > 150 && third[0] < 80, "{third:?}");
+    e.destroy(&r);
 }

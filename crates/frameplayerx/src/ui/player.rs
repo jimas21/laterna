@@ -1639,7 +1639,7 @@ pub(super) fn place_controls(
         choices.push(PlaceChoice::YourRoom);
     }
     if places_enabled {
-        choices.extend(Place::ALL.iter().map(|&p| PlaceChoice::Place(p)));
+        choices.extend(Place::PICKER.iter().map(|&p| PlaceChoice::Place(p)));
     }
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);

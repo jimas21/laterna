@@ -16,6 +16,8 @@
 //!   catalogue, seats, meshes and lighting as plain data, no GPU.
 //! - `env_pass`: draws a place (its meshes, then its sky) inside each eye's
 //!   pass, behind the picture.
+//! - `env_baked`: the textures and descriptors of a baked place (a pack,
+//!   [`env::pack`]) that `env_pass` draws with shaders/env_baked.wgsl.
 //! - `place_builder`: builds places on a worker thread, so the first frame
 //!   that shows one does not stall on it.
 //! - `glow`: measures the picture's colour, in a tiny pass of its own, for the
@@ -29,6 +31,7 @@
 
 pub mod capture;
 pub mod env;
+mod env_baked;
 mod env_pass;
 mod glow;
 pub mod gpu;
@@ -89,5 +92,6 @@ pub(crate) const Q10C_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q10
 pub(crate) const PEAK_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/peak.spv"));
 pub(crate) const ENV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/env.spv"));
 pub(crate) const SKY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sky.spv"));
+pub(crate) const ENV_BAKED_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/env_baked.spv"));
 pub(crate) const SCENE_TP10_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/scene_tp10.spv"));

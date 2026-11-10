@@ -29,10 +29,14 @@ pub(crate) enum Built {
 pub(crate) fn build_timed(build: fn(Place) -> PlaceData, place: Place) -> PlaceData {
     let start = Instant::now();
     let data = build(place);
+    let indices = data
+        .baked
+        .as_ref()
+        .map_or(data.indices.len(), |b| b.indices.len());
     log::info!(
         "built place {}: {} triangles in {:.1} ms",
         place.id(),
-        data.indices.len() / 3,
+        indices / 3,
         start.elapsed().as_secs_f64() * 1e3
     );
     data
@@ -161,6 +165,7 @@ mod tests {
                 fog: None,
             },
             sky: Sky::None,
+            baked: None,
         }
     }
 

@@ -222,6 +222,39 @@ What shipped first, and where it differs from the sketch above.
 - **Off switch.** `FRAMEPLAYERX_PLACES=0` stops the app asking for a place. It
   does not undo the depth buffer and the blended picture in the eye pass.
 
+## Place packs (testing)
+
+A place pack is a room made outside the app, in Blender, with its light baked
+into pictures. It replaces one of the built-in rooms. Packs are for testing
+for now: they are copied by hand, and nothing downloads or signs them yet.
+
+- **Where.** One folder per pack in `~/.local/share/frameplayerx/places/`
+  (or the folder named by `FRAMEPLAYERX_PLACES_DIR`). A pack whose id is
+  `cinema` or `cinema-v2` (any number) replaces the Cinema; the highest number
+  wins. Without a pack nothing changes. The app reads the folder once, at
+  start.
+- **What is in it.** A manifest (`manifest.json`: the id, the screen, the
+  seats), a mesh (`mesh.bin`), and PNG textures that are all the same size:
+  the room with the house lights up, the room with them off, and eight
+  pictures of the light from each eighth of the screen. The exporter that
+  writes these is part of the room-building tools, not of the app.
+- **What it does.** The room is drawn as one mesh, and each pixel is the dark
+  picture mixed toward the lit one by the house lights, plus each of the eight
+  screen pictures times the colour the film has in that part of the screen.
+  So the room takes the film's colour as the built-in one does, with the
+  Screen light slider, and the house lights fade the same way. The seats and
+  the screen come from the manifest, so Size still picks Front, Middle or Back.
+- **Limits.** At most 100,000 triangles and 200,000 vertices; textures a power
+  of two up to 4096 pixels across; every number a real number; every file the
+  size its counts say. A pack that breaks one is not used: the app writes a
+  warning to its log and shows the built-in room.
+- **In the code.** `fp-render`'s `env::pack` reads and checks a pack on the
+  place builder's worker thread; `env_baked` uploads the textures; the shader
+  is `env_baked.wgsl`.
+
+The Studio is not in the picker for now. Its code and a stored choice of it
+still work.
+
 ## Milestones
 
 1. Milestone 1 (above), built with CI as the only compiler and the preview

@@ -22,9 +22,11 @@
 pub mod cinema;
 pub mod kit;
 pub mod light;
+pub mod pack;
 pub mod studio;
 
 use glam::{Mat4, Vec2, Vec3};
+use std::sync::Arc;
 
 /// A place the picker offers. More are added here as they are built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,6 +50,10 @@ impl Place {
     /// Every place, in the order the picker lists them.
     pub const ALL: &'static [Place] = &[Place::Cinema, Place::Studio];
 
+    /// The places the picker offers. The Studio is built and tested but not
+    /// offered for now; a stored choice of it still works.
+    pub const PICKER: &'static [Place] = &[Place::Cinema];
+
     /// The stable id stored in settings: lowercase words joined by hyphens.
     pub fn id(self) -> &'static str {
         match self {
@@ -70,15 +76,31 @@ impl Place {
     }
 
     /// The seats and screen frame. Cheap: no meshes are built.
+    ///
+    /// A place with an installed pack (see [`pack`]) has the pack's seats and
+    /// screen.
     pub fn layout(self) -> Layout {
+        if let Some(pack) = pack::replacement(self) {
+            return pack.layout.clone();
+        }
         match self {
             Place::Cinema => cinema::layout(),
             Place::Studio => studio::layout(),
         }
     }
 
-    /// The meshes, palette, lighting and sky.
+    /// The meshes, palette, lighting and sky: the installed pack's when the
+    /// place has one that loads (decoding its textures takes a moment, so
+    /// this is for a worker thread), else the built-in room.
     pub fn build(self) -> PlaceData {
+        if let Some(data) = pack::load_replacement(self) {
+            return data;
+        }
+        self.build_builtin()
+    }
+
+    /// The built-in room, whatever packs are installed.
+    pub fn build_builtin(self) -> PlaceData {
         match self {
             Place::Cinema => cinema::build(),
             Place::Studio => studio::build(),
@@ -287,6 +309,9 @@ pub struct PlaceData {
     pub palette: Vec<Material>,
     pub lighting: Lighting,
     pub sky: Sky,
+    /// A pack's baked mesh and textures, drawn instead of `vertices`,
+    /// `indices` and `palette` (which are empty then).
+    pub baked: Option<Arc<pack::Baked>>,
 }
 
 /// What the app hands the renderer each frame.
@@ -371,6 +396,14 @@ mod tests {
         for &seat in SeatName::ALL {
             assert_eq!(SeatName::from_id(seat.id()), Some(seat));
         }
+    }
+
+    #[test]
+    fn the_picker_offers_the_cinema_and_not_the_studio() {
+        assert_eq!(Place::PICKER, &[Place::Cinema]);
+        assert!(Place::PICKER.iter().all(|p| Place::ALL.contains(p)));
+        // Hidden, not removed: a stored choice of it still resolves.
+        assert_eq!(Place::from_id("studio"), Some(Place::Studio));
     }
 
     #[test]

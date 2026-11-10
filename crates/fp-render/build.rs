@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 /// Each SPIR-V module and the WGSL files joined into it: WGSL has no
 /// includes, so shared code is put in front.
-const MODULES: [(&str, &[&str]); 8] = [
+const MODULES: [(&str, &[&str]); 9] = [
     ("scene", &["hdr", "dither", "scene", "planes"]),
     ("scene_tp10", &["hdr", "dither", "scene", "planes_tp10"]),
     ("quad", &["quad"]),
@@ -13,6 +13,7 @@ const MODULES: [(&str, &[&str]); 8] = [
     ("peak", &["hdr", "peak"]),
     ("env", &["dither", "envcommon", "env"]),
     ("sky", &["dither", "envcommon", "sky"]),
+    ("env_baked", &["dither", "envcommon", "env_baked"]),
 ];
 
 fn main() {

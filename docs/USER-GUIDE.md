@@ -888,7 +888,7 @@ screen movements (keyframes) shows those, so dragging it seems to do nothing.
 Settings › General › Window controls turns the bar and handle off. They also
 stay out of sight inside a room (Cinema), whose screen is where the room puts
 it: the Size button picks a seat to change how big it looks. They return with
-the Studio or Plain.
+Plain.
 
 The browse panel, the adjust panel, the performance overlay and the keyboard
 have the same kind of bar under them. It appears when your laser comes near
@@ -969,14 +969,14 @@ type on your phone through the web remote.
 ## Places
 
 A place is a setting round a flat video, in place of the empty background: a
-cinema, or a studio. **Plain**, the empty background, is what you get until
+cinema. **Plain**, the empty background, is what you get until
 you pick one. 180°, 360° and fisheye videos fill your view, so they hide the
 place. **Your room** (see [Passthrough videos](#passthrough-videos)) wins over
 a place while it shows.
 
 - **Pick one while a video plays:** press the film button on the control bar,
   beside the armchair. It opens the adjust panel's Position tab with the
-  picker at the top: Plain, Your room, Cinema and Studio.
+  picker at the top: Plain, Your room and Cinema.
 - **Or set it for every video** in Settings › Places. It is the same
   choice: it stays until you change it, and a restart keeps it.
 - **Size.** The cinema is laid out like a real stadium cinema: a stage with
@@ -991,8 +991,7 @@ a place while it shows.
 - **Seat height.** Beside the seats, a slider raises or lowers where your
   eyes sit in the room, from 30 cm lower to 30 cm higher in steps of 5 cm.
   Use it if you sit low in a bed or a deep couch and the screen looks too
-  high or too low. Each place remembers its own. It is for rooms; the studio
-  has no seat to move.
+  high or too low. Each place remembers its own.
 - **House lights while playing.** The lights dim in about two seconds when
   the video plays, and come back up in about one when you pause, it ends or
   you close it. A pause to buffer leaves them as they are. The slider sets how
@@ -1003,8 +1002,7 @@ a place while it shows.
   steady).
 - **The screen.** A room has a screen of its own, so the Position tab leaves
   out the screen's distance, width and curvature there: pick a Size to change
-  how big it looks. The studio keeps your own screen settings. A place
-  replaces the background colour.
+  how big it looks. A place replaces the background colour.
 - **Screen follows you** (the bed button) does nothing inside a place: the
   place stays where it is, and the button's tip says so. Lie back and
   **recenter** to bring the whole place in front of you, tilted with you,

@@ -204,6 +204,7 @@ pub fn build() -> PlaceData {
         palette,
         lighting: lighting(),
         sky: Sky::None,
+        baked: None,
     }
 }
 
