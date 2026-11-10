@@ -55,6 +55,14 @@ if [ -n "${LATERNA_PACKS_DIR:-}" ] && [ -d "$LATERNA_PACKS_DIR" ]; then
   mkdir -p "$stage/places"
   cp -r "$LATERNA_PACKS_DIR"/. "$stage/places/"
 fi
+if [ -d "$stage/places" ]; then
+  for p in "$stage/places"/*/; do
+    [ -d "$p" ] && echo "== bundled place pack: $(basename "$p") ($(du -sk "$p" | cut -f1) KiB)"
+  done
+  echo "== place packs total: $(du -sk "$stage/places" | cut -f1) KiB"
+else
+  echo "== no place packs bundled (LATERNA_PACKS_DIR unset or missing)"
+fi
 echo "$version" > "$stage/VERSION"
 # The Rust crates compiled into the binary, then the licence, copyright and
 # notice files each crate ships, which their licences ask to go with the
