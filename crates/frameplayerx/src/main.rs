@@ -38,7 +38,10 @@ mod world;
 use app::{App, FrameInput, LayerDraw};
 use fp_render::timing::{self, Series};
 use fp_render::{Gpu, Quality, Renderer, VideoParams};
-use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrOptions, XrSession, XrStats, scaled_eye_size};
+use fp_xr::{
+    DashboardRate, QuadSubmit, SessionEvent, XrContext, XrOptions, XrSession, XrStats, fit_layers,
+    scaled_eye_size,
+};
 use settings::{RenderScale, Settings};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -858,6 +861,11 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     let mut copied: std::collections::HashMap<u64, (fp_render::PanelId, u64)> =
         std::collections::HashMap::new();
     let mut headset_on = false;
+    // The dashboard button: at most one request in two seconds, and whether
+    // the layers trimmed to the runtime's limit have been logged.
+    let mut dashboard_rate = DashboardRate::default();
+    let has_dashboard = ctx.has_dashboard();
+    let mut trim_logged = false;
     loop {
         let event = session.poll()?;
         // Acted on here, not in a frame: no frame may be rendered once the
@@ -926,8 +934,14 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                     .map(|ns| 1e9 / ns as f32),
                 recentred,
                 eye_px_per_tan,
+                dashboard: has_dashboard,
             },
         );
+        // Started without waiting, off this thread: the video keeps playing
+        // under SteamVR's dashboard and the session stays up.
+        if out.open_dashboard && dashboard_rate.ok(Instant::now()) {
+            ctx.open_steamvr_dashboard();
+        }
         frames += 1;
         video_frames += out.frame.is_some() as u64;
         if let Err(e) = renderer.set_video(out.frame.as_ref()) {
@@ -996,6 +1010,20 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                     }
                 }
             }
+        }
+        // The projection layer takes one of the runtime's layers. If the quads
+        // are more than fit, the nearest (the last) are kept.
+        let keep = fit_layers(session.max_layers(), submits.len());
+        if submits.len() > keep {
+            if !trim_logged {
+                trim_logged = true;
+                log::warn!(
+                    "{} quad layers over the runtime's {} per frame: showing the nearest {keep}",
+                    submits.len(),
+                    session.max_layers()
+                );
+            }
+            submits.drain(..submits.len() - keep);
         }
         renderer.end_frame()?;
         session.set_passthrough(out.passthrough);

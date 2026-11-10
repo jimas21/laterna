@@ -12,13 +12,16 @@
 //! | `look YAW PITCH [ROLL]` | head direction (and roll, to lie on your side) in degrees |
 //! | `recenter` | recenter on where the head faces |
 //! | `aim YAW PITCH` | controller ray direction in degrees |
-//! | `point PANEL X Y` | aim at a panel (`main`, `bar`, `adjust`, `keyboard`, `tracks`, `perf`) at fractional X, Y |
+//! | `point PANEL X Y` | aim at a panel (`main`, `bar`, `adjust`, `keyboard`, `tracks`, `perf`, `window-bar`, `window-corner`) at fractional X, Y (outside 0 to 1 is past its edge) |
 //! | `click` | pull and release the trigger |
 //! | `button a/b/x/y/menu/stick/shoulder` | press and release a right-hand button |
 //! | `stick X Y FRAMES` | hold the thumbstick |
 //! | `squeeze` | squeeze and release the grip |
 //! | `grip V` / `trigger V` | hold the grip / trigger at V (0..1) until changed |
 //! | `status` | print what is playing and the view settings |
+//! | `dashboard` | press the dashboard button's action (`status` counts them) |
+//! | `expect-dashboard N` | fail the script unless the dashboard button was pressed N times |
+//! | `expect FIELD OP VALUE` | fail the script unless the number after `FIELD=` in the status line (`width`, `distance`, `yaw`, ...) is `<` or `>` VALUE, `==` it (to 0.01) or `~` it (within 10 %) |
 //! | `open LOCATION` | open a file or URL |
 //! | `testcard HEIGHT` | make the test card (HEIGHT 1080 or 2160) and open it |
 //! | `hide-controls` | hide the player's panels, as the Hide button does |
@@ -113,6 +116,7 @@ impl Sim {
                 display_hz: None,
                 recentred: false,
                 eye_px_per_tan: Some(pixels_per_tan(&proj, self.size)),
+                dashboard: true,
             },
         );
         if let Err(e) = self.renderer.set_video(out.frame.as_ref()) {
@@ -560,6 +564,20 @@ impl Sim {
                 self.app.apply(crate::ui::Action::Recenter);
                 self.run_frames(2)?;
             }
+            // Presses the dashboard button as its action does (the button
+            // itself is clicked with `point` and `click`).
+            Some("dashboard") => {
+                self.app.apply(crate::ui::Action::OpenDashboard);
+                self.run_frames(2)?;
+            }
+            // Fails the script unless the dashboard button was pressed N times.
+            Some("expect-dashboard") => {
+                let want = num(1)? as u32;
+                let got = self.app.dashboard_requests();
+                if got != want {
+                    return Err(format!("{got} dashboard requests, expected {want}").into());
+                }
+            }
             Some("aim") => {
                 self.hand.aim = Some((self.hand_pos(), dir_quat(num(1)?, num(2)?)));
             }
@@ -606,6 +624,19 @@ impl Sim {
             Some("grip") => self.hand.squeeze = num(1)?,
             Some("trigger") => self.hand.trigger = num(1)?,
             Some("status") => println!("status: {}", self.app.status_line()),
+            Some("expect") => {
+                let field = parts.get(1).ok_or("expect needs a field")?;
+                let op = parts.get(2).ok_or("expect needs <, >, == or ~")?;
+                let want = num(3)?;
+                let status = self.app.status_line();
+                let got = status_field(&status, field)
+                    .ok_or(format!("no number {field} in {status:?}"))?;
+                if !compares(got, op, want)? {
+                    let said = format!("expected {field} {op} {want}, got {got}: {status}");
+                    return Err(said.into());
+                }
+                println!("expect: {field} {op} {want} (is {got})");
+            }
             // The GPU's time per frame since the last `gpu`: `gpu`.
             Some("gpu") => {
                 if let Some(line) = self.gpu_ms.take_line() {
@@ -1004,6 +1035,26 @@ pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// The number after `FIELD=` in a status line.
+fn status_field(status: &str, field: &str) -> Option<f32> {
+    let key = format!("{field}=");
+    status
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix(key.as_str())?.parse().ok())
+}
+
+/// Whether `got OP want` holds, for the `expect` command's `<`, `>`, `==`
+/// (to 0.01) and `~` (within 10 %).
+fn compares(got: f32, op: &str, want: f32) -> Result<bool, Error> {
+    Ok(match op {
+        "<" => got < want,
+        ">" => got > want,
+        "==" => (got - want).abs() < 0.01,
+        "~" => (got - want).abs() <= 0.1 * want.abs(),
+        other => return Err(format!("no comparison {other:?} (use <, >, == or ~)").into()),
+    })
+}
+
 /// `line` trimmed, without its comment.
 fn without_comment(line: &str) -> &str {
     let line = line.trim();
@@ -1015,7 +1066,27 @@ fn without_comment(line: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::without_comment;
+    use super::{compares, status_field, without_comment};
+
+    #[test]
+    fn expect_reads_numbers_off_the_status_line() {
+        let status = "A Clip pos=1.0/10.0 yaw=12.5 pitch=-3.0 width=6.00 chrome=shown";
+        assert_eq!(status_field(status, "yaw"), Some(12.5));
+        assert_eq!(status_field(status, "pitch"), Some(-3.0));
+        assert_eq!(status_field(status, "width"), Some(6.0));
+        // Not a number, a part of another word, or not there.
+        assert_eq!(status_field(status, "chrome"), None);
+        assert_eq!(status_field(status, "aw"), None);
+        assert_eq!(status_field(status, "zoom"), None);
+        assert!(compares(7.0, ">", 6.5).unwrap());
+        assert!(!compares(6.0, ">", 6.5).unwrap());
+        assert!(compares(6.0, "<", 6.5).unwrap());
+        assert!(compares(6.004, "==", 6.0).unwrap());
+        assert!(!compares(6.1, "==", 6.0).unwrap());
+        assert!(compares(6.4, "~", 6.0).unwrap());
+        assert!(!compares(7.0, "~", 6.0).unwrap());
+        assert!(compares(1.0, "!=", 6.0).is_err());
+    }
 
     #[test]
     fn comments_leave_addresses_whole() {

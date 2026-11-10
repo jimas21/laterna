@@ -24,6 +24,9 @@ impl App {
                 over_ui,
                 click_outside,
                 playing,
+                // A hand holding a window control (app/chrome) has its stick
+                // push or pull the screen instead.
+                held: self.chrome.held_by(),
                 head: input.head.map(|(pos, _)| pos),
                 dt: input.dt,
             },
@@ -199,12 +202,12 @@ impl App {
                     // as the hand does, and goes further as it goes away (a
                     // 180°/360° picture has no distance, and a room's screen
                     // is where the room has it).
-                    p.settings.yaw = y0 + yaw;
-                    p.settings.pitch = (p0 + pitch).clamp(-90.0, 90.0);
-                    if p.format.projection == Projection::Flat && !in_room {
-                        p.settings.screen_distance = pushed_distance(d0, distance, SCREEN_DISTANCE);
-                    }
-                    p.settings_dirty = true;
+                    let distance = if in_room {
+                        p.settings.screen_distance
+                    } else {
+                        pushed_distance(d0, distance, SCREEN_DISTANCE)
+                    };
+                    drag_view(p, y0 + yaw, p0 + pitch, distance);
                 }
             }
             Cmd::DragEnd => self.drag_start = None,
@@ -220,8 +223,11 @@ impl App {
                 }
             }
             Cmd::Page(dir) => {
-                if let Some(i) = self.pointer.hovered() {
-                    let p = &mut self.panels[i];
+                // Only the app's own panels page. The performance overlay and
+                // the window controls come after them in what the pointer is
+                // given, so what is pointed at may not be one of `panels`.
+                let pointed = self.pointer.hovered_below(PERF);
+                if let Some(p) = pointed.and_then(|i| self.panels.get_mut(i)) {
                     if ui::widgets::over_slider(&p.ctx) {
                         p.push(key(if dir > 0 {
                             egui::Key::ArrowRight
@@ -397,3 +403,15 @@ impl App {
 /// Seconds into a chapter within which Previous chapter goes to the one
 /// before it rather than its start.
 const CHAPTER_GRACE: f64 = 3.0;
+
+/// Puts the open video's picture where a drag took it: turned `yaw` and
+/// `pitch` degrees, and a flat screen `distance` metres away (a 180°/360°
+/// picture has no distance).
+pub(super) fn drag_view(p: &mut Playback, yaw: f32, pitch: f32, distance: f32) {
+    p.settings.yaw = yaw;
+    p.settings.pitch = pitch.clamp(-90.0, 90.0);
+    if p.format.projection == Projection::Flat {
+        p.settings.screen_distance = distance;
+    }
+    p.settings_dirty = true;
+}

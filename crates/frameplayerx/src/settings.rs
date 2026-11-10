@@ -162,6 +162,9 @@ pub struct Settings {
     pub resume_frames: bool,
     /// Flat videos and the panels follow the head ([`crate::world::follow`]).
     pub follow: bool,
+    /// A flat video screen has a bar under it to move it by and a handle at
+    /// its bottom right corner to resize it (`app::chrome`).
+    pub window_controls: bool,
     /// The video playing starts again when it ends.
     pub loop_video: bool,
     /// The list a video was opened from plays through, the next starting
@@ -315,6 +318,7 @@ impl Default for Settings {
             make_thumbnails: true,
             resume_frames: true,
             follow: false,
+            window_controls: true,
             loop_video: false,
             autoplay: false,
             loop_playlist: false,

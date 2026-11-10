@@ -41,7 +41,9 @@ struct Params {
     extra: vec4<f32>,
     // x width, y height, z 1/width, w 1/height (luma texels)
     tex_size: vec4<f32>,
-    // Premultiplied; alpha 0 lets passthrough show through.
+    // Premultiplied; alpha 0 lets passthrough show through. The shader no
+    // longer reads it: the clear colour is the same and the pipeline blends
+    // over it. Kept for the layout (the TP10 parameters mirror it).
     bg_color: vec4<f32>,
     // Chroma key: x, y the key colour's Cb, Cr; z similarity; w smoothness
     key: vec4<f32>,
@@ -388,7 +390,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let world_dir = normalize(far.xyz / far.w - origin);
 
     if (params.screen.w < 0.5) {
-        return params.bg_color;
+        return vec4<f32>(0.0);
     }
 
     var uv: vec2<f32>;
@@ -454,7 +456,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     // Also false for NaN.
     if (!hit || !(cov > 0.0)) {
-        return params.bg_color;
+        return vec4<f32>(0.0);
     }
 
     // Edge pixels centred just outside the picture read its border texel,
@@ -546,9 +548,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if ((params.display.y & QUALITY_DITHER) != 0u) {
         col = dither_linear(col, in.pos.xy);
     }
-    // Over the (premultiplied) background: keyed-out pixels show it.
-    // Premultiplied, like bg_color and the pipeline (blending is off), so a
-    // partly covered edge pixel is a plain mix towards the background.
-    let shown = vec4<f32>(col * alpha + params.bg_color.rgb * (1.0 - alpha), alpha + params.bg_color.a * (1.0 - alpha));
-    return mix(params.bg_color, shown, vec4<f32>(cov));
+    // Premultiplied: the pipeline blends this over whatever is behind the
+    // picture (ONE, ONE_MINUS_SRC_ALPHA), the clear colour or a place. Pixels
+    // the picture does not cover, and keyed-out ones, return less than full
+    // alpha so that shows through; a partly covered edge pixel is a plain mix
+    // towards it.
+    return vec4<f32>(col * alpha * cov, alpha * cov);
 }

@@ -156,14 +156,15 @@ fn fill_entry(e: &mut Map, spec: &ShortcutSpec, new: bool) {
     e.set("StartDir", Value::Str(quote(&spec.start_dir)));
     e.set("icon", Value::Str(spec.icon.clone()));
     e.set("LaunchOptions", Value::Str(spec.launch_options.clone()));
-    let defaults: [(&str, Value); 11] = [
+    // Steam's "Include in VR Library". With it off, Steam files the app as a flat title, and on
+    // the Frame that showed as shimmer on high-contrast edges. Set on every install, so an
+    // older entry made with it off is corrected too.
+    e.set("OpenVR", Value::Int(1));
+    let defaults: [(&str, Value); 10] = [
         ("ShortcutPath", Value::Str(String::new())),
         ("IsHidden", Value::Int(0)),
         ("AllowDesktopConfig", Value::Int(1)),
         ("AllowOverlay", Value::Int(1)),
-        // UNVERIFIED: whether the Frame wants OpenVR=1 for a native OpenXR
-        // title. 0 is Steam's default for non-Steam shortcuts.
-        ("OpenVR", Value::Int(0)),
         ("Devkit", Value::Int(0)),
         ("DevkitGameID", Value::Str(String::new())),
         ("DevkitOverrideAppID", Value::Int(0)),
@@ -300,9 +301,11 @@ mod tests {
         assert_eq!(e.get_str("StartDir"), Some("\"/home/steam/frameplayerx\""));
         assert_eq!(e.get_str("icon"), Some(spec().icon.as_str()));
         assert_eq!(e.get_str("LaunchOptions"), Some(""));
+        assert_eq!(e.get_int("OpenVR"), Some(1));
         assert_eq!(e.get_map("tags").and_then(|t| t.get_str("0")), Some("VR"));
 
-        // Update: user-owned fields survive, ours change, no duplicate.
+        // Update: user-owned fields survive, ours change, no duplicate; an entry made with
+        // "Include in VR Library" off is switched on.
         let mut doc = doc2;
         if let Some(e) = doc
             .get_map_mut("shortcuts")
@@ -310,6 +313,7 @@ mod tests {
         {
             e.set("LastPlayTime", Value::Int(1_700_000_000));
             e.set("IsHidden", Value::Int(1));
+            e.set("OpenVR", Value::Int(0));
         }
         let mut s2 = spec();
         s2.launch_options = "--verbose".into();
@@ -320,6 +324,7 @@ mod tests {
         assert_eq!(e.get_int("LastPlayTime"), Some(1_700_000_000));
         assert_eq!(e.get_int("IsHidden"), Some(1));
         assert_eq!(e.get_str("LaunchOptions"), Some("--verbose"));
+        assert_eq!(e.get_int("OpenVR"), Some(1));
         assert_eq!(e.get_map("tags").unwrap().0.len(), 1);
 
         // Renamed in the library (different app id) is still found by Exe.

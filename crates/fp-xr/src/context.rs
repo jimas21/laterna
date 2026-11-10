@@ -93,6 +93,79 @@ pub struct XrContext {
     /// Extensions we enabled.
     pub enabled: xr::ExtensionSet,
     pub blend_modes: Vec<xr::EnvironmentBlendMode>,
+    /// The most composition layers one frame may hold, the projection layer
+    /// included (OpenXR guarantees at least 16).
+    max_layers: u32,
+    /// SteamVR's `vrcmd` tool is beside the runtime, so its dashboard can be
+    /// opened from the app (checked once, at start).
+    has_dashboard: bool,
+}
+
+/// The fewest layers per frame OpenXR allows a runtime to offer.
+const MIN_LAYERS: u32 = 16;
+
+/// The path of SteamVR's `vrcmd` tool, beside the runtime library; `None` on
+/// other runtimes.
+fn vrcmd_path(manifest: &RuntimeManifest) -> Option<std::path::PathBuf> {
+    if !manifest.is_steamvr {
+        return None;
+    }
+    Some(
+        std::path::Path::new(&manifest.resolved_library_path)
+            .parent()?
+            .join("vrcmd"),
+    )
+}
+
+/// Starts `vrcmd` with `arg`, with Steam's variables removed: with them
+/// SteamVR would file vrcmd under this app, and the library path is the
+/// launcher's, for our own libraries.
+fn run_vrcmd(vrcmd: &std::path::Path, arg: &str) -> Option<std::process::Child> {
+    let child = std::process::Command::new(vrcmd)
+        .arg(arg)
+        .env_remove("SteamAppId")
+        .env_remove("SteamGameId")
+        .env_remove("SteamOverlayGameId")
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        Ok(c) => {
+            log::info!("vrcmd {arg}");
+            Some(c)
+        }
+        Err(e) => {
+            log::warn!("{}: {e}", vrcmd.display());
+            None
+        }
+    }
+}
+
+/// Lets a request through at most once in [`DashboardRate::GAP`], so a
+/// button pressed over and over starts `vrcmd` once.
+#[derive(Debug, Default)]
+pub struct DashboardRate {
+    last: Option<std::time::Instant>,
+}
+
+impl DashboardRate {
+    /// The time that must pass between two requests.
+    pub const GAP: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Whether a request at `now` goes ahead; if so it counts.
+    pub fn ok(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .last
+            .is_some_and(|t| now.saturating_duration_since(t) < Self::GAP)
+        {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
 }
 
 impl XrContext {
@@ -178,6 +251,11 @@ impl XrContext {
             "OpenXR blend modes {blend_modes:?}; XR_KHR_convert_timespec_time offered: {}",
             avail.khr_convert_timespec_time
         );
+        let reported = sp.graphics_properties.max_layer_count;
+        let max_layers = reported.max(MIN_LAYERS);
+        let has_dashboard = vrcmd_path(&manifest).is_some_and(|p| p.is_file());
+        log::info!("OpenXR layers per frame: {reported} reported, {max_layers} used");
+        log::info!("SteamVR dashboard button available: {has_dashboard}");
         Ok(XrContext {
             instance,
             system,
@@ -186,6 +264,8 @@ impl XrContext {
             system_name: sp.system_name,
             enabled: e,
             blend_modes,
+            max_layers,
+            has_dashboard,
         })
     }
 
@@ -207,35 +287,41 @@ impl XrContext {
 
     /// Starts SteamVR's `vrcmd` tool, beside the runtime library, with `arg`.
     fn vrcmd(&self, arg: &str) -> Option<std::process::Child> {
-        if !self.manifest.is_steamvr {
-            return None;
+        run_vrcmd(&vrcmd_path(&self.manifest)?, arg)
+    }
+
+    /// The most composition layers one frame may hold, the projection layer
+    /// included.
+    pub fn max_layers(&self) -> u32 {
+        self.max_layers
+    }
+
+    /// Whether [`XrContext::open_steamvr_dashboard`] can do anything: the
+    /// runtime is SteamVR and its `vrcmd` tool is there.
+    pub fn has_dashboard(&self) -> bool {
+        self.has_dashboard
+    }
+
+    /// Opens SteamVR's dashboard over the app without waiting, or even
+    /// starting the tool on the caller's thread (a fork and exec can take
+    /// longer than a frame). The session stays up and goes from focused to
+    /// visible until the dashboard is closed. Returns whether a request was
+    /// made; false on other runtimes.
+    pub fn open_steamvr_dashboard(&self) -> bool {
+        if !self.has_dashboard {
+            return false;
         }
-        let vrcmd = std::path::Path::new(&self.manifest.resolved_library_path)
-            .parent()?
-            .join("vrcmd");
-        // With Steam's variables SteamVR would file vrcmd under this app, and
-        // the library path is the launcher's, for our own libraries.
-        let child = std::process::Command::new(&vrcmd)
-            .arg(arg)
-            .env_remove("SteamAppId")
-            .env_remove("SteamGameId")
-            .env_remove("SteamOverlayGameId")
-            .env_remove("LD_LIBRARY_PATH")
-            .env_remove("LD_PRELOAD")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        match child {
-            Ok(c) => {
-                log::info!("vrcmd {arg}");
-                Some(c)
-            }
-            Err(e) => {
-                log::warn!("{}: {e}", vrcmd.display());
-                None
-            }
-        }
+        let Some(path) = vrcmd_path(&self.manifest) else {
+            return false;
+        };
+        std::thread::Builder::new()
+            .name("vrcmd".into())
+            .spawn(move || {
+                if let Some(mut c) = run_vrcmd(&path, "--showdashboard") {
+                    let _ = c.wait();
+                }
+            })
+            .is_ok()
     }
 
     /// The per-eye image sizes the runtime recommends and allows.
@@ -351,6 +437,19 @@ impl fp_render::Creator for XrCreator<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_dashboard_request_waits_two_seconds() {
+        let mut rate = DashboardRate::default();
+        let t0 = std::time::Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        assert!(rate.ok(t0), "the first goes ahead");
+        assert!(!rate.ok(at(1)));
+        assert!(!rate.ok(at(1999)));
+        assert!(rate.ok(at(2000)), "one after 2 s");
+        assert!(!rate.ok(at(3000)), "counted from the last that went ahead");
+        assert!(rate.ok(at(4000)));
+    }
 
     const SIZES: EyeSizes = EyeSizes {
         recommended: (1440, 1440),

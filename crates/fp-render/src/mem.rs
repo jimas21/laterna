@@ -109,41 +109,54 @@ impl Image {
     ) -> Result<Image> {
         let format = view_formats[0];
         let mut format_list = vk::ImageFormatListCreateInfo::default().view_formats(view_formats);
-        let mut info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
-            .extent(vk::Extent3D {
-                width: width.max(1),
-                height: height.max(1),
-                depth: 1,
-            })
-            .mip_levels(mips.max(1))
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(usage)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let mut info = image_info(format, width, height, mips, usage);
         if view_formats.len() > 1 {
             info = info
                 .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
                 .push_next(&mut format_list);
         }
+        Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, view_formats, name)
+    }
+
+    /// A depth attachment image of `format`, for rendering only: its
+    /// contents never leave the tile, so it is a transient attachment. Its
+    /// single view (`views[0]`) has the depth aspect.
+    pub fn depth(
+        gpu: &Gpu,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        name: &str,
+    ) -> Result<Image> {
+        let usage = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
+        let info = image_info(format, width, height, 1, usage);
+        Image::create(gpu, &info, vk::ImageAspectFlags::DEPTH, &[format], name)
+    }
+
+    fn create(
+        gpu: &Gpu,
+        info: &vk::ImageCreateInfo,
+        aspect: vk::ImageAspectFlags,
+        view_formats: &[vk::Format],
+        name: &str,
+    ) -> Result<Image> {
         // SAFETY: valid create info.
-        let image = unsafe { gpu.device.create_image(&info, None) }.ctx("create image")?;
+        let image = unsafe { gpu.device.create_image(info, None) }.ctx("create image")?;
         let mut img = Image {
             image,
-            format,
+            format: info.format,
             extent: vk::Extent2D {
-                width: width.max(1),
-                height: height.max(1),
+                width: info.extent.width,
+                height: info.extent.height,
             },
-            mips: mips.max(1),
+            mips: info.mip_levels,
             views: Vec::new(),
             level0: vk::ImageView::null(),
             alloc: None,
         };
         // Out of memory, what was made so far is given back.
-        if let Err(e) = img.back(gpu, view_formats, name) {
+        if let Err(e) = img.back(gpu, aspect, view_formats, name) {
             img.destroy(gpu);
             return Err(e);
         }
@@ -151,7 +164,13 @@ impl Image {
     }
 
     /// Gives the image its memory and views.
-    fn back(&mut self, gpu: &Gpu, view_formats: &[vk::Format], name: &str) -> Result<()> {
+    fn back(
+        &mut self,
+        gpu: &Gpu,
+        aspect: vk::ImageAspectFlags,
+        view_formats: &[vk::Format],
+        name: &str,
+    ) -> Result<()> {
         // SAFETY: valid image.
         let requirements = unsafe { gpu.device.get_image_memory_requirements(self.image) };
         let alloc = self.alloc.insert(
@@ -172,9 +191,14 @@ impl Image {
         }
         .ctx("bind image")?;
         for &f in view_formats {
-            self.views.push(view(gpu, self.image, f, 0, self.mips)?);
+            self.views
+                .push(view_of(gpu, self.image, f, aspect, 0, self.mips)?);
         }
-        self.level0 = view(gpu, self.image, self.format, 0, 1)?;
+        // A depth image has no single-mip colour view: it is only ever
+        // attached through `views[0]`.
+        if aspect == vk::ImageAspectFlags::COLOR {
+            self.level0 = view(gpu, self.image, self.format, 0, 1)?;
+        }
         Ok(())
     }
 
@@ -195,6 +219,30 @@ impl Image {
     }
 }
 
+/// The `CreateInfo` of a single-sample, optimally tiled 2D image.
+fn image_info<'a>(
+    format: vk::Format,
+    width: u32,
+    height: u32,
+    mips: u32,
+    usage: vk::ImageUsageFlags,
+) -> vk::ImageCreateInfo<'a> {
+    vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(format)
+        .extent(vk::Extent3D {
+            width: width.max(1),
+            height: height.max(1),
+            depth: 1,
+        })
+        .mip_levels(mips.max(1))
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(usage)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+}
+
 pub fn view(
     gpu: &Gpu,
     image: vk::Image,
@@ -202,6 +250,31 @@ pub fn view(
     base_mip: u32,
     mips: u32,
 ) -> Result<vk::ImageView> {
+    view_of(
+        gpu,
+        image,
+        format,
+        vk::ImageAspectFlags::COLOR,
+        base_mip,
+        mips,
+    )
+}
+
+fn view_of(
+    gpu: &Gpu,
+    image: vk::Image,
+    format: vk::Format,
+    aspect: vk::ImageAspectFlags,
+    base_mip: u32,
+    mips: u32,
+) -> Result<vk::ImageView> {
+    let sub = vk::ImageSubresourceRange {
+        aspect_mask: aspect,
+        base_mip_level: base_mip,
+        level_count: mips,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
     // SAFETY: valid image and format compatible with it.
     unsafe {
         gpu.device.create_image_view(
@@ -209,7 +282,7 @@ pub fn view(
                 .image(image)
                 .view_type(vk::ImageViewType::TYPE_2D)
                 .format(format)
-                .subresource_range(range(base_mip, mips)),
+                .subresource_range(sub),
             None,
         )
     }
@@ -221,6 +294,17 @@ pub fn range(base_mip: u32, mips: u32) -> vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR,
         base_mip_level: base_mip,
         level_count: mips,
+        base_array_layer: 0,
+        layer_count: 1,
+    }
+}
+
+/// The one level of a depth-only image.
+pub fn depth_range() -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::DEPTH,
+        base_mip_level: 0,
+        level_count: 1,
         base_array_layer: 0,
         layer_count: 1,
     }
@@ -314,4 +398,16 @@ pub const SHADER_READ: (vk::PipelineStageFlags2, vk::AccessFlags2) = (
 pub const COLOR_WRITE: (vk::PipelineStageFlags2, vk::AccessFlags2) = (
     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
     vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+);
+
+/// Depth attachment reads and writes (the tests before and after a draw).
+pub const DEPTH_WRITE: (vk::PipelineStageFlags2, vk::AccessFlags2) = (
+    vk::PipelineStageFlags2::from_raw(
+        vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS.as_raw()
+            | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS.as_raw(),
+    ),
+    vk::AccessFlags2::from_raw(
+        vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw(),
+    ),
 );

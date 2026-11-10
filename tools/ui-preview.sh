@@ -286,6 +286,12 @@ cat >"$script" <<EOF
 # Library scan and thumbnails. Nothing watched yet: Home offers sources.
 wait 6
 panel main home
+# The Dashboard button beside Quit (no video open): pointed at, then pressed.
+point main 0.9076 0.052
+frames 8
+panel main home-hover-dashboard
+click
+expect-dashboard 1
 # The first source tile pointed at: lifted whole at the row's edge.
 point main 0.13 0.70
 frames 8
@@ -525,6 +531,11 @@ panel main history
 screen home
 frames 15
 panel main home-watched
+# The Dashboard button is there with a video open too (the header then shows
+# Back to video, not Quit); pressing it leaves the video playing.
+panel main dashboard-with-video
+dashboard
+expect-dashboard 2
 # Subtitles in Settings › Sound and subtitles, with the languages listed.
 screen settings sound
 languages
@@ -638,6 +649,53 @@ EOF
       --script "$card_home/card.fps" --size "$size"
   done
   cp "$card_home/.cache/frameplayerx/testcard-2160p.png" "$out/testcard-source-2160p.png"
+  # The window controls under a flat screen (the card's is 16:9, 6 m wide at
+  # 4 m): the move bar and the resize handle. Each drag takes hold first (the
+  # press lands on the handle) and only then moves the hand. The aim is
+  # absolute (yaw, pitch): the first ends a little further right and down
+  # than the corner, the second fifteen degrees to the left of the bar. Then
+  # it is put back, for the look of it. The expect lines fail this step if
+  # the screen did not grow or turn.
+  cat >"$card_home/window.fps" <<EOF
+testcard 2160
+wait-playing
+pause
+wait 0.6
+frames 6
+shot window-chrome
+point window-corner 0.2 0.2
+trigger 1
+frames 2
+aim -44 -23
+frames 30
+trigger 0
+frames 3
+expect width > 6.5
+shot window-chrome-resized
+point window-bar 0.5 0.5
+trigger 1
+frames 2
+aim 18 -22
+frames 30
+trigger 0
+frames 3
+expect yaw > 10
+shot window-moved
+recenter
+point window-corner 0.2 0.2
+trigger 1
+frames 2
+aim -38 -17
+frames 30
+trigger 0
+frames 3
+expect width < 6.8
+shot window-chrome-back
+EOF
+  HOME="$card_home" XDG_CONFIG_HOME="$card_home/.config" XDG_DATA_HOME="$card_home/.local/share" \
+    XDG_CACHE_HOME="$card_home/.cache" \
+    "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
+    --script "$card_home/window.fps" --size 1400
   rm -rf "$card_home"
 fi
 ls -l "$out"

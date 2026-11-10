@@ -94,6 +94,15 @@ class Shortcut(unittest.TestCase):
         self.assertEqual(fai.get(e, 'AppName'), 'Laterna')
         self.assertEqual(fai.get(e, 'appid'), fai.signed(new_id))
 
+    def test_entry_is_put_in_the_vr_library(self):
+        doc = []
+        fai.upsert(doc, 'FramePlayerX', self.exe, '/home/steamos/frameplayerx', '')
+        e = fai.get(fai.get(doc, 'shortcuts'), '0')
+        self.assertEqual(fai.get(e, 'OpenVR'), 1)
+        fai.put(e, 'OpenVR', 0)  # an entry from an older installer
+        fai.upsert(doc, 'Laterna', self.exe, '/home/steamos/frameplayerx', '')
+        self.assertEqual(fai.get(fai.get(fai.get(doc, 'shortcuts'), '0'), 'OpenVR'), 1)
+
     def test_test_copy_is_separate(self):
         doc = []
         fai.upsert(doc, 'Laterna', self.exe, '/x', '')

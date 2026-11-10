@@ -37,7 +37,7 @@ mod tp10_eyes;
 mod video;
 
 pub use gpu::{Creator, DirectCreator, Gpu};
-pub use params::{Quality, VideoParams};
+pub use params::{Quality, ScreenShape, VideoParams};
 pub use renderer::{EyeTarget, EyeView, PanelId, QuadDraw, QuadTexture, Renderer};
 pub use timing::GpuTimes;
 

@@ -26,6 +26,7 @@ pub mod subtitle_text;
 pub mod theme;
 pub mod thumbs;
 pub mod widgets;
+pub mod window;
 
 use crate::playback::OpenRequest;
 use crate::settings::HapticDeviceConfig;
@@ -410,6 +411,9 @@ pub enum Action {
     /// Hide the player controls (the trigger on empty space brings them
     /// back).
     HideControls,
+    /// Open SteamVR's dashboard over the app, which keeps running (and the
+    /// video keeps playing).
+    OpenDashboard,
     Quit,
     /// Quit and start again, to run an installed update or use a setting
     /// that is read at start.
@@ -1005,6 +1009,8 @@ pub struct View<'a> {
     pub places_enabled: bool,
     /// The place showing round the picture and the menus now, if any.
     pub place_shown: Option<fp_render::env::Place>,
+    /// SteamVR's dashboard can be opened from the app.
+    pub dashboard: bool,
     pub devices: &'a [fp_haptics::DeviceStatus],
 }
 

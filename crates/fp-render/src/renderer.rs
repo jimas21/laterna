@@ -11,7 +11,7 @@ use crate::hdr::PeakDetector;
 use crate::mem::{self, Buffer, Image};
 use crate::params::{self, Quality, SceneParams, VideoParams};
 use crate::peak::PeakPass;
-use crate::pipeline::{self, PipelineDesc};
+use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::q10c::Converter;
 use crate::timing::{FrameTimer, GpuTimes, Mark, Series};
 use crate::tp10_eyes::Tp10Eyes;
@@ -166,6 +166,10 @@ struct Slot {
 pub struct Renderer {
     gpu: Arc<Gpu>,
     color_format: vk::Format,
+    /// The depth attachment's format, and the one image of it both eyes use
+    /// (grown to the largest target; see `Renderer::depth_for`).
+    depth_format: vk::Format,
+    depth: Option<Image>,
     pool: vk::CommandPool,
     dpool: vk::DescriptorPool,
     sampler: vk::Sampler,
@@ -266,6 +270,7 @@ impl Renderer {
                 )
                 .ctx("sampler")?;
 
+            let depth_format = gpu.depth_format();
             let scene_layout = pipeline::set_layout(
                 &gpu,
                 &[
@@ -285,8 +290,9 @@ impl Renderer {
                     color_format,
                     vertex_stride: 0,
                     attributes: &[],
-                    blend: false,
+                    blend: true,
                     descriptor_buffer: false,
+                    depth: Depth::Ignore(depth_format),
                 },
             )?;
             let tex_layout = pipeline::set_layout(
@@ -327,6 +333,7 @@ impl Renderer {
                     attributes: &quad_attrs,
                     blend: true,
                     descriptor_buffer: false,
+                    depth: Depth::Ignore(depth_format),
                 },
             )?;
             let egui_pl = pipeline::layout(&gpu, tex_layout, 8)?;
@@ -360,12 +367,15 @@ impl Renderer {
                     attributes: &egui_attrs,
                     blend: true,
                     descriptor_buffer: false,
+                    depth: Depth::None,
                 },
             )?;
 
             let mut r = Renderer {
                 gpu: gpu.clone(),
                 color_format,
+                depth_format,
+                depth: None,
                 pool,
                 dpool,
                 sampler,
@@ -447,7 +457,13 @@ impl Renderer {
                     );
                 }
             })?;
-            r.tp10_eyes = tp10_eyes(&r.gpu, color_format, r.sampler, r.q10c.is_some());
+            r.tp10_eyes = tp10_eyes(
+                &r.gpu,
+                color_format,
+                depth_format,
+                r.sampler,
+                r.q10c.is_some(),
+            );
             for _ in 0..SLOTS {
                 let slot = r.new_slot()?;
                 r.slots.push(slot);
@@ -1480,6 +1496,9 @@ impl Renderer {
         quads: &[QuadDraw],
     ) -> Result<()> {
         self.update_scene_set();
+        let width = targets[0].extent.width.max(targets[1].extent.width);
+        let height = targets[0].extent.height.max(targets[1].extent.height);
+        let (depth_image, depth_view) = self.depth_for(width, height)?;
         let inv = [
             (eyes[0].proj * eyes[0].view).inverse(),
             (eyes[1].proj * eyes[1].view).inverse(),
@@ -1569,6 +1588,30 @@ impl Renderer {
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue { float32: bg },
                 })];
+            // Both eyes (and every frame) share one depth image: cleared at
+            // the start of each pass, never stored, so each pass begins
+            // with a transition that discards it.
+            mem::barrier(
+                gpu,
+                cmd,
+                depth_image,
+                mem::depth_range(),
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
+                mem::DEPTH_WRITE,
+                mem::DEPTH_WRITE,
+            );
+            let depth = vk::RenderingAttachmentInfo::default()
+                .image_view(depth_view)
+                .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .clear_value(vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                });
             let area = vk::Rect2D {
                 offset: vk::Offset2D::default(),
                 extent: t.extent,
@@ -1580,7 +1623,8 @@ impl Renderer {
                     &vk::RenderingInfo::default()
                         .render_area(area)
                         .layer_count(1)
-                        .color_attachments(&attachment),
+                        .color_attachments(&attachment)
+                        .depth_attachment(&depth),
                 );
                 d.cmd_set_viewport(
                     cmd,
@@ -1668,6 +1712,24 @@ impl Renderer {
             }
         }
         Ok(())
+    }
+
+    /// The depth image both eyes render with, and its view: made, or made
+    /// again bigger, when a target is larger than the one there is.
+    fn depth_for(&mut self, width: u32, height: u32) -> Result<(vk::Image, vk::ImageView)> {
+        let fits = |i: &Image| i.extent.width >= width && i.extent.height >= height;
+        if !self.depth.as_ref().is_some_and(fits) {
+            let bigger = Image::depth(&self.gpu, width, height, self.depth_format, "eye depth")?;
+            // Frames still in flight may use the old one: it goes with the
+            // slot's garbage.
+            if let Some(old) = self.depth.replace(bigger) {
+                self.slots[self.current].garbage.push(old);
+            }
+        }
+        match self.depth.as_ref() {
+            Some(i) => Ok((i.image, i.views[0])),
+            None => Err(crate::Error::Unsupported("no depth image".into())),
+        }
     }
 
     /// Ends recording and submits the frame.
@@ -1970,6 +2032,7 @@ impl Renderer {
 fn tp10_eyes(
     gpu: &Gpu,
     color_format: vk::Format,
+    depth_format: vk::Format,
     sampler: vk::Sampler,
     has_q10c: bool,
 ) -> Option<Tp10Eyes> {
@@ -1977,7 +2040,7 @@ fn tp10_eyes(
     if !has_q10c || gpu.memory_fd.is_none() || !allowed {
         return None;
     }
-    match Tp10Eyes::new(gpu, color_format, sampler, SLOTS) {
+    match Tp10Eyes::new(gpu, color_format, depth_format, sampler, SLOTS) {
         Ok(t) => {
             log::info!("10-bit HEVC read in place is sampled by the eye passes, not converted");
             Some(t)
@@ -2114,6 +2177,9 @@ impl Drop for Renderer {
                 for (_, mut t) in p.textures {
                     t.image.destroy(&gpu);
                 }
+            }
+            if let Some(mut i) = self.depth.take() {
+                i.destroy(&gpu);
             }
             self.white.image.destroy(&gpu);
             self.dummy.destroy(&gpu);

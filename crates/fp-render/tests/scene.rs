@@ -6,7 +6,7 @@ use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_render::capture::OffscreenEyes;
 use fp_render::math::{Fov, projection, view};
-use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Quality, Renderer, VideoParams};
+use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Quality, Renderer, ScreenShape, VideoParams};
 use glam::{Mat4, Quat, Vec3};
 use std::sync::Arc;
 
@@ -390,6 +390,57 @@ fn flat_screen_sits_in_front_and_background_surrounds_it() {
     assert!(is_blue(px(&l, 2, 2)), "corner {:?}", px(&l, 2, 2));
     let [l, _] = render(&mut r, &mut e, None, &p, &[]);
     assert!(is_blue(centre(&l)), "no video {:?}", centre(&l));
+    e.destroy(&r);
+}
+
+/// The pixel of the 90 degree view from `eye` (looking down -Z) that `point`
+/// falls on, if it is in the picture.
+fn pixel_of(point: Vec3, eye: Vec3) -> Option<(u32, u32)> {
+    let d = point - eye;
+    if d.z >= 0.0 {
+        return None;
+    }
+    let half = SIZE as f32 / 2.0;
+    let x = half * (1.0 + d.x / -d.z);
+    let y = half * (1.0 - d.y / -d.z);
+    let on = |n: f32| (0.0..SIZE as f32).contains(&n);
+    (on(x) && on(y)).then_some((x as u32, y as u32))
+}
+
+#[test]
+fn the_screens_corners_are_where_its_shape_says() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let green = frame(160, 90, |_, _| [0, 255, 0]);
+    let eye = Vec3::new(-0.032, 1.6, 0.0);
+    for curvature in [0.0, 0.5] {
+        let mut p = params(
+            Projection::Flat,
+            StereoLayout::Mono,
+            ViewSettings::default(),
+        );
+        p.settings.screen_curvature = curvature;
+        p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0));
+        p.background = [0.0, 0.0, 0.0, 1.0];
+        let shape = ScreenShape::of(&p, Some((160, 90)));
+        let [l, _] = render(&mut r, &mut e, Some(&green), &p, &[]);
+        for (u, v) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+            let at = |scale: f32| {
+                let local = shape.point(u * scale, v * scale);
+                pixel_of(p.screen_pose.transform_point3(local), eye)
+            };
+            let inside = at(0.9).expect("a corner of the screen is in view");
+            let c = px(&l, inside.0, inside.1);
+            assert!(c[1] > 200, "{curvature} ({u}, {v}) inside: {c:?}");
+            // Just past the corner (when that is still in view) is the
+            // background.
+            if let Some((x, y)) = at(1.1) {
+                let c = px(&l, x, y);
+                assert_eq!(c, [0, 0, 0], "{curvature} ({u}, {v}) outside");
+            }
+        }
+    }
     e.destroy(&r);
 }
 
@@ -1303,5 +1354,68 @@ fn sharpen_sharpens_a_magnified_edge_without_halo() {
         shi <= hi + 2 && slo + 2 >= lo,
         "halo: {slo}..{shi} against {lo}..{hi}"
     );
+    e.destroy(&r);
+}
+
+/// A green screen turned a little over a blue background, so the picture,
+/// its blended edge and the surround are all there to compare.
+fn turned_green_screen() -> VideoParams {
+    let mut p = params(
+        Projection::Flat,
+        StereoLayout::Mono,
+        ViewSettings::default(),
+    );
+    p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0)) * Mat4::from_rotation_y(0.3);
+    p.background = [0.0, 0.0, 1.0, 1.0];
+    p
+}
+
+#[test]
+fn rendering_twice_gives_the_same_picture() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // The depth image is shared by both eyes and reused by every frame:
+    // nothing in it may leak into the next pass.
+    let green = frame(160, 90, |_, _| [0, 255, 0]);
+    let p = turned_green_screen();
+    let first = render(&mut r, &mut e, Some(&green), &p, &[]);
+    let (corner, mid) = (px(&first[0], 2, 2), centre(&first[0]));
+    assert!(is_blue(corner), "surround {corner:?}");
+    assert!(mid[1] > 200, "screen {mid:?}");
+    for round in 1..=3 {
+        let again = render(&mut r, &mut e, Some(&green), &p, &[]);
+        assert!(again == first, "frame {round} differs from the first");
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn a_bigger_eye_target_gets_a_new_depth_image() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let green = frame(160, 90, |_, _| [0, 255, 0]);
+    let p = turned_green_screen();
+    let small = render(&mut r, &mut e, Some(&green), &p, &[]);
+    assert!(centre(&small[0])[1] > 200);
+
+    // 192 px does not fit the 128 px depth image made so far.
+    let mut big = OffscreenEyes::new(&r, 192, 192).expect("bigger eyes");
+    r.begin_frame().unwrap();
+    r.set_video(Some(&green)).unwrap();
+    r.draw(&big.targets(), &eyes_at(1.6), &p, &[]).unwrap();
+    r.end_frame().unwrap();
+    let img = big.read(&r, 0).unwrap();
+    let mid = ((96 * 192 + 96) * 4) as usize;
+    let centre_px = &img[mid..mid + 3];
+    assert!(centre_px[1] > 200, "bigger target's centre {centre_px:?}");
+    let corner = [img[0], img[1], img[2]];
+    assert!(is_blue(corner), "bigger target's surround {corner:?}");
+
+    // The smaller targets render the same with the bigger depth image.
+    let again = render(&mut r, &mut e, Some(&green), &p, &[]);
+    assert!(again == small, "the 128 px picture changed");
+    big.destroy(&r);
     e.destroy(&r);
 }

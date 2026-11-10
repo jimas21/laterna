@@ -2,6 +2,7 @@
 //! turns controller input into UI events and playback commands each frame.
 
 mod actions;
+pub mod chrome;
 mod earbuds;
 mod frame;
 mod headset;
@@ -60,6 +61,9 @@ pub struct FrameInput {
     /// the view (`fp_render::math::pixels_per_tan`), so things painted for the
     /// eyes can be painted at the size they are shown. `None` when not known.
     pub eye_px_per_tan: Option<f32>,
+    /// SteamVR's dashboard can be opened from the app (OpenXR with `vrcmd`
+    /// beside the runtime), so the dashboard button shows.
+    pub dashboard: bool,
 }
 
 /// A panel or pointer ray for the compositor to draw as its own quad layer,
@@ -95,6 +99,9 @@ pub struct FrameOutput {
     pub quit: bool,
     /// With `quit`: start again.
     pub restart: bool,
+    /// The dashboard button was pressed: open SteamVR's dashboard over the
+    /// app, which keeps running and playing.
+    pub open_dashboard: bool,
 }
 
 const MAIN: usize = 0;
@@ -179,6 +186,10 @@ pub struct App {
     sub_shaper: Option<ui::subtitle_text::SubtitleText>,
     sub_fonts: Jobs<ui::subtitle_text::SubtitleText>,
     pointer: Pointer,
+    /// The move bar and resize handle under a flat screen (`chrome`).
+    chrome: chrome::ScreenChrome,
+    /// The size of the last picture the video gave, for the screen's shape.
+    last_frame_size: Option<(u32, u32)>,
     pub playback: Option<Playback>,
     open_seq: u64,
     /// When the video being opened was asked for.
@@ -243,6 +254,10 @@ pub struct App {
     feed_busy: usize,
     quit: bool,
     restart: bool,
+    /// The dashboard button was pressed since the last frame.
+    open_dashboard: bool,
+    /// How many times it has been pressed, for the preview harness.
+    dashboard_requests: u32,
 }
 
 /// A panel held by a grip: which panel and hand, the hand's aim angles and
@@ -341,6 +356,8 @@ impl App {
             sub_shaper: None,
             sub_fonts,
             pointer: Pointer::default(),
+            chrome: Default::default(),
+            last_frame_size: None,
             playback: None,
             open_seq: 0,
             open_started: Instant::now(),
@@ -380,6 +397,8 @@ impl App {
             feed_busy: 0,
             quit: false,
             restart: false,
+            open_dashboard: false,
+            dashboard_requests: 0,
         };
         app.offsets = app.settings.panel_offsets;
         app.apply_ui_scale();
@@ -422,13 +441,17 @@ impl App {
     /// One line about the open video and the UI, for the preview harness.
     pub fn status_line(&self) -> String {
         let ui = format!(
-            "ui_visible={} browser={} adjust={} tracks={}",
-            self.ui_visible, self.show_browser, self.ui.adjust_open, self.ui.tracks_open
+            "ui_visible={} browser={} adjust={} tracks={} dashboard_requests={}",
+            self.ui_visible,
+            self.show_browser,
+            self.ui.adjust_open,
+            self.ui.tracks_open,
+            self.dashboard_requests
         );
         match &self.playback {
             Some(p) => format!(
                 "{} playing={} state={:?} pos={:.1}/{:.1} vol={:.2} zoom={:.2} yaw={:.1} pitch={:.1} \
-                 queue={}/{} paused={} {ui}",
+                 queue={}/{} paused={} width={:.2} distance={:.2} curvature={:.2} chrome={} {ui}",
                 p.title,
                 p.transcoding.as_ref().map_or("file", |t| t.label.as_str()),
                 p.player.state(),
@@ -440,10 +463,20 @@ impl App {
                 p.settings.pitch,
                 self.queue.pos + 1,
                 self.queue.items.len(),
-                p.player.is_paused()
+                p.player.is_paused(),
+                p.settings.screen_width,
+                p.settings.screen_distance,
+                p.settings.screen_curvature,
+                self.window_controls_status()
             ),
             None => format!("no video, screen={:?} {ui}", self.ui.screen),
         }
+    }
+
+    /// How many times the dashboard button has been pressed (the preview
+    /// harness checks it).
+    pub fn dashboard_requests(&self) -> u32 {
+        self.dashboard_requests
     }
 
     /// World position of a fractional point on a visible panel (tests).
@@ -464,6 +497,8 @@ impl App {
         for p in self.panels.iter_mut() {
             p.request_repaint();
         }
+        self.chrome.bar.request_repaint();
+        self.chrome.corner.request_repaint();
     }
 
     /// The renderer's image of a visible panel, for preview screenshots.
@@ -471,6 +506,8 @@ impl App {
         let p = match name {
             "subs" => &self.subs,
             "perf" => &self.perf,
+            "window-bar" => &self.chrome.bar,
+            "window-corner" => &self.chrome.corner,
             _ => &self.panels[Self::panel_index(name)?],
         };
         p.visible.then_some(p.id).flatten()
@@ -479,6 +516,8 @@ impl App {
     pub fn panel_point(&self, name: &str, x: f32, y: f32) -> Option<Vec3> {
         let p = match name {
             "perf" => &self.perf,
+            "window-bar" => &self.chrome.bar,
+            "window-corner" => &self.chrome.corner,
             _ => &self.panels[Self::panel_index(name)?],
         };
         if !p.visible {

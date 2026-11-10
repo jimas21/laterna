@@ -2,6 +2,7 @@
 //! draws.
 
 use super::*;
+use fp_render::ScreenShape;
 
 impl App {
     /// Forward becomes where the head faces, and the browse panel comes
@@ -12,6 +13,7 @@ impl App {
     pub(super) fn recenter(&mut self) {
         self.reanchor = true;
         self.panel_drag = None;
+        self.chrome.cancel();
         self.offsets.main = [0.0, 0.0];
         self.offsets.depth.main = 0.0;
         self.settings.panel_offsets = self.offsets;
@@ -31,6 +33,7 @@ impl App {
     /// puts that back).
     pub(super) fn reset_placement(&mut self) {
         self.panel_drag = None;
+        self.chrome.cancel();
         self.adjust_hold = None;
         self.offsets = Default::default();
         self.settings.panel_offsets = self.offsets;
@@ -184,6 +187,7 @@ impl App {
         self.update_visibility();
         let kb_target = self.keyboard_target();
         self.panels[KEYBOARD].visible = kb_target.is_some();
+        self.chrome.ease(input.dt);
         self.place_panels(anchor, kb_target);
         let buzz = self.route_input(&input, anchor);
         // Routing the input moved the panels, the picture or both: place the
@@ -191,6 +195,7 @@ impl App {
         // than a frame behind.
         self.place_panels(anchor, kb_target);
         self.paint_panels(renderer, &input, kb_target);
+        self.paint_window_controls(renderer, &input);
         self.perf_overlay(renderer, &input);
         let (frame, video, passthrough) = self.video(renderer, &input, anchor);
         let (quads, layers) = self.compose(&input, eye);
@@ -203,6 +208,7 @@ impl App {
             buzz,
             quit: self.quit,
             restart: self.restart,
+            open_dashboard: std::mem::take(&mut self.open_dashboard),
         }
     }
 
@@ -276,14 +282,15 @@ impl App {
 
     /// Whether the flat screen and panels follow the head: the setting is
     /// on, the video (if any) is flat (around a 180°/360° one you look
-    /// about), no panel is being moved, and no place is shown. A place
+    /// about), neither a panel nor the screen is being moved (by its window
+    /// controls or by dragging the picture), and no place is shown. A place
     /// stays where it is, menus included: a room that turned with the head
     /// would swim, and so would a sky and its floor.
     fn follows(&self, passthrough_available: bool) -> bool {
-        self.settings.follow
-            && self.panel_drag.is_none()
+        let dragging =
+            self.panel_drag.is_some() || self.drag_start.is_some() || self.chrome.dragging();
+        follows_head(self.settings.follow, self.flat_or_none(), dragging)
             && self.active_place(passthrough_available).is_none()
-            && self.flat_or_none()
     }
 
     /// Whether there is no video, or it is a flat one.
@@ -339,7 +346,7 @@ impl App {
     /// Position sliders). A flat screen and the subtitles are placed from
     /// it; a 180°/360° picture turns the same way. A flat screen starts
     /// upright, straight ahead at eye height.
-    fn picture_anchor(&self, anchor: Mat4) -> Mat4 {
+    pub(super) fn picture_anchor(&self, anchor: Mat4) -> Mat4 {
         match &self.playback {
             Some(p) => {
                 let s = p.shown_settings(&self.settings.default_view);
@@ -452,6 +459,7 @@ impl App {
         self.panels[BAR].visible = playing && self.ui_visible && !self.show_browser;
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
         self.panels[TRACKS].visible = self.panels[BAR].visible && self.ui.tracks_open;
+        self.show_window_controls();
         let over_video = playing && !browser;
         let live = self
             .ui
@@ -486,6 +494,9 @@ impl App {
         let main_d = panel_distance(MAIN_DISTANCE, moved.main);
         let bar_d = panel_distance(BAR_DISTANCE, moved.bar);
         let adjust_d = panel_distance(ADJUST_DISTANCE, moved.adjust);
+        // The window controls (app/chrome) go under the screen; the control
+        // bar hangs lower when it would cover them.
+        let bar_drop = self.place_window_controls(anchor, bar_d);
         // To the right, clear of the control bar's end as it grows with the
         // interface size, and as it comes nearer.
         let half_angle = |w: f32, d: f32| (w / 2.0 / d).atan().to_degrees();
@@ -497,7 +508,7 @@ impl App {
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_below(anchor, my, mp, main_d, BELOW_DEG);
-        self.panels[BAR].pose = place(bar_anchor, 0.0, bar_d, -0.32 * bar_d / BAR_DISTANCE, 22.0);
+        self.panels[BAR].pose = chrome::layout::bar_pose(bar_anchor, bar_d, bar_drop);
         self.panels[TRACKS].pose = above_bar(&self.panels[BAR], &self.panels[TRACKS]);
         self.panels[TOAST].pose = toast_pose(
             &self.panels[BAR],
@@ -538,17 +549,31 @@ impl App {
         self.pointer.rays_shown = self.any_ui();
         let routed = {
             let [a, b, c, d, e, _toast] = &mut self.panels;
-            self.pointer
-                .route(&mut [a, b, c, d, e, &mut self.perf], &input.hands, input.dt)
+            // The window controls (app/chrome) come last, after the overlay:
+            // see `chrome::WINDOW_BAR`.
+            let (bar, corner) = (&mut self.chrome.bar, &mut self.chrome.corner);
+            let mut panels = [a, b, c, d, e, &mut self.perf, bar, corner];
+            self.pointer.route(&mut panels, &input.hands, input.dt)
         };
         let mut buzz = Vec::new();
-        self.move_panels(routed.grab, input, anchor, &mut buzz);
+        // Taking hold of a window control drags the screen; any other grab
+        // moves a panel.
+        let mut panel_grab = None;
+        match routed.grab {
+            Some(g) if matches!(g.panel, chrome::WINDOW_BAR | chrome::WINDOW_CORNER) => {
+                self.begin_window_drag(g, input, anchor, &mut buzz);
+            }
+            Some(g) => panel_grab = Some((g.panel, g.hand)),
+            None => {}
+        }
+        self.move_panels(panel_grab, input, anchor, &mut buzz);
+        self.update_window_drag(input, anchor, &mut buzz);
         if let Some(hand) = routed.pressed {
             buzz.push((hand, 0.2, 8));
         }
         self.controller(
             input,
-            routed.over_ui || self.panel_drag.is_some(),
+            routed.over_ui || self.panel_drag.is_some() || self.chrome.dragging(),
             routed.click_outside,
             anchor,
             &mut buzz,
@@ -595,6 +620,7 @@ impl App {
         let devices = self.services.haptic_statuses();
         let passthrough_available = input.passthrough_available;
         let (places_enabled, place_shown) = (self.places_enabled, self.place_shown);
+        let dashboard = input.dashboard;
         for idx in [MAIN, BAR, ADJUST, TRACKS, TOAST] {
             if !self.panels[idx].needs_paint() {
                 continue;
@@ -620,6 +646,7 @@ impl App {
                 passthrough_available,
                 places_enabled,
                 place_shown,
+                dashboard,
                 devices: &devices,
             };
             let r = panels[idx].paint(renderer, input.time, |ctx| match idx {
@@ -693,20 +720,21 @@ impl App {
         });
         if let (Some(p), Some(s)) = (&self.playback, shown) {
             frame = p.player.current_frame();
-            video.format = p.format;
+            // What the screen's shape is worked out from (see
+            // `screen_geometry`); the last picture's size stands in on a frame
+            // the video gives none.
+            if let Some(f) = &frame {
+                self.last_frame_size = Some((f.width, f.height));
+            }
+            describe_video(&mut video, p, s);
             video.screen_pose = place(player, 0.0, s.screen_distance, 0.0, 0.0);
             video.anchor = anchor_rot;
-            video.settings = s;
             // A room has its own screen: its size, its curve and where it
             // hangs, whatever the picture's own screen settings say.
             if let Some(r) = room {
                 video.screen_pose = r.screen_pose;
                 video.screen_fit = Some(r.fit);
                 video.settings.screen_curvature = r.curvature;
-            }
-            if let Some(v) = p.player.info().video_stream() {
-                video.rotation = v.rotation;
-                video.pixel_aspect = v.pixel_aspect as f32;
             }
             if let Some((_, rot)) = input.head {
                 let rel = anchor_rot.inverse() * rot;
@@ -724,8 +752,25 @@ impl App {
             );
         } else {
             self.subs.visible = false;
+            self.last_frame_size = None;
         }
         (frame, video, passthrough)
+    }
+
+    /// The open flat video's screen: its size and curve exactly as the shader
+    /// draws them, and how far away it is. `None` without a flat video, or in
+    /// a room.
+    pub(super) fn screen_geometry(&self) -> Option<(ScreenShape, f32)> {
+        let p = self.playback.as_ref()?;
+        // A room's screen is where the room has it: no move bar or corner.
+        if p.format.projection != Projection::Flat || self.in_room() {
+            return None;
+        }
+        let shown = p.shown_settings(&self.settings.default_view);
+        let mut video = VideoParams::default();
+        describe_video(&mut video, p, shown);
+        let shape = ScreenShape::of(&video, self.last_frame_size);
+        Some((shape, shown.screen_distance))
     }
 
     /// What the compositor draws: panels back to front, then pointers,
@@ -754,7 +799,12 @@ impl App {
                 quads.push(q);
             }
         }
-        for p in self.panels.iter_mut().chain([&mut self.perf]) {
+        let extra = [
+            &mut self.perf,
+            &mut self.chrome.bar,
+            &mut self.chrome.corner,
+        ];
+        for p in self.panels.iter_mut().chain(extra) {
             p.update_fade(input.dt);
         }
         let mut order: Vec<(u64, &Panel)> = self
@@ -762,17 +812,22 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, p)| (i as u64, p))
-            .chain([(PERF_LAYER, &self.perf)])
+            .chain([
+                (PERF_LAYER, &self.perf),
+                (chrome::BAR_LAYER, &self.chrome.bar),
+                (chrome::CORNER_LAYER, &self.chrome.corner),
+            ])
             .filter(|(_, p)| p.shown())
             .collect();
         let distance = |p: &Panel| (p.pose.w_axis.truncate() - eye).length();
         order.sort_by(|(_, a), (_, b)| distance(b).total_cmp(&distance(a)));
         let mut layers = Vec::new();
         for (key, p) in order {
+            let layered = input.layers && !p.in_eyes && p.fully_shown();
             match p.id {
                 // Fully shown: the compositor draws it. Fading: drawn into
                 // the eyes, where opacity works.
-                Some(panel) if input.layers && p.fully_shown() => layers.push(LayerDraw::Panel {
+                Some(panel) if layered => layers.push(LayerDraw::Panel {
                     key,
                     panel,
                     px: p.px,
@@ -875,6 +930,23 @@ impl App {
                 log::error!("subtitles: {e}");
             }
         }
+    }
+}
+
+/// Whether the screen and panels follow the head, given the Follow setting,
+/// whether the video (if any) is flat, and whether anything is being dragged.
+fn follows_head(setting: bool, flat: bool, dragging: bool) -> bool {
+    setting && flat && !dragging
+}
+
+/// What a video's format, view settings, turn and pixel shape say about the
+/// picture: the parts of `VideoParams` its screen's size and curve come from.
+fn describe_video(video: &mut VideoParams, p: &Playback, shown: fp_core::view::ViewSettings) {
+    video.format = p.format;
+    video.settings = shown;
+    if let Some(v) = p.player.info().video_stream() {
+        video.rotation = v.rotation;
+        video.pixel_aspect = v.pixel_aspect as f32;
     }
 }
 
@@ -1037,6 +1109,17 @@ fn perf_video(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn follow_pauses_while_the_picture_is_dragged() {
+        assert!(follows_head(true, true, false));
+        // By a grip on a panel, by grip and trigger on the picture or by a
+        // window control: whatever drags, the anchor stays put.
+        assert!(!follows_head(true, true, true));
+        // And it is for flat screens that have it on.
+        assert!(!follows_head(true, false, false));
+        assert!(!follows_head(false, true, false));
+    }
 
     #[test]
     fn subtitles_are_painted_at_the_size_the_eyes_show_them() {

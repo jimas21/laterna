@@ -415,8 +415,10 @@ def upsert(doc, name, exe, start_dir, icon):
     put(entry, 'StartDir', f'"{start_dir}"')
     put(entry, 'icon', icon)
     put(entry, 'LaunchOptions', '')
+    # Steam's "Include in VR Library": on every install, so an older entry is corrected too.
+    put(entry, 'OpenVR', 1)
     for key, value in [('ShortcutPath', ''), ('IsHidden', 0), ('AllowDesktopConfig', 1),
-                       ('AllowOverlay', 1), ('OpenVR', 0), ('Devkit', 0), ('DevkitGameID', ''),
+                       ('AllowOverlay', 1), ('Devkit', 0), ('DevkitGameID', ''),
                        ('DevkitOverrideAppID', 0), ('LastPlayTime', 0), ('FlatpakAppID', ''),
                        ('tags', [])]:
         if added or get(entry, key) is None:
@@ -636,6 +638,8 @@ def live_upsert(name, exe, start_dir, icon, art_dir):
       SteamClient.Apps.SetShortcutExe(id, quoted);
       SteamClient.Apps.SetShortcutStartDir(id, {q('"' + start_dir + '"')});
       if ({q(icon)}) SteamClient.Apps.SetShortcutIcon(id, {q(icon)});
+      // "Include in VR Library"; an older Steam may not have the call.
+      try {{ SteamClient.Apps.SetShortcutIsVR(id, true); }} catch (e) {{}}
       const art = {q(art)};
       for (const kind of Object.keys(art)) {{
         try {{ await SteamClient.Apps.SetCustomArtworkForApp(id, art[kind], "png", Number(kind)); }} catch (e) {{}}
