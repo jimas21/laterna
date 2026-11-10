@@ -730,7 +730,8 @@ mod tests {
         assert!(near(size(1440, 1080, fit), (7.2 * 4.0 / 3.0, 7.2)));
         assert!(near(size(1080, 1920, fit), (7.2 * 9.0 / 16.0, 7.2)));
         // Without a fit, the screen width setting rules, as before.
-        assert!(near(size(1920, 1080, None), (6.0, 3.375)));
+        let w = ViewSettings::default().screen_width;
+        assert!(near(size(1920, 1080, None), (w, w * 9.0 / 16.0)));
     }
 
     fn frame_desc(width: u32, height: u32) -> FrameDesc {
@@ -839,6 +840,8 @@ mod tests {
         // The bottom right corner of the default 16:9 screen, flat.
         let flat = ScreenShape::of(&VideoParams::default(), Some((1920, 1080)));
         let corner = flat.point(1.0, -1.0);
-        assert!(corner.abs_diff_eq(Vec3::new(3.0, -1.6875, 0.0), 1e-4));
+        let w = ViewSettings::default().screen_width;
+        let want = Vec3::new(w / 2.0, -w * 9.0 / 32.0, 0.0);
+        assert!(corner.abs_diff_eq(want, 1e-4), "{corner}");
     }
 }
