@@ -25,6 +25,8 @@ pub enum CatalogKind {
     Library,
     /// Someone in the cast or crew.
     Person,
+    /// A server playlist of videos: opens, never plays by itself.
+    Playlist,
     /// Anything else (photos...).
     #[default]
     Other,
@@ -103,6 +105,8 @@ pub struct CatalogItem {
     pub unplayed: Option<u32>,
     /// When it was added, Unix seconds.
     pub added: Option<i64>,
+    /// When the user last watched it (Unix seconds), as the server says.
+    pub last_viewed: Option<i64>,
     /// 2:3 poster (an episode's still for episodes).
     pub poster: Option<String>,
     /// 16:9 art for rows of landscape cards.
@@ -227,6 +231,8 @@ pub enum CatalogSort {
     LastWatched,
     /// Shuffled.
     Random,
+    /// The server's own order: a collection's, a playlist's or a row's.
+    Server,
 }
 
 impl CatalogSort {
@@ -292,6 +298,8 @@ pub struct CatalogQuery {
     /// These items, in this order (a page of a shuffle); the other fields
     /// still choose what is listed.
     pub ids: Vec<String>,
+    /// A listing the server named (a row's "See all"); replaces `parent`.
+    pub hub: Option<String>,
 }
 
 impl Default for CatalogQuery {
@@ -313,6 +321,7 @@ impl Default for CatalogQuery {
             min_width: None,
             person: None,
             ids: Vec::new(),
+            hub: None,
         }
     }
 }
@@ -366,10 +375,16 @@ impl CatalogQuery {
             ],
             _ => &[],
         };
+        // A collection or playlist is in the order its owner made.
+        let sort = match item.kind {
+            CatalogKind::BoxSet | CatalogKind::Playlist => CatalogSort::Server,
+            _ => CatalogSort::default(),
+        };
         CatalogQuery {
             parent: Some(item.id.clone()),
             types: types.to_vec(),
             recursive: item.kind == CatalogKind::Library,
+            sort,
             ..CatalogQuery::default()
         }
     }
@@ -406,6 +421,44 @@ pub struct CatalogHome {
     pub next_up: Vec<CatalogItem>,
     /// Newest additions, per library.
     pub latest: Vec<(CatalogItem, Vec<CatalogItem>)>,
+    /// The server's own rows in its order, after `resume`. When there are
+    /// any they replace `next_up` and `latest`.
+    pub rows: Vec<CatalogRow>,
+}
+
+/// How the cards of a row are drawn: one shape per row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowShape {
+    /// 16:9 art.
+    #[default]
+    Landscape,
+    /// 2:3 posters.
+    Portrait,
+}
+
+impl RowShape {
+    /// Portrait only when every item is a poster kind (and there is one).
+    pub fn of(items: &[CatalogItem]) -> RowShape {
+        if !items.is_empty() && items.iter().all(|i| i.kind.portrait()) {
+            RowShape::Portrait
+        } else {
+            RowShape::Landscape
+        }
+    }
+}
+
+/// One row of cards a server arranged: its own title, items and shape.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CatalogRow {
+    /// Stable within the server; keys the row's scroll position.
+    pub id: String,
+    pub title: String,
+    pub items: Vec<CatalogItem>,
+    pub shape: RowShape,
+    /// What "See all" opens, when the server has more than the row shows.
+    pub more: Option<CatalogQuery>,
+    /// The library it belongs to (`section:1`), if one.
+    pub library: Option<String>,
 }
 
 /// Features a server can apply to the shared catalog.
@@ -415,6 +468,8 @@ pub struct CatalogCapabilities {
     pub width_filter: bool,
     pub people: bool,
     pub tags: bool,
+    /// Libraries open on rows and tabs (Recommended, Library, Collections).
+    pub library_pages: bool,
 }
 
 impl Default for CatalogCapabilities {
@@ -424,6 +479,7 @@ impl Default for CatalogCapabilities {
             width_filter: true,
             people: true,
             tags: true,
+            library_pages: false,
         }
     }
 }
@@ -448,4 +504,77 @@ pub trait Catalog: Send + Sync {
     }
     fn set_played(&self, id: &str, played: bool) -> Result<()>;
     fn set_version(&self, location: &str, version: Option<&str>);
+    /// A library's own rows (Plex's Recommended); empty: it opens as a grid.
+    fn library_rows(&self, _library: &str) -> Result<Vec<CatalogRow>> {
+        Ok(Vec::new())
+    }
+    /// The user's video playlists on the server.
+    fn playlists(&self) -> Result<Vec<CatalogItem>> {
+        Ok(Vec::new())
+    }
+    /// What the user watched on the server, most recent first.
+    fn history(&self, _limit: usize) -> Result<Vec<CatalogItem>> {
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::slice::from_ref;
+
+    fn of_kind(kind: CatalogKind) -> CatalogItem {
+        CatalogItem {
+            id: "1".into(),
+            name: "Made up".into(),
+            kind,
+            ..CatalogItem::default()
+        }
+    }
+
+    #[test]
+    fn row_shape_is_portrait_only_for_all_posters() {
+        let movie = of_kind(CatalogKind::Movie);
+        let episode = of_kind(CatalogKind::Episode);
+        assert_eq!(RowShape::of(&[]), RowShape::Landscape);
+        assert_eq!(RowShape::of(from_ref(&movie)), RowShape::Portrait);
+        assert_eq!(
+            RowShape::of(&[movie.clone(), of_kind(CatalogKind::Series)]),
+            RowShape::Portrait
+        );
+        assert_eq!(RowShape::of(from_ref(&episode)), RowShape::Landscape);
+        assert_eq!(RowShape::of(&[movie, episode]), RowShape::Landscape);
+        assert_eq!(
+            RowShape::of(&[of_kind(CatalogKind::Playlist)]),
+            RowShape::Landscape
+        );
+    }
+
+    #[test]
+    fn collections_and_playlists_list_in_server_order() {
+        for kind in [CatalogKind::BoxSet, CatalogKind::Playlist] {
+            let query = CatalogQuery::children(&of_kind(kind));
+            assert_eq!(query.sort, CatalogSort::Server);
+            assert_eq!(query.parent.as_deref(), Some("1"));
+            assert!(!query.descending);
+        }
+        let folder = CatalogQuery::children(&of_kind(CatalogKind::Folder));
+        assert_eq!(folder.sort, CatalogSort::Name);
+        assert!(!CatalogSort::Server.default_descending());
+    }
+
+    #[test]
+    fn a_playlist_opens_but_does_not_play() {
+        assert!(!CatalogKind::Playlist.playable());
+        assert!(!CatalogKind::Playlist.portrait());
+    }
+
+    #[test]
+    fn new_capabilities_and_queries_default_to_the_old_behaviour() {
+        let caps = CatalogCapabilities::default();
+        assert!(caps.favorites && caps.width_filter && caps.people && caps.tags);
+        assert!(!caps.library_pages);
+        assert_eq!(CatalogQuery::default().hub, None);
+        assert!(CatalogHome::default().rows.is_empty());
+    }
 }

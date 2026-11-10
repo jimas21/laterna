@@ -776,6 +776,10 @@ sort-last-watched = Last watched
 sort-largest-first = Largest first
 # A tooltip on the button that turns the order round.
 sort-smallest-first = Smallest first
+# Short: a sort. The order the server keeps a collection, playlist or row in.
+sort-server-order = Server's order
+# The last card of a row of a server's page: opens everything in the row.
+catalog-see-all = See all
 jf-asking = Asking the server…
 filter-genres = Genres
 filter-find-genre = Find a genre
