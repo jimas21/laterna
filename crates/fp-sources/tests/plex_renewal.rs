@@ -9,6 +9,9 @@ use fp_sources::plex::PlexSource;
 use fp_sources::plex::auth::{PlexAuthClient, PlexConnection, PlexCredentials};
 use fp_sources::{Catalog, Error, PlexConfig, Source, SourceConfig};
 use serde_json::{Value, json};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 fn json_reply(value: &Value) -> Resp {
     resp(
@@ -32,6 +35,33 @@ fn server_taking(accepted: &'static str, leftover: Option<&'static str>) -> Test
             "/" | "/library/sections" => json!({"MediaContainer":{"Directory":[]}}),
             "/library/metadata/100" => {
                 json!({"MediaContainer":{"Metadata":[{"ratingKey":"100","type":"movie","title":"Film"}]}})
+            }
+            _ => return resp(404, "missing", &[]),
+        };
+        json_reply(&body)
+    })
+}
+
+/// A server that takes `accepted`, and refuses any other token on the item
+/// page only once `readers` requests are waiting, so that many reads are all
+/// refused before any of them can renew.
+fn server_refusing_together(accepted: &'static str, readers: usize) -> TestServer {
+    let waiting = Arc::new(AtomicUsize::new(0));
+    TestServer::start(move |request: &Req| {
+        let token = request.header("X-Plex-Token");
+        let body = match request.path() {
+            "/identity" => json!({"MediaContainer":{"machineIdentifier":"machine-1"}}),
+            "/" | "/library/sections" => json!({"MediaContainer":{"Directory":[]}}),
+            "/library/metadata/100" if token == Some(accepted) => {
+                json!({"MediaContainer":{"Metadata":[{"ratingKey":"100","type":"movie","title":"Film"}]}})
+            }
+            "/library/metadata/100" => {
+                waiting.fetch_add(1, Ordering::SeqCst);
+                let give_up = Instant::now() + Duration::from_secs(10);
+                while waiting.load(Ordering::SeqCst) < readers && Instant::now() < give_up {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                return resp(401, "unauthorized", &[]);
             }
             _ => return resp(404, "missing", &[]),
         };
@@ -151,6 +181,33 @@ fn a_token_that_dies_mid_session_is_replaced_and_the_read_retried() {
     assert!(source.updated_config().is_none());
     assert_eq!(source.item("100").unwrap().name, "Film");
     assert_eq!(asked_about_servers(&account), 1);
+    let Some(SourceConfig::Plex(saved)) = source.updated_config() else {
+        panic!("the replaced token must be saved");
+    };
+    assert_eq!(saved.access_token, "server-new");
+    nothing_secret_in_a_url(&[&server, &account]);
+}
+
+#[test]
+fn reads_refused_together_all_succeed_after_one_renewal() {
+    const READERS: usize = 4;
+    let server = server_refusing_together("server-new", READERS);
+    let listed = json!([row("server-new", &[&server.base])]);
+    let account = account_listing("account-secret", listed);
+    let config = linked(config(&server, "server-old"));
+    let source = source(&config, &account);
+
+    source.probe().unwrap();
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let readers: Vec<_> = (0..READERS)
+            .map(|_| scope.spawn(|| source.item("100")))
+            .collect();
+        readers.into_iter().map(|r| r.join().unwrap()).collect()
+    });
+    for result in results {
+        assert_eq!(result.unwrap().name, "Film");
+    }
+    assert_eq!(asked_about_servers(&account), 1, "renewed once for all");
     let Some(SourceConfig::Plex(saved)) = source.updated_config() else {
         panic!("the replaced token must be saved");
     };

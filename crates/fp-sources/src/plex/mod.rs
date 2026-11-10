@@ -183,12 +183,19 @@ impl PlexSource {
     /// then, when forced (the server answered 401 or 498), the account is asked
     /// for the server's current token and addresses. A pasted token has no
     /// account to ask.
-    fn refresh(&self, force: bool) -> Result<bool> {
+    ///
+    /// `stale` is the token a forced call was refused with. Reads run in
+    /// parallel and all fail with the same dead token; once one of them has
+    /// renewed it, the others find a different token here and just retry.
+    fn refresh(&self, force: bool, stale: Option<&str>) -> Result<bool> {
         let _guard = lock(&self.refreshing);
         let before = lock(&self.config).clone();
         let Some(auth) = &before.auth else {
             return Ok(false);
         };
+        if force && stale.is_some_and(|token| token != before.access_token) {
+            return Ok(true);
+        }
         if auth.device_key.is_none() {
             return if force {
                 self.rediscover(&before, auth)
@@ -295,10 +302,11 @@ impl PlexSource {
     }
 
     fn client(&self) -> Result<Endpoint> {
-        self.refresh(false)?;
+        self.refresh(false, None)?;
+        let stale = lock(&self.config).access_token.clone();
         match self.connect_client() {
             Err(Error::SignedOut(name)) => {
-                if self.refresh(true)? {
+                if self.refresh(true, Some(&stale))? {
                     self.connect_client()
                 } else {
                     Err(Error::SignedOut(name))
@@ -429,6 +437,8 @@ impl PlexSource {
         let mut renewed = false;
         let mut reconnected = false;
         loop {
+            // The token the cached address is about to be asked with.
+            let stale = lock(&self.config).access_token.clone();
             let endpoint = self.client()?;
             let url = resource_url(&endpoint.base, path)?;
             let reply = endpoint
@@ -438,7 +448,8 @@ impl PlexSource {
                 // Renewed once already, or nothing to renew with (a pasted
                 // token, or the account gave the same one back): the server
                 // will not take this sign-in.
-                if !renewed && lock(&self.config).auth.is_some() && self.refresh(true)? {
+                let renewable = lock(&self.config).auth.is_some();
+                if !renewed && renewable && self.refresh(true, Some(&stale))? {
                     renewed = true;
                     continue;
                 }
