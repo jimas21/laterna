@@ -78,6 +78,7 @@ fn kind_api(kind: MbKind) -> &'static str {
         MbKind::Folder => "Folder",
         MbKind::Library => "CollectionFolder",
         MbKind::Person => "Person",
+        MbKind::Playlist => "Playlist",
         MbKind::Other => "Other",
     }
 }
@@ -120,7 +121,8 @@ fn parse_versions(v: &Value) -> Vec<MbVersion> {
 impl MbSort {
     fn api(self) -> &'static str {
         match self {
-            MbSort::Name => "SortName",
+            // Jellyfin and Emby keep no order of their own to ask for.
+            MbSort::Name | MbSort::Server => "SortName",
             MbSort::Added => "DateCreated,SortName",
             MbSort::Released => "PremiereDate,ProductionYear,SortName",
             MbSort::Rating => "CommunityRating,SortName",
@@ -477,6 +479,9 @@ pub(crate) fn parse_item(v: &Value, base: &str) -> Option<MbItem> {
             .filter(|n| *n >= 0.0)
             .map(|n| n as u32),
         added: text(v, "DateCreated").and_then(|d| parse_iso8601(&d)),
+        last_viewed: user
+            .and_then(|u| text(u, "LastPlayedDate"))
+            .and_then(|d| parse_iso8601(&d)),
         poster,
         landscape,
         backdrop,
@@ -794,6 +799,7 @@ impl MediaBrowserSource {
             resume,
             next_up,
             latest,
+            rows: Vec::new(),
         })
     }
 
@@ -824,6 +830,9 @@ impl crate::Catalog for MediaBrowserSource {
         Self::search(self, text, limit)
     }
     fn items(&self, query: &MbQuery) -> Result<MbPage> {
+        if query.hub.is_some() {
+            return Err(Error::Unsupported("server rows".into()));
+        }
         Self::items(self, query)
     }
     fn shuffled(&self, query: &MbQuery) -> Result<Vec<String>> {
@@ -1105,6 +1114,19 @@ mod tests {
             ..q.clone()
         };
         assert!(page.path("u1").contains("&Ids=b,a"));
+    }
+
+    #[test]
+    fn server_order_sorts_by_name_on_jellyfin() {
+        let q = MbQuery {
+            parent: Some("box1".into()),
+            sort: MbSort::Server,
+            ..MbQuery::default()
+        };
+        let p = q.path("u1");
+        assert!(p.contains("SortBy=SortName"), "{p}");
+        assert!(p.contains("&ParentId=box1"), "{p}");
+        assert!(!MbSort::Server.default_descending());
     }
 
     #[test]

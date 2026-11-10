@@ -50,7 +50,7 @@ mod xml;
 pub use cache::{CacheOptions, CacheStats};
 pub use catalog::{
     Catalog, CatalogCapabilities, CatalogFacets, CatalogFilter, CatalogHome, CatalogItem,
-    CatalogKind, CatalogPage, CatalogQuery, CatalogSort, CatalogVersion,
+    CatalogKind, CatalogPage, CatalogQuery, CatalogRow, CatalogSort, CatalogVersion, RowShape,
 };
 pub use config::{
     CardRef, Credentials, DlnaConfig, FeedConfig, HttpConfig, LibraryConfig, LocalConfig,

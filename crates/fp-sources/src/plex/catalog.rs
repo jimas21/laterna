@@ -330,19 +330,23 @@ impl PlexSource {
                 "X-Plex-Container-Size",
                 &query.limit.clamp(1, PAGE_LIMIT).to_string(),
             );
+            // The server's own order sends no sort at all.
             let key = match query.sort {
-                CatalogSort::Name => "titleSort",
-                CatalogSort::Added => "addedAt",
-                CatalogSort::Released => "originallyAvailableAt",
-                CatalogSort::Rating => "audienceRating",
-                CatalogSort::Runtime => "duration",
-                CatalogSort::LastWatched => "lastViewedAt",
-                CatalogSort::Random => "random",
+                CatalogSort::Name => Some("titleSort"),
+                CatalogSort::Added => Some("addedAt"),
+                CatalogSort::Released => Some("originallyAvailableAt"),
+                CatalogSort::Rating => Some("audienceRating"),
+                CatalogSort::Runtime => Some("duration"),
+                CatalogSort::LastWatched => Some("lastViewedAt"),
+                CatalogSort::Random => Some("random"),
+                CatalogSort::Server => None,
             };
-            p.append_pair(
-                "sort",
-                &format!("{key}:{}", if query.descending { "desc" } else { "asc" }),
-            );
+            if let Some(key) = key {
+                p.append_pair(
+                    "sort",
+                    &format!("{key}:{}", if query.descending { "desc" } else { "asc" }),
+                );
+            }
             if let Some(kind) = query.types.first().and_then(|k| type_number(*k)) {
                 p.append_pair("type", kind);
             }
@@ -430,6 +434,7 @@ impl Catalog for PlexSource {
             width_filter: false,
             people: false,
             tags: false,
+            library_pages: false,
         }
     }
 
@@ -464,6 +469,7 @@ impl Catalog for PlexSource {
             resume,
             next_up: Vec::new(),
             latest,
+            rows: Vec::new(),
         })
     }
 
