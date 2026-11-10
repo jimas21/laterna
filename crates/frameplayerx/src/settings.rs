@@ -113,6 +113,11 @@ pub struct Settings {
     /// ALSA device ("default" routes to PipeWire on SteamOS).
     pub audio_device: String,
     pub volume: f32,
+    /// Milliseconds the sound plays later than the picture (negative:
+    /// earlier), for headsets and earbuds whose sound lags or leads. One
+    /// value for every output: the system's default output cannot be told
+    /// apart by name.
+    pub audio_delay_ms: i32,
     pub subtitles: SubtitleMode,
     /// The language subtitles are wanted in (ISO 639-1).
     pub subtitle_language: String,
@@ -286,6 +291,7 @@ impl Default for Settings {
             hardware_decoding: true,
             audio_device: "default".into(),
             volume: 1.0,
+            audio_delay_ms: 0,
             subtitles: SubtitleMode::default(),
             subtitle_language: crate::i18n::system_language()
                 .and_then(|l| fp_core::language::from_locale(&l))
@@ -368,6 +374,7 @@ impl Settings {
         match std::fs::read_to_string(path) {
             Ok(text) => match serde_json::from_str::<Settings>(&text) {
                 Ok(mut s) => {
+                    s.audio_delay_ms = fp_core::audio_sync::clamp_delay_ms(s.audio_delay_ms);
                     // Saved before the global chroma key existed: its key
                     // was never chosen, so take the current default.
                     if s.default_view.key_own.is_none() {
@@ -473,6 +480,27 @@ mod tests {
         assert_eq!(Settings::load(&path), s);
         std::fs::write(&path, "garbage").unwrap();
         assert_eq!(Settings::load(&path).volume, 1.0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_audio_delay_is_stored_and_kept_in_range() {
+        let dir = std::env::temp_dir().join(format!("fp-audio-delay-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        assert_eq!(Settings::default().audio_delay_ms, 0);
+        let s = Settings {
+            audio_delay_ms: -120,
+            ..Default::default()
+        };
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).audio_delay_ms, -120);
+        // An old file has none; a hand-edited one is brought into range.
+        std::fs::write(&path, r#"{"volume": 0.25}"#).unwrap();
+        assert_eq!(Settings::load(&path).audio_delay_ms, 0);
+        std::fs::write(&path, r#"{"audio_delay_ms": 9000}"#).unwrap();
+        assert_eq!(Settings::load(&path).audio_delay_ms, 300);
+        std::fs::write(&path, r#"{"audio_delay_ms": 14}"#).unwrap();
+        assert_eq!(Settings::load(&path).audio_delay_ms, 10);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

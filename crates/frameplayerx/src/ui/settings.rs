@@ -557,6 +557,18 @@ fn sound(ui: &mut egui::Ui, v: &mut View) {
             "",
             2,
         );
+        // Moves in steps of 10 ms; 0 is the default the reset button returns to.
+        let mut delay = s.audio_delay_ms as f32;
+        r.slider(
+            tr!("settings-audio-delay"),
+            Some(tr!("settings-audio-delay-desc")),
+            &mut delay,
+            fp_core::audio_sync::DELAY_MIN_MS as f32..=fp_core::audio_sync::DELAY_MAX_MS as f32,
+            0.0,
+            " ms",
+            0,
+        );
+        s.audio_delay_ms = fp_core::audio_sync::clamp_delay_ms(delay.round() as i32);
         r.row(
             tr!("settings-audio-device"),
             Some(tr!("settings-audio-device-desc")),
