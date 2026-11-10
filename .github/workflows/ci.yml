@@ -143,7 +143,7 @@ jobs:
   # Format and lint first, on their own: neither needs FFmpeg or any system
   # package (the build scripts are pure Rust), so a slip in either fails the
   # run in a few minutes instead of after the FFmpeg build. The long jobs
-  # wait for it. Same commands as before, now run once, here.
+  # run beside it; a release needs it. Same commands as before, now run once, here.
   lint:
     if: needs.version.outputs.checks == 'true'
     needs: [version]
@@ -169,7 +169,7 @@ jobs:
 
   check:
     if: needs.version.outputs.checks == 'true'
-    needs: [version, lint]
+    needs: [version]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -218,7 +218,7 @@ jobs:
         with:
           path: third_party/ffmpeg
           key: ffmpeg-${{ hashFiles('tools/build-ffmpeg.sh', 'tools/requirements.txt') }}
-      # Format and Clippy run in the lint job, which this one waits for.
+      # Format and Clippy run in the lint job, beside this one.
       # Both modes: one catches public docs linking private items, the other
       # broken links in private items' docs.
       - name: Docs
@@ -273,7 +273,7 @@ jobs:
   # The PC-side installer, for each desktop OS.
   installer:
     if: needs.version.outputs.checks == 'true'
-    needs: [version, lint]
+    needs: [version]
     strategy:
       matrix:
         include:
@@ -314,7 +314,7 @@ jobs:
 
   release:
     if: needs.version.outputs.is_release == 'true'
-    needs: [version, check, installer]
+    needs: [version, lint, check, installer]
     runs-on: ubuntu-24.04
     # One at a time, so two runs can't publish the same version.
     concurrency: release
