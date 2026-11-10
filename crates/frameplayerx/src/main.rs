@@ -35,7 +35,7 @@ mod world;
 
 use app::{App, FrameInput, LayerDraw};
 use fp_render::timing::{self, Series};
-use fp_render::{Gpu, Renderer};
+use fp_render::{Gpu, Quality, Renderer};
 use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrSession, XrStats};
 use settings::Settings;
 use std::os::unix::process::CommandExt;
@@ -400,6 +400,9 @@ struct Switches {
     /// `FRAMEPLAYERX_REQUEST_HZ=<rate>`: ask the runtime for this display
     /// refresh rate once the session runs.
     request_hz: Option<f32>,
+    /// `FRAMEPLAYERX_QUALITY=nodither,nosupersample,noedgeaa`: turn picture
+    /// quality features off, to compare a look with and without on one build.
+    quality: Quality,
 }
 
 impl Switches {
@@ -407,15 +410,21 @@ impl Switches {
         Switches::parse(
             std::env::var("FRAMEPLAYERX_UI_IN_EYES").ok().as_deref(),
             std::env::var("FRAMEPLAYERX_REQUEST_HZ").ok().as_deref(),
+            std::env::var("FRAMEPLAYERX_QUALITY").ok().as_deref(),
         )
     }
 
-    fn parse(ui_in_eyes: Option<&str>, request_hz: Option<&str>) -> Switches {
+    fn parse(
+        ui_in_eyes: Option<&str>,
+        request_hz: Option<&str>,
+        quality: Option<&str>,
+    ) -> Switches {
         Switches {
             ui_in_eyes: ui_in_eyes.is_some_and(|v| !matches!(v.trim(), "" | "0")),
             request_hz: request_hz
                 .and_then(|v| v.trim().parse::<f32>().ok())
                 .filter(|hz| hz.is_finite() && *hz >= 0.0),
+            quality: Quality::without(quality.unwrap_or("")),
         }
     }
 
@@ -426,6 +435,10 @@ impl Switches {
         }
         if let Some(hz) = self.request_hz {
             on.push(format!("FRAMEPLAYERX_REQUEST_HZ={hz}"));
+        }
+        if self.quality != Quality::default() {
+            let off = self.quality.off_list();
+            on.push(format!("FRAMEPLAYERX_QUALITY={off}"));
         }
         if on.is_empty() {
             "none".into()
@@ -526,6 +539,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         _ => log::info!("display refresh rates: not available"),
     }
     let mut renderer = Renderer::new(gpu.clone(), session.format)?;
+    renderer.set_quality(switches.quality);
     fp_media::set_hevc_10bit_hardware(renderer.shows_q10c());
     fp_media::set_shared_frames(renderer.reads_decoder_buffers());
     let mut app = make_app()?;
@@ -780,27 +794,34 @@ mod tests {
 
     #[test]
     fn switches_default_to_off() {
-        let s = Switches::parse(None, None);
+        let s = Switches::parse(None, None, None);
         assert_eq!(s, Switches::default());
         assert_eq!(s.describe(), "none");
+        assert_eq!(s.quality, Quality::default());
     }
 
     #[test]
     fn switches_parse_the_environment_values() {
-        let s = Switches::parse(Some("1"), Some(" 90 "));
+        let s = Switches::parse(Some("1"), Some(" 90 "), Some("nodither, noedgeaa"));
         assert!(s.ui_in_eyes);
         assert_eq!(s.request_hz, Some(90.0));
-        let want = "FRAMEPLAYERX_UI_IN_EYES, FRAMEPLAYERX_REQUEST_HZ=90";
+        assert!(!s.quality.dither && !s.quality.edge_aa && s.quality.supersample);
+        let want = "FRAMEPLAYERX_UI_IN_EYES, FRAMEPLAYERX_REQUEST_HZ=90, \
+                    FRAMEPLAYERX_QUALITY=nodither,noedgeaa";
         assert_eq!(s.describe(), want);
     }
 
     #[test]
     fn switches_ignore_off_and_bad_values() {
         for off in ["", "0", " 0 "] {
-            assert!(!Switches::parse(Some(off), None).ui_in_eyes);
+            assert!(!Switches::parse(Some(off), None, None).ui_in_eyes);
         }
         for bad in ["", "fast", "-72", "NaN", "inf"] {
-            assert_eq!(Switches::parse(None, Some(bad)).request_hz, None);
+            assert_eq!(Switches::parse(None, Some(bad), None).request_hz, None);
+        }
+        for bad in ["", "fast", "dither", "nodithers"] {
+            let q = Switches::parse(None, None, Some(bad)).quality;
+            assert_eq!(q, Quality::default());
         }
     }
 

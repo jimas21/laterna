@@ -9,7 +9,7 @@
 use crate::gpu::Gpu;
 use crate::hdr::PeakDetector;
 use crate::mem::{self, Buffer, Image};
-use crate::params::{self, SceneParams, VideoParams};
+use crate::params::{self, Quality, SceneParams, VideoParams};
 use crate::peak::PeakPass;
 use crate::pipeline::{self, PipelineDesc};
 use crate::q10c::Converter;
@@ -208,6 +208,8 @@ pub struct Renderer {
     shared_desc: Option<params::FrameDesc>,
     current: usize,
     recording: bool,
+    /// Which quality features the scene shader uses.
+    quality: Quality,
     /// Wall time of the slot-fence wait in [`Renderer::begin_frame`]; the
     /// app takes and resets it.
     pub fence_wait: Series,
@@ -406,6 +408,7 @@ impl Renderer {
                 shared_desc: None,
                 current: 0,
                 recording: false,
+                quality: Quality::default(),
                 fence_wait: Series::new(),
             };
             r.white.set = r.tex_set(r.white.image.views[1])?;
@@ -1011,6 +1014,12 @@ impl Renderer {
         Ok(())
     }
 
+    /// Turns the scene shader's quality features on or off (all are on by
+    /// default); takes effect from the next [`Renderer::draw`].
+    pub fn set_quality(&mut self, q: Quality) {
+        self.quality = q;
+    }
+
     /// Whether hardware-decoded 10-bit HEVC ([`fp_media::PixelLayout::Q10c`]
     /// frames) can be shown; see [`fp_media::set_hevc_10bit_hardware`].
     pub fn shows_q10c(&self) -> bool {
@@ -1452,6 +1461,7 @@ impl Renderer {
         };
         let mut p = params::build(video, frame_desc.as_ref(), inv);
         p.hdr = params::hdr_levels(self.hdr_peak.peak_nits());
+        p.display[1] = self.quality.bits();
         let tp10 = match (self.slots[slot_idx].tp10_bound, self.tp10_eyes.as_mut()) {
             (Some((buffer, desc)), Some(t)) => self.imports.tp10_picture(buffer).map(|pic| {
                 params::sample_tp10(&mut p, desc.height, pic.luma_bands, pic.chroma_bands);

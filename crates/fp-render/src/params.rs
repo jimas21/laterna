@@ -39,6 +39,79 @@ pub(crate) struct SceneParams {
     pub tp10_uv: Vec4,
 }
 
+/// Which of the scene shader's quality features are on; all are by default.
+/// They exist to be switched off for A/B comparison on a device
+/// (`FRAMEPLAYERX_QUALITY`) and in tests. Sharpening is not here: it is the
+/// picture setting `ViewSettings::sharpen`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Quality {
+    /// Analytic antialiasing of the picture's edge.
+    pub edge_aa: bool,
+    /// Four-tap supersampling where a flat picture is minified.
+    pub supersample: bool,
+    /// Half a code of noise (`dither.wgsl`) against banding in dark gradients.
+    pub dither: bool,
+}
+
+impl Default for Quality {
+    fn default() -> Quality {
+        Quality {
+            edge_aa: true,
+            supersample: true,
+            dither: true,
+        }
+    }
+}
+
+impl Quality {
+    /// The shader's `QUALITY_*` bits (`SceneParams::display[1]`).
+    pub(crate) fn bits(self) -> u32 {
+        let mut bits = 0;
+        if self.dither {
+            bits |= 1;
+        }
+        if self.supersample {
+            bits |= 2;
+        }
+        if self.edge_aa {
+            bits |= 4;
+        }
+        bits
+    }
+
+    /// The default with the features named in `list` turned off: `nodither`,
+    /// `nosupersample` and `noedgeaa`, separated by commas or spaces, in any
+    /// case. Other words are ignored.
+    pub fn without(list: &str) -> Quality {
+        let mut q = Quality::default();
+        for word in list.split([',', ' ']) {
+            match word.trim().to_ascii_lowercase().as_str() {
+                "nodither" => q.dither = false,
+                "nosupersample" => q.supersample = false,
+                "noedgeaa" => q.edge_aa = false,
+                _ => {}
+            }
+        }
+        q
+    }
+
+    /// What [`Quality::without`] would be given to make `self`: the features
+    /// that are off, comma-separated; empty when all are on.
+    pub fn off_list(&self) -> String {
+        let mut off = Vec::new();
+        if !self.dither {
+            off.push("nodither");
+        }
+        if !self.supersample {
+            off.push("nosupersample");
+        }
+        if !self.edge_aa {
+            off.push("noedgeaa");
+        }
+        off.join(",")
+    }
+}
+
 /// Sets `p` up for a Q10C picture of `height` rows sampled where it lies
 /// (`planes_tp10.wgsl`), read in bands `luma` and `chroma`.
 pub(crate) fn sample_tp10(
@@ -280,7 +353,8 @@ pub(crate) fn build(
             0.0,
         ),
         viewer: glam::vec3(0.0, s.height, -s.forward).extend(SPHERE_RADIUS),
-        display: [turns, 0, 0, 0],
+        // y: the quality bits; the renderer overwrites them with its own.
+        display: [turns, Quality::default().bits(), 0, 0],
         hdr: hdr_levels(crate::hdr::DEFAULT_PEAK),
         tp10: Vec4::ZERO,
         tp10_uv: Vec4::ZERO,
@@ -308,6 +382,37 @@ mod tests {
             rows[1].truncate().dot(v),
             rows[2].truncate().dot(v),
         ]
+    }
+
+    #[test]
+    fn quality_is_all_on_by_default_and_one_bit_each() {
+        let all = Quality::default();
+        assert!(all.edge_aa && all.supersample && all.dither);
+        assert_eq!(all.bits(), 0b111);
+        let mut q = all;
+        q.dither = false;
+        assert_eq!(q.bits(), 0b110);
+        let mut q = all;
+        q.supersample = false;
+        assert_eq!(q.bits(), 0b101);
+        let mut q = all;
+        q.edge_aa = false;
+        assert_eq!(q.bits(), 0b011);
+        // The parameters carry the same default.
+        let p = build(&VideoParams::default(), None, [Mat4::IDENTITY; 2]);
+        assert_eq!(p.display[1], all.bits());
+    }
+
+    #[test]
+    fn quality_switch_names_turn_features_off() {
+        assert_eq!(Quality::without(""), Quality::default());
+        assert_eq!(Quality::without("fast, bogus"), Quality::default());
+        let q = Quality::without(" NoDither,nosupersample ");
+        assert!(!q.dither && !q.supersample && q.edge_aa);
+        assert_eq!(q.off_list(), "nodither,nosupersample");
+        assert_eq!(Quality::without("noedgeaa").off_list(), "noedgeaa");
+        assert_eq!(Quality::default().off_list(), "");
+        assert_eq!(Quality::without(&q.off_list()), q);
     }
 
     #[test]
