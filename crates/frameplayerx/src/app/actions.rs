@@ -219,6 +219,13 @@ impl App {
             Action::LockSource(id) => self.lock_source(&id),
             Action::SetSourcePin { source, pin } => self.set_source_pin(&source, pin),
             Action::OpenSource { source, back_to } => self.open_source(source, back_to),
+            Action::OpenSourceAt {
+                source,
+                item,
+                back_to,
+            } => self.open_source_at(source, *item, back_to),
+            Action::ServerPlaylists { source } => self.server_playlists(source),
+            Action::ServerHistory { source } => self.server_history(source),
             Action::Browse { source, location } => self.browse(source, location),
             Action::Catalog { source, seq, load } => {
                 self.catalog_job(source, seq, load, Duration::ZERO);

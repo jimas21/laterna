@@ -227,7 +227,10 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
                         v.state.playlist = None;
                         v.state.renaming = false;
                         v.state.playlists = None;
+                        // The servers are asked again.
+                        v.state.server_playlists = None;
                     }
+                    Screen::History => v.state.server_history = None,
                     // The tab is the list of sources, whatever was open.
                     Screen::Sources => {
                         v.state.source = None;
@@ -657,7 +660,8 @@ fn history(ui: &mut egui::Ui, v: &mut View) {
                 tr!("library-clear-history")
             };
             let kind = if armed { Kind::Danger } else { Kind::Secondary };
-            if v.state.history.total > 0
+            if v.state.history_source.is_none()
+                && v.state.history.total > 0
                 && widgets::button_sized(ui, Some(icons::TRASH), label, kind, 44.0).clicked()
             {
                 if armed {
@@ -673,6 +677,22 @@ fn history(ui: &mut egui::Ui, v: &mut View) {
             }
         });
     });
+    // This headset's history, or what a server says was watched on it.
+    let servers = super::playlists::servers(v);
+    if v.state
+        .history_source
+        .as_ref()
+        .is_some_and(|id| !servers.iter().any(|(s, _)| s == id))
+    {
+        v.state.history_source = None;
+    }
+    if !servers.is_empty() {
+        super::playlists::history_chips(ui, v, &servers);
+    }
+    if v.state.history_source.is_some() {
+        super::playlists::server_history(ui, v);
+        return;
+    }
     let mut g = std::mem::replace(&mut v.state.history, LibraryGrid::history());
     grid_page(
         ui,

@@ -26,6 +26,10 @@ const CONTINUE_WATCHING: &str = "/hubs/continueWatching/items";
 /// contents, then its poster.
 const TILE_FIELDS: [&str; 3] = ["art", "composite", "thumb"];
 
+/// How many playlists are asked for at a time, and the most listed.
+const PLAYLISTS_PAGE: usize = 100;
+const PLAYLISTS_MAX: usize = 500;
+
 /// How many items each of the server's rows is asked for.
 const ROW_ITEMS: usize = 12;
 
@@ -313,6 +317,7 @@ impl PlexSource {
             position: num(v, "viewOffset").map_or(0.0, |n| n / 1000.0),
             unplayed,
             added: num(v, "addedAt").map(|n| n as i64),
+            last_viewed: num(v, "lastViewedAt").map(|n| n as i64),
             landscape,
             poster,
             backdrop,
@@ -356,12 +361,13 @@ impl PlexSource {
         let v = self.json(path)?;
         let c = container(&v);
         let raw = array(c, "Metadata");
-        // A row's or a collection's listing can hold items of any library.
+        // A row's, a collection's or a playlist's listing can hold items of
+        // any library.
         let mixed = query.hub.is_some()
             || query
                 .parent
                 .as_deref()
-                .is_some_and(|p| p.starts_with(COLLECTION));
+                .is_some_and(|p| p.starts_with(COLLECTION) || p.starts_with(PLAYLIST));
         let mut items: Vec<_> = raw
             .iter()
             .filter(|v| !mixed || self.shown(v))
@@ -836,6 +842,68 @@ impl Catalog for PlexSource {
             .take(limit)
             .collect())
     }
+    fn playlists(&self) -> Result<Vec<CatalogItem>> {
+        let mut lists = Vec::new();
+        let mut start = 0;
+        while start < PLAYLISTS_MAX {
+            let v = match self.json(&format!(
+                "/playlists?playlistType=video&X-Plex-Container-Start={start}&X-Plex-Container-Size={PLAYLISTS_PAGE}"
+            )) {
+                Ok(v) => v,
+                // A server without playlists has none to list.
+                Err(Error::NotFound(_)) => break,
+                Err(e) => return Err(e),
+            };
+            let c = container(&v);
+            let raw = array(c, "Metadata");
+            lists.extend(
+                raw.iter()
+                    .filter(|v| text(v, "playlistType").is_none_or(|t| t == "video"))
+                    .filter_map(|v| self.catalog_item(v))
+                    .filter(|i| i.kind == CatalogKind::Playlist),
+            );
+            start += raw.len();
+            let total = num(c, "totalSize").map_or(start, |n| n.max(0.0) as usize);
+            if raw.is_empty() || start >= total {
+                break;
+            }
+        }
+        Ok(lists)
+    }
+
+    fn history(&self, limit: usize) -> Result<Vec<CatalogItem>> {
+        let limit = limit.clamp(1, PAGE_LIMIT);
+        let mut watched: Vec<CatalogItem> = Vec::new();
+        let mut failed = None;
+        // Films and episodes are listed apart: each newest watched first.
+        for kind in ["1", "4"] {
+            let path = format!(
+                "/library/all?type={kind}&sort=lastViewedAt%3Adesc&X-Plex-Container-Start=0&X-Plex-Container-Size={limit}"
+            );
+            match self.json(&path) {
+                Ok(v) => watched.extend(
+                    array(container(&v), "Metadata")
+                        .iter()
+                        .filter(|v| self.shown(v))
+                        // Unwatched items sort after every watched one.
+                        .take_while(|v| num(v, "lastViewedAt").is_some())
+                        .filter_map(|v| self.catalog_item(v)),
+                ),
+                Err(Error::NotFound(_)) => {}
+                Err(e) => failed = failed.or(Some(e)),
+            }
+        }
+        // One kind failing must not hide the other, unless both failed.
+        if watched.is_empty()
+            && let Some(e) = failed
+        {
+            return Err(e);
+        }
+        watched.sort_by_key(|i| std::cmp::Reverse(i.last_viewed));
+        watched.truncate(limit);
+        Ok(watched)
+    }
+
     fn set_played(&self, id: &str, played: bool) -> Result<()> {
         self.request(
             "PUT",

@@ -1010,6 +1010,11 @@ toast-subtitles = Subtitles: { $title }
 
 playlists-none = No playlists yet
 playlists-none-desc = Name one above, or add videos from their details with Add to playlist. Up next can be saved as one too.
+playlists-on-server = On { $server }
+playlists-server-failed = Could not load the playlists: { $error }
+history-this-headset = This headset
+history-server-failed = Could not load this server's history
+history-server-empty-desc = Videos you watch from this server, in this app or any other, show up here.
 # A text field's hint.
 playlists-new = New playlist
 # Short: a button.

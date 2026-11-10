@@ -107,12 +107,7 @@ fn a_source_without_rows_of_its_own_keeps_its_front_page() {
     // A server too old for library hubs opens its libraries as grids.
     assert!(source.library_rows("section:1").unwrap().is_empty());
 
-    let before = server.requests().len();
+    // A server that has no playlists or history to give lists none.
     assert!(source.playlists().unwrap().is_empty());
     assert!(source.history(20).unwrap().is_empty());
-    assert_eq!(
-        server.requests().len(),
-        before,
-        "the defaults ask the server nothing"
-    );
 }
