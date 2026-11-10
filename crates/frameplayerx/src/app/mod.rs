@@ -463,6 +463,13 @@ impl App {
             }
             return;
         }
+        // Settings > Video position moves the open video too (see
+        // `Playback::follow_defaults`).
+        if self.settings.default_view != self.saved.default_view
+            && let Some(p) = &mut self.playback
+        {
+            p.follow_defaults(&self.saved.default_view, &self.settings.default_view);
+        }
         if self.settings.remote != self.saved.remote {
             self.services.apply_remote(&self.settings.remote);
         }
