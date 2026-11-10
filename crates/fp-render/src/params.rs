@@ -1,11 +1,12 @@
 //! Builds the projection shader's uniform block.
 
+use crate::env::EnvFrame;
 use fp_core::format::{Projection, StereoLayout, VideoFormat};
 use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_media::frame::{ColorInfo, Matrix};
 use fp_media::info::Transfer;
-use glam::{EulerRot, Mat4, Quat, Vec4};
+use glam::{EulerRot, Mat4, Quat, Vec2, Vec4};
 
 /// Matches `struct Params` in shaders/scene.wgsl (std140-compatible: every
 /// member is 16-byte aligned).
@@ -162,6 +163,12 @@ pub struct VideoParams {
     /// Width of a video pixel relative to its height: anamorphic video is
     /// shown this much wider than it is stored.
     pub pixel_aspect: f32,
+    /// The place to draw around the picture, if one is chosen.
+    pub env: Option<EnvFrame>,
+    /// Flat screens: the largest width and height, metres, the picture may
+    /// have. The picture then keeps its shape and is the largest that fits,
+    /// whatever `screen_width` says. Rooms set it to their own screen's size.
+    pub screen_fit: Option<Vec2>,
 }
 
 impl Default for VideoParams {
@@ -174,6 +181,8 @@ impl Default for VideoParams {
             anchor: Quat::IDENTITY,
             rotation: 0,
             pixel_aspect: 1.0,
+            env: None,
+            screen_fit: None,
         }
     }
 }
@@ -295,11 +304,20 @@ pub(crate) fn build(
     let [c0, c1] = s.lens_centre;
     // The screen's width setting is its longer side, so a portrait video
     // stands as tall as a landscape one is wide.
-    let long = s.screen_width;
-    let (screen_w, screen_h) = if ew >= eh {
-        (long, long * eh / ew.max(1e-3))
-    } else {
-        (long * ew / eh.max(1e-3), long)
+    let (screen_w, screen_h) = match video.screen_fit {
+        Some(max) => {
+            let max = max.max(Vec2::splat(0.01));
+            let w = max.x.min(max.y * ew / eh.max(1e-3));
+            (w, w * eh / ew.max(1e-3))
+        }
+        None => {
+            let long = s.screen_width;
+            if ew >= eh {
+                (long, long * eh / ew.max(1e-3))
+            } else {
+                (long * ew / eh.max(1e-3), long)
+            }
+        }
     };
     let arc = s.screen_curvature.clamp(0.0, 1.0) * std::f32::consts::TAU / 3.0;
     let correction =
@@ -363,9 +381,9 @@ pub(crate) fn build(
 
 /// Chroma (BT.709 Cb, Cr) of an sRGB-encoded colour, as the shader computes it
 /// from the video's samples.
-pub(crate) fn chroma(rgb: [f32; 3]) -> glam::Vec2 {
+pub(crate) fn chroma(rgb: [f32; 3]) -> Vec2 {
     let [r, g, b] = rgb;
-    glam::Vec2::new(
+    Vec2::new(
         -0.1146 * r - 0.3854 * g + 0.5 * b,
         0.5 * r - 0.4542 * g - 0.0458 * b,
     )
@@ -582,5 +600,39 @@ mod tests {
             960.0 * 32.0 / 27.0 / 480.0
         ));
         assert!(near(eye(1920, 800, StereoLayout::Mono, 0.5), 1.2));
+    }
+
+    #[test]
+    fn screen_fit_fits_wide_by_width_and_narrow_by_height() {
+        let size = |width, height, fit: Option<Vec2>| {
+            let video = VideoParams {
+                screen_fit: fit,
+                ..Default::default()
+            };
+            let frame = FrameDesc {
+                width,
+                height,
+                layout: PixelLayout::Nv12,
+                color: ColorInfo {
+                    matrix: Matrix::Bt709,
+                    full_range: false,
+                    transfer: Transfer::Sdr,
+                    wide_gamut: false,
+                },
+            };
+            let p = build(&video, Some(&frame), [Mat4::IDENTITY; 2]);
+            (p.screen.x, p.screen.y)
+        };
+        let near = |(w, h): (f32, f32), want: (f32, f32)| {
+            (w - want.0).abs() < 1e-3 && (h - want.1).abs() < 1e-3
+        };
+        let fit = Some(Vec2::new(14.0, 7.2));
+        // 2.39:1 is wider than the frame: it fills the width.
+        assert!(near(size(2390, 1000, fit), (14.0, 14.0 / 2.39)));
+        // 4:3 and a portrait 9:16 are taller: they fill the height.
+        assert!(near(size(1440, 1080, fit), (7.2 * 4.0 / 3.0, 7.2)));
+        assert!(near(size(1080, 1920, fit), (7.2 * 9.0 / 16.0, 7.2)));
+        // Without a fit, the screen width setting rules, as before.
+        assert!(near(size(1920, 1080, None), (6.0, 3.375)));
     }
 }
