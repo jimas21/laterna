@@ -1,5 +1,6 @@
-//! The kit places are built from: quads, grids, boxes, steps, seats, a disc,
-//! and two per-vertex bakes (ambient occlusion and the house lights).
+//! The kit places are built from: quads, grids, boxes (square or with the top
+//! edges chamfered), steps, seats, framed wall panels, a disc, and two
+//! per-vertex bakes (ambient occlusion and the house lights).
 //!
 //! Everything is deterministic, so tests can assert on the results. A surface
 //! is a plane with a normal and its triangles wind counter-clockwise seen from
@@ -66,6 +67,29 @@ pub struct SeatMaterials {
     pub trim: u32,
 }
 
+/// A panel of cloth in a wood frame on a wall, for `MeshBuilder::framed_panel`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallPanel {
+    /// The middle of the panel, on the wall's surface.
+    pub centre: Vec3,
+    /// The way the wall faces, into the room: one of the four horizontal
+    /// axes.
+    pub normal: Vec3,
+    /// Width along the wall, and height, metres.
+    pub size: Vec2,
+    /// Width of the frame's bars.
+    pub frame: f32,
+    /// How far the frame stands out from the wall. The cloth is half way.
+    pub depth: f32,
+}
+
+/// The materials of a framed panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PanelMaterials {
+    pub cloth: u32,
+    pub wood: u32,
+}
+
 /// Steps rising away from the screen, for `MeshBuilder::steps`.
 #[derive(Clone, Copy, Debug)]
 pub struct Stair<'a> {
@@ -101,6 +125,48 @@ pub fn planar_uv(corners: [Vec3; 4], n: Vec3) -> [Vec2; 4] {
             Vec2::new(p.x, p.y)
         }
     })
+}
+
+/// Whether the segment from `a` to `b` passes through the box: for the
+/// sight-line tests of every room.
+#[cfg(test)]
+pub fn segment_hits(a: Vec3, b: Vec3, bx: &Aabb) -> bool {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0_f32, 1.0_f32);
+    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+        let (o, dir) = (a.dot(axis), d.dot(axis));
+        let (lo, hi) = (bx.min.dot(axis), bx.max.dot(axis));
+        if dir.abs() < 1e-9 {
+            if !(lo..=hi).contains(&o) {
+                return false;
+            }
+            continue;
+        }
+        let (ta, tb) = ((lo - o) / dir, (hi - o) / dir);
+        t0 = t0.max(ta.min(tb));
+        t1 = t1.min(ta.max(tb));
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// `corners` in the order that winds counter-clockwise seen from the side `n`
+/// points to: reversed when they run the other way.
+fn facing(corners: [Vec3; 4], n: Vec3) -> [Vec3; 4] {
+    let cross = (corners[1] - corners[0]).cross(corners[2] - corners[0]);
+    if cross.dot(n) < 0.0 {
+        [corners[3], corners[2], corners[1], corners[0]]
+    } else {
+        corners
+    }
+}
+
+/// The unit normal of a chamfer that rises one unit for each unit it runs
+/// along (`x`, `z`).
+fn slope(x: f32, z: f32) -> Vec3 {
+    Vec3::new(x, 1.0, z).normalize()
 }
 
 /// The three boxes of the seat centred at `x` on a row whose floor is `floor`
@@ -205,6 +271,73 @@ impl MeshBuilder {
         self.face(right, Vec3::X, material);
         let left = [v(l, b, f), v(l, b, k), v(l, t, k), v(l, t, f)];
         self.face(left, Vec3::NEG_X, material);
+    }
+
+    /// A box whose four top edges are chamfered by `chamfer` metres (the
+    /// bottom is left out, as for `box_`): cushions, backs and arms. Nine
+    /// faces: the sides stop `chamfer` short of the top, a sloped strip runs
+    /// round each top edge, and the flat top is inset by `chamfer`. A chamfer
+    /// too big for the box is cut down, and none at all is a plain box.
+    pub fn chamfered_box(&mut self, min: Vec3, max: Vec3, chamfer: f32, material: u32) {
+        let c = chamfer.min(((max - min) * 0.5).min_element());
+        if c <= 1e-4 {
+            self.box_(min, max, material);
+            return;
+        }
+        let v = Vec3::new;
+        let (l, r, b, t, f, k) = (min.x, max.x, min.y, max.y, min.z, max.z);
+        // Where the sides end, and the top's edges.
+        let s = t - c;
+        let (li, ri, fi, ki) = (l + c, r - c, f + c, k - c);
+        let front = [v(r, b, f), v(l, b, f), v(l, s, f), v(r, s, f)];
+        self.face(front, Vec3::NEG_Z, material);
+        let back = [v(l, b, k), v(r, b, k), v(r, s, k), v(l, s, k)];
+        self.face(back, Vec3::Z, material);
+        let right = [v(r, b, k), v(r, b, f), v(r, s, f), v(r, s, k)];
+        self.face(right, Vec3::X, material);
+        let left = [v(l, b, f), v(l, b, k), v(l, s, k), v(l, s, f)];
+        self.face(left, Vec3::NEG_X, material);
+        let top = [v(li, t, ki), v(ri, t, ki), v(ri, t, fi), v(li, t, fi)];
+        self.face(top, Vec3::Y, material);
+        // The strips, each from the side's top edge up to the top's edge.
+        let strip = [v(l, s, f), v(r, s, f), v(ri, t, fi), v(li, t, fi)];
+        let n = slope(0.0, -1.0);
+        self.face(facing(strip, n), n, material);
+        let strip = [v(r, s, k), v(l, s, k), v(li, t, ki), v(ri, t, ki)];
+        let n = slope(0.0, 1.0);
+        self.face(facing(strip, n), n, material);
+        let strip = [v(r, s, f), v(r, s, k), v(ri, t, ki), v(ri, t, fi)];
+        let n = slope(1.0, 0.0);
+        self.face(facing(strip, n), n, material);
+        let strip = [v(l, s, k), v(l, s, f), v(li, t, fi), v(li, t, ki)];
+        let n = slope(-1.0, 0.0);
+        self.face(facing(strip, n), n, material);
+    }
+
+    /// A panel of cloth in a wood frame on a wall: four bars standing `depth`
+    /// out from the wall, and the cloth (a grid, so the light baked per vertex
+    /// varies across it) half way back.
+    pub fn framed_panel(&mut self, p: WallPanel, m: PanelMaterials) {
+        let n = p.normal;
+        // Along the wall, to the right seen from the room.
+        let across = Vec3::Y.cross(n);
+        let at = |s: f32, t: f32, e: f32| p.centre + across * s + Vec3::Y * t + n * e;
+        let (hw, hh) = (p.size.x * 0.5, p.size.y * 0.5);
+        let (iw, ih) = (hw - p.frame, hh - p.frame);
+        // Each bar from `s0` to `s1` across and `t0` to `t1` up.
+        let bars = [
+            [-hw, hw, -hh, -ih],
+            [-hw, hw, ih, hh],
+            [-hw, -iw, -ih, ih],
+            [iw, hw, -ih, ih],
+        ];
+        for [s0, s1, t0, t1] in bars {
+            let (from, to) = (at(s0, t0, 0.0), at(s1, t1, p.depth));
+            self.box_(from.min(to), from.max(to), m.wood);
+        }
+        let pt = |s: f32, t: f32| at(s, t, p.depth * 0.5);
+        let cloth = [pt(-iw, -ih), pt(iw, -ih), pt(iw, ih), pt(-iw, ih)];
+        self.grid(cloth, n, m.cloth, GRID_CELL);
     }
 
     /// Treads and risers, rising away from the screen: each tread is a grid
@@ -404,6 +537,142 @@ mod tests {
             let p = Vec3::from(v.pos);
             assert!(p.cmpge(min).all() && p.cmple(max).all());
         }
+    }
+
+    /// The vertices of `m` made of `material`.
+    fn of_material(m: &MeshBuilder, material: u32) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        for v in &m.vertices {
+            if v.material == material {
+                out.push(*v);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_chamfered_box_is_nine_faces_with_its_top_edges_cut() {
+        let mut m = MeshBuilder::new();
+        let (min, max) = (Vec3::new(1.0, 2.0, 3.0), Vec3::new(2.0, 2.5, 4.0));
+        m.chamfered_box(min, max, 0.1, 0);
+        assert_eq!(m.vertices.len(), 9 * 4);
+        assert_eq!(m.indices.len(), 9 * 6);
+        let mut sloped = 0;
+        for v in &m.vertices {
+            let (p, n) = (Vec3::from(v.pos), Vec3::from(v.normal));
+            assert!(p.cmpge(min).all() && p.cmple(max).all());
+            assert!((n.length() - 1.0).abs() < 1e-5);
+            if n.y > 0.5 && n.y < 0.9 {
+                sloped += 1;
+            }
+            // What reaches the top of the box is inset by the chamfer.
+            if (p.y - max.y).abs() < 1e-5 {
+                assert!(p.x >= min.x + 0.1 - 1e-5 && p.x <= max.x - 0.1 + 1e-5);
+                assert!(p.z >= min.z + 0.1 - 1e-5 && p.z <= max.z - 0.1 + 1e-5);
+            }
+        }
+        // Four sloped strips of four vertices.
+        assert_eq!(sloped, 4 * 4);
+    }
+
+    #[test]
+    fn a_chamfered_box_faces_outwards() {
+        let mut m = MeshBuilder::new();
+        let (min, max) = (Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        m.chamfered_box(min, max, 0.2, 0);
+        let pos = |i: u32| Vec3::from(m.vertices[i as usize].pos);
+        let middle = (min + max) * 0.5;
+        for t in m.indices.chunks(3) {
+            let (a, b, c) = (pos(t[0]), pos(t[1]), pos(t[2]));
+            let n = Vec3::from(m.vertices[t[0] as usize].normal);
+            let wound = (b - a).cross(c - a).normalize();
+            assert!(wound.dot(n) > 0.99, "winding against the normal {n:?}");
+            // Away from the middle of the box.
+            assert!((a - middle).dot(n) > 0.0, "{n:?} faces inwards");
+        }
+    }
+
+    #[test]
+    fn a_chamfer_too_big_is_cut_down_and_none_is_a_plain_box() {
+        let (min, max) = (Vec3::ZERO, Vec3::new(1.0, 0.2, 1.0));
+        let mut m = MeshBuilder::new();
+        m.chamfered_box(min, max, 5.0, 0);
+        assert_eq!(m.vertices.len(), 9 * 4);
+        for v in &m.vertices {
+            let p = Vec3::from(v.pos);
+            assert!(p.cmpge(min).all() && p.cmple(max).all());
+        }
+        let mut plain = MeshBuilder::new();
+        plain.chamfered_box(min, max, 0.0, 0);
+        assert_eq!(plain.vertices.len(), 5 * 4);
+    }
+
+    /// A panel 1 m wide and 1.5 m high on the wall x = 0, facing +x, with
+    /// 5 cm bars standing 4 cm out, centred at height 2 and 3 m along.
+    fn wall_panel() -> WallPanel {
+        WallPanel {
+            centre: Vec3::new(0.0, 2.0, 3.0),
+            normal: Vec3::X,
+            size: Vec2::new(1.0, 1.5),
+            frame: 0.05,
+            depth: 0.04,
+        }
+    }
+
+    #[test]
+    fn a_framed_panel_is_four_bars_and_cloth_inside_them() {
+        let mut m = MeshBuilder::new();
+        let (cloth, wood) = (7, 8);
+        m.framed_panel(wall_panel(), PanelMaterials { cloth, wood });
+        // Four boxes of five faces.
+        assert_eq!(of_material(&m, wood).len(), 4 * 5 * 4);
+        // 0.9 by 1.4 m in cells of half a metre: 2 by 3, so 3 by 4 points.
+        let cloth = of_material(&m, cloth);
+        assert_eq!(cloth.len(), 3 * 4);
+        for v in &cloth {
+            let p = Vec3::from(v.pos);
+            // Half way out, inside the bars.
+            assert!((p.x - 0.02).abs() < 1e-5, "{p:?}");
+            assert!((p.z - 3.0).abs() <= 0.45 + 1e-5, "{p:?}");
+            assert!((p.y - 2.0).abs() <= 0.7 + 1e-5, "{p:?}");
+            assert_eq!(v.normal, [1.0, 0.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn a_framed_panel_stays_between_the_wall_and_its_depth() {
+        let mut m = MeshBuilder::new();
+        m.framed_panel(wall_panel(), PanelMaterials { cloth: 0, wood: 1 });
+        for v in &m.vertices {
+            let p = Vec3::from(v.pos);
+            assert!((-1e-5..=0.04 + 1e-5).contains(&p.x), "{p:?}");
+            assert!((p.z - 3.0).abs() <= 0.5 + 1e-5, "{p:?}");
+            assert!((p.y - 2.0).abs() <= 0.75 + 1e-5, "{p:?}");
+        }
+        // On a wall facing the other way, the panel stands out the other way.
+        let flipped = WallPanel {
+            normal: Vec3::NEG_X,
+            ..wall_panel()
+        };
+        let mut other = MeshBuilder::new();
+        other.framed_panel(flipped, PanelMaterials { cloth: 0, wood: 1 });
+        let cloth = of_material(&other, 0);
+        assert_eq!(cloth.len(), 3 * 4);
+        for v in &cloth {
+            assert!((v.pos[0] + 0.02).abs() < 1e-5, "{:?}", v.pos);
+            assert_eq!(v.normal, [-1.0, 0.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn a_segment_hits_a_box_it_crosses_and_misses_one_it_passes() {
+        let v = Vec3::new;
+        let bx = Aabb::new(v(-1.0, 0.0, -1.0), v(1.0, 1.0, 1.0));
+        assert!(segment_hits(v(0.0, 0.5, -3.0), v(0.0, 0.5, 3.0), &bx));
+        // Over it, beside it, and stopping short of it.
+        assert!(!segment_hits(v(0.0, 2.0, -3.0), v(0.0, 2.0, 3.0), &bx));
+        assert!(!segment_hits(v(2.0, 0.5, -3.0), v(2.0, 0.5, 3.0), &bx));
+        assert!(!segment_hits(v(0.0, 0.5, -3.0), v(0.0, 0.5, -2.0), &bx));
     }
 
     #[test]

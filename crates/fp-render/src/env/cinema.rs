@@ -391,7 +391,7 @@ fn house_lights() -> Vec<PointLight> {
 
 #[cfg(test)]
 mod tests {
-    use super::kit::Aabb;
+    use super::kit::{Aabb, segment_hits};
     use super::*;
 
     /// Every seat's boxes, armrests included.
@@ -426,29 +426,6 @@ mod tests {
         let (min, max) = (v(-sw, 0.0, 0.0), v(sw, STAGE_HEIGHT, STAGE_DEPTH));
         boxes.push(Aabb::new(min, max));
         boxes
-    }
-
-    /// Whether the segment from `a` to `b` passes through the box.
-    fn segment_hits(a: Vec3, b: Vec3, bx: &Aabb) -> bool {
-        let d = b - a;
-        let (mut t0, mut t1) = (0.0_f32, 1.0_f32);
-        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-            let (o, dir) = (a.dot(axis), d.dot(axis));
-            let (lo, hi) = (bx.min.dot(axis), bx.max.dot(axis));
-            if dir.abs() < 1e-9 {
-                if !(lo..=hi).contains(&o) {
-                    return false;
-                }
-                continue;
-            }
-            let (ta, tb) = ((lo - o) / dir, (hi - o) / dir);
-            t0 = t0.max(ta.min(tb));
-            t1 = t1.min(ta.max(tb));
-            if t0 > t1 {
-                return false;
-            }
-        }
-        true
     }
 
     #[test]
