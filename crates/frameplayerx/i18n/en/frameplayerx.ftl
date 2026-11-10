@@ -1410,6 +1410,24 @@ plex-connection-manual-local-desc = For an access token, use a LAN IP address wi
 plex-test-required = Connect to a server before saving.
 # Plex edit form: changing credentials keeps the existing source separate.
 plex-new-account-source = Linking again or replacing the token adds a separate source and keeps this one.
+# Plex edit form: the button that lists the account's servers, to add or remove them.
+plex-manage-servers = Manage servers
+plex-manage-servers-desc = See every server of this Plex account. Add one without a new code, or remove one.
+# Plex server list: asks before a server is removed from this app.
+plex-server-remove-ask = Remove { $server }?
+plex-server-remove-desc = What was watched stays and comes back if you add it again.
+# Short: confirms removing a server.
+plex-server-remove = Remove
+# Short: keeps a server that was asked to be removed.
+plex-server-keep = Keep
+# Toast: the servers just removed; $names is their names, separated by commas.
+plex-servers-removed = Removed { $names }
+# Plex edit form: plex.tv no longer accepts the account's sign-in.
+plex-signed-out = This Plex account is signed out. Get a code to link it again: its sources and what was watched stay.
+# Plex edit form: the libraries of the server, each with a switch.
+plex-libraries = Libraries
+plex-libraries-desc = Switch a library off to leave it out of this source: its tile, rows, search results and Continue Watching.
+plex-libraries-failed = The libraries could not be listed: { $error }
 
 # Settings > Earbuds
 earbuds-title = Tragus

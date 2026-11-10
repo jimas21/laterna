@@ -1162,6 +1162,7 @@ pub fn edit_form(cfg: &SourceConfig) -> SourceForm {
             f.plex.token = c.access_token.clone();
             f.plex.connection = super::plex::ConnectionMode::from_config(c);
             f.plex.selected = Some(c.clone());
+            f.plex.hidden = c.hidden_sections.iter().cloned().collect();
             f.plex.state = super::plex::LinkState::Connected;
         }
         SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => {

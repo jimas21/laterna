@@ -430,27 +430,51 @@ impl App {
     }
 
     pub(super) fn remove_source(&mut self, id: &str) {
-        if self.source_locked(id) {
-            self.ask_pin(id);
-            return;
+        self.remove_sources(&[id.to_string()]);
+    }
+
+    /// Removes sources together: one save and one rebuild, and nothing at
+    /// all while any of them is locked (the first is asked for its PIN).
+    /// A source's PIN goes with it, so one added again is not locked. True
+    /// when they were removed and the list was saved.
+    pub(super) fn remove_sources(&mut self, ids: &[String]) -> bool {
+        if let Some(locked) = ids.iter().find(|id| self.source_locked(id)) {
+            let locked = locked.clone();
+            self.ask_pin(&locked);
+            return false;
         }
-        self.settings.source_pins.remove(id);
-        self.ui.unlocked_sources.remove(id);
-        self.close_source_view(id);
-        let _ = std::fs::remove_file(fp_sources::FeedLibrary::cache_path(id));
-        // Its videos go with it, except what was watched or marked.
-        match self.services.library.forget_unwatched(id) {
-            Ok(n) if n > 0 => log::info!("forgot {n} unwatched videos of {id}"),
-            Ok(_) => {}
-            Err(e) => log::warn!("forgetting the videos of {id}: {e}"),
+        for id in ids {
+            self.settings.source_pins.remove(id);
+            self.ui.unlocked_sources.remove(id);
+            self.close_source_view(id);
+            let _ = std::fs::remove_file(fp_sources::FeedLibrary::cache_path(id));
+            // Its videos go with it, except what was watched or marked.
+            match self.services.library.forget_unwatched(id) {
+                Ok(n) if n > 0 => log::info!("forgot {n} unwatched videos of {id}"),
+                Ok(_) => {}
+                Err(e) => log::warn!("forgetting the videos of {id}: {e}"),
+            }
+        }
+        // The form of a source that is gone has nothing to save to.
+        let editing = |f: &ui::SourceForm| {
+            f.editing
+                .as_ref()
+                .is_some_and(|c| ids.iter().any(|id| id == c.id()))
+        };
+        if self.ui.source_form.as_ref().is_some_and(editing) {
+            self.ui.source_form = None;
         }
         self.ui.invalidate();
         let change = self.services.replace_sources(|list| {
-            list.retain(|c| c.id() != id);
+            list.retain(|c| !ids.iter().any(|id| id == c.id()));
             std::collections::HashSet::new()
         });
-        if let Some(e) = change.save_error {
-            self.ui.toast(tr!("source-removed-unsaved", error = e));
+        match change.save_error {
+            Some(e) => {
+                self.ui.toast(tr!("source-removed-unsaved", error = e));
+                false
+            }
+            None => true,
         }
     }
 

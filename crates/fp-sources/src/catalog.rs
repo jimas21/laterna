@@ -504,6 +504,12 @@ pub trait Catalog: Send + Sync {
     }
     fn set_played(&self, id: &str, played: bool) -> Result<()>;
     fn set_version(&self, location: &str, version: Option<&str>);
+    /// Every library the server has, those the user left out of this source
+    /// too: what the source's settings choose from. (`home` lists only the
+    /// libraries that are shown.)
+    fn all_libraries(&self) -> Result<Vec<CatalogItem>> {
+        Ok(self.home()?.libraries)
+    }
     /// A library's own rows (Plex's Recommended); empty: it opens as a grid.
     fn library_rows(&self, _library: &str) -> Result<Vec<CatalogRow>> {
         Ok(Vec::new())
