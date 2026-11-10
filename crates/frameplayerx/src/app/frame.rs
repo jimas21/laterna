@@ -1090,7 +1090,7 @@ fn perf_video(
         stalls: st.stalls,
         stuttered: readings.stuttered(),
         decoder,
-        damage: crate::playback::damage_total(st),
+        damage: playback::damage_total(st),
         buffer: (st.read_ahead.0 as f32, st.read_ahead.1 as f32),
         read_to_end: st.read_to_end,
         network: on_network.then(|| ui::perf::Network {

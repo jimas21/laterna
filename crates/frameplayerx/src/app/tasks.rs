@@ -1,6 +1,11 @@
 //! Background work and its results: opening videos, scans, updates, drives.
 
 use super::*;
+use crate::writer::Done;
+
+/// How long opening a video waits for the saves made just before it (see
+/// [`crate::writer::Barrier`]).
+const WRITES_WITHIN: Duration = Duration::from_secs(2);
 
 type PlexLink = Option<(
     fp_sources::plex::auth::PlexCredentials,
