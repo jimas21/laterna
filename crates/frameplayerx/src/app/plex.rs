@@ -754,6 +754,7 @@ impl App {
         let ids: HashSet<String> = found.sources.iter().map(|p| p.id.clone()).collect();
         for id in &ids {
             self.ui.catalog_cache.forget(id);
+            self.ui.server_homes.forget(id);
         }
         let sources = found.sources;
         let change = self.services.replace_sources(|list| {

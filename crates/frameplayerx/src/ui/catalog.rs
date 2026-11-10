@@ -1518,6 +1518,86 @@ fn shelf_view(ui: &mut egui::Ui, v: &mut View, shelf: &Shelf<'_>) -> Option<Go> 
     }
 }
 
+/// A row of a server's front page on the app's Home: a video plays alone,
+/// from where it was left; anything else opens on the server.
+pub(super) fn home_row(
+    ui: &mut egui::Ui,
+    v: &mut View,
+    source: &str,
+    row: &CatalogRow,
+    title: &str,
+) {
+    let mut shelf = Shelf::new(
+        &format!("home/{source}/{}", row.id),
+        title,
+        &row.items,
+        None,
+    );
+    shelf.shape = Some(row.shape);
+    shelf.alone = true;
+    let go = shelf_view(ui, v, &shelf);
+    home_go(v, source, go);
+}
+
+/// A server's "Continue watching" row on the app's Home.
+pub(super) fn home_continue(
+    ui: &mut egui::Ui,
+    v: &mut View,
+    source: &str,
+    title: &str,
+    items: &[CatalogItem],
+) {
+    let id = format!("home/{source}/continue");
+    let mut shelf = Shelf::new(&id, title, items, Some(RowShape::Landscape));
+    shelf.alone = true;
+    let go = shelf_view(ui, v, &shelf);
+    home_go(v, source, go);
+}
+
+/// What a click on Home's server rows does.
+fn home_go(v: &mut View, source: &str, go: Option<Go>) {
+    match go {
+        Some(Go::Play(list, i, from_start)) => {
+            let reqs: Vec<OpenRequest> = list
+                .iter()
+                .enumerate()
+                .map(|(k, item)| request(source, item, from_start && k == i))
+                .collect();
+            v.actions.push(Action::OpenList(reqs, i));
+        }
+        Some(Go::Open(item) | Go::Details(item)) => open_on_server(v, source, item),
+        _ => {}
+    }
+}
+
+/// Opens a server's browser on `item`; backing out returns to Home.
+pub(super) fn open_on_server(v: &mut View, source: &str, item: CatalogItem) {
+    v.actions.push(Action::OpenSourceAt {
+        source: source.to_string(),
+        item: Box::new(item),
+        back_to: super::Screen::Home,
+    });
+}
+
+/// Plays `item` alone, from where it was left.
+pub(super) fn play_alone(v: &mut View, source: &str, item: &CatalogItem) {
+    v.actions
+        .push(Action::OpenList(vec![request(source, item, false)], 0));
+}
+
+/// The line under a featured title: "2019 · 1:57:00 · PG-13".
+pub(super) fn featured_facts(item: &CatalogItem) -> String {
+    let mut f = Vec::new();
+    if let Some(y) = item.year {
+        f.push(y.to_string());
+    }
+    if let Some(r) = item.runtime.filter(|r| *r > 0.0) {
+        f.push(fmt_time(r));
+    }
+    f.extend(item.official_rating.clone());
+    f.join("  ·  ")
+}
+
 /// A titled row of cards, each in the shape its kind has.
 fn item_row(ui: &mut egui::Ui, v: &mut View, title: &str, items: &[CatalogItem]) -> Option<Go> {
     shelf_view(ui, v, &Shelf::new(title, title, items, None))

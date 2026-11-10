@@ -181,6 +181,16 @@ that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
 *Continue watching* and *Favorites*) and ends with a row of your sources:
 **On this device** first, then your libraries and every other source you
 added, then *Add a source*.
+
+Your Plex, Jellyfin and Emby servers show on Home too. Each adds a
+*Continue watching on* row of what you have half watched on it, and its first
+few rows (what is new, what to watch next). If nothing is half watched on this
+headset, the banner shows the first video the server has half watched.
+A video plays from where you left off; anything else opens on its server.
+Home remembers what each server showed last time, so these rows are there
+at once, even while a server is asleep, and they change when it answers.
+The server is the one that knows what you watched, so videos of a server
+that has answered are not listed twice under your own *Continue watching*.
 Each opens in a browser made for that kind of source; Back returns to Home.
 Its title is always the source's name, with where you are in it underneath.
 Sources locked with a PIN stay off Home until unlocked; the padlock on a

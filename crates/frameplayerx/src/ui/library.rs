@@ -9,6 +9,8 @@ use crate::playback::OpenRequest;
 use egui::{Align, Align2, Color32, Layout, RichText, Sense, Vec2};
 use fp_core::format::{DetectedFormat, Evidence, VideoFormat};
 use fp_library::{MediaRecord, Sort};
+use fp_sources::{CatalogHome, CatalogItem};
+use std::collections::HashSet;
 
 /// Page margin left and right of the content.
 const MARGIN: i8 = 28;
@@ -416,29 +418,42 @@ fn record_row(ui: &mut egui::Ui, v: &mut View, title: &str, records: &[MediaReco
     });
 }
 
-/// The featured video at the top of Home: what to resume, else the last
-/// one watched.
-fn hero(ui: &mut egui::Ui, v: &mut View, rows: &HomeRows) {
-    let (r, caption, resume) = match (rows.continue_watching.first(), &rows.last_watched) {
-        (Some(r), _) => (r, tr!("jf-continue"), true),
-        (None, Some(r)) => (r, tr!("library-watch-again"), false),
-        _ => return,
-    };
-    let key = r.picture();
-    let resp = page::banner(ui, v.thumbs, key.as_deref(), 300.0, |inner| {
+/// The featured video at the top of Home.
+struct Featured {
+    /// The picture behind it.
+    picture: Option<String>,
+    caption: String,
+    title: String,
+    facts: String,
+    /// Seconds left of a video that is half watched.
+    left: Option<f64>,
+    /// Offers Resume rather than Play.
+    resume: bool,
+}
+
+/// What was clicked on the featured video.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Featuring {
+    Play,
+    Details,
+}
+
+/// A banner for `f`; what was clicked.
+fn featured(ui: &mut egui::Ui, v: &mut View, f: &Featured) -> Option<Featuring> {
+    let mut clicked = None;
+    let resp = page::banner(ui, v.thumbs, f.picture.as_deref(), 300.0, |inner| {
         inner.add_space(22.0);
-        widgets::section_label(inner, caption);
+        widgets::section_label(inner, &f.caption);
         let room = inner.available_width();
         widgets::title_line(
             inner,
-            &widgets::display_title(&r.title),
+            &widgets::display_title(&f.title),
             theme::font(Weight::Bold, 42.0),
             Color32::WHITE,
             room,
         );
-        let mut line = facts(r, v.settings.default_format);
-        if resume && r.resume_position > 1.0 {
-            let left = r.duration.unwrap_or(0.0) - r.resume_position;
+        let mut line = f.facts.clone();
+        if let Some(left) = f.left {
             line = format!("{line}  ·  {}", tr!("jf-time-left", time = fmt_time(left)));
         }
         inner.label(
@@ -449,13 +464,13 @@ fn hero(ui: &mut egui::Ui, v: &mut View, rows: &HomeRows) {
         inner.add_space(18.0);
         inner.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
-            let label = if resume {
+            let label = if f.resume {
                 tr!("library-resume")
             } else {
                 tr!("player-play")
             };
             if widgets::button(ui, Some(icons::PLAY), label, Kind::Primary).clicked() {
-                v.actions.push(open_record(r));
+                clicked = Some(Featuring::Play);
             }
             if widgets::button(
                 ui,
@@ -465,51 +480,144 @@ fn hero(ui: &mut egui::Ui, v: &mut View, rows: &HomeRows) {
             )
             .clicked()
             {
-                v.state.details = Some(r.id);
+                clicked = Some(Featuring::Details);
             }
         });
     });
     if resp.clicked() {
-        v.state.details = Some(r.id);
+        clicked = clicked.or(Some(Featuring::Details));
     }
     ui.add_space(26.0);
+    clicked
+}
+
+/// The featured video from this headset: what to resume, else the last one
+/// watched.
+fn hero(ui: &mut egui::Ui, v: &mut View, rows: &HomeRows, last: bool) {
+    let (r, caption, resume) = match (rows.continue_watching.first(), &rows.last_watched) {
+        (Some(r), _) if !last => (r, tr!("jf-continue"), true),
+        (_, Some(r)) => (r, tr!("library-watch-again"), false),
+        _ => return,
+    };
+    let left =
+        (resume && r.resume_position > 1.0).then(|| r.duration.unwrap_or(0.0) - r.resume_position);
+    let shown = Featured {
+        picture: r.picture(),
+        caption: caption.to_string(),
+        title: r.title.clone(),
+        facts: facts(r, v.settings.default_format),
+        left,
+        resume,
+    };
+    match featured(ui, v, &shown) {
+        Some(Featuring::Play) => v.actions.push(open_record(r)),
+        Some(Featuring::Details) => v.state.details = Some(r.id),
+        None => {}
+    }
+}
+
+/// The featured video from a server: the first it has half watched.
+fn server_hero(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, item: &CatalogItem) {
+    let left = (item.position > 1.0)
+        .then(|| item.runtime.unwrap_or(0.0) - item.position)
+        .filter(|left| *left > 0.0);
+    let shown = Featured {
+        picture: item
+            .backdrop
+            .clone()
+            .or_else(|| item.landscape.clone())
+            .or_else(|| item.poster.clone()),
+        caption: tr!("home-continue-on-server", server = name),
+        title: item.full_title(),
+        facts: super::catalog::featured_facts(item),
+        left,
+        resume: item.position > 1.0,
+    };
+    match featured(ui, v, &shown) {
+        Some(Featuring::Play) => super::catalog::play_alone(v, source, item),
+        Some(Featuring::Details) => super::catalog::open_on_server(v, source, item.clone()),
+        None => {}
+    }
+}
+
+/// Builds the rows from this headset's library that Home shows. Videos of a
+/// server whose front page is known are left out of Continue watching: the
+/// server says what is half watched there.
+fn home_rows(v: &View, served: &HashSet<String>, key: (u64, Vec<String>)) -> HomeRows {
+    let lib = &v.services.library;
+    let favorites = lib
+        .search(&fp_library::Query {
+            favorites_only: true,
+            sort: Sort::LastPlayed,
+            limit: Some(20),
+            ..Default::default()
+        })
+        .unwrap_or_default();
+    let last_watched = lib
+        .search(&fp_library::Query {
+            watched_only: true,
+            sort: Sort::LastPlayed,
+            limit: Some(1),
+            ..Default::default()
+        })
+        .unwrap_or_default()
+        .pop();
+    let mut continue_watching = lib.continue_watching(20).unwrap_or_default();
+    continue_watching.retain(|r| !served.contains(&r.source_id));
+    HomeRows {
+        continue_watching,
+        last_watched,
+        favorites,
+        key,
+    }
 }
 
 fn home(ui: &mut egui::Ui, v: &mut View) {
+    use crate::app::server_home::{Block, Pick};
+    let servers = crate::app::server_home::shown(
+        &v.services.source_configs,
+        &v.settings.plex_profiles,
+        &v.settings.source_pins,
+        &v.state.unlocked_sources,
+    );
+    // The servers are asked for their front page again when it is old.
+    if servers.iter().any(|(id, _)| v.state.server_homes.due(id)) {
+        v.actions.push(Action::RefreshServerHomes);
+    }
+    let key = (
+        v.state.server_homes.generation(),
+        servers.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+    );
+    if v.state.home.as_ref().is_some_and(|h| h.key != key) {
+        v.state.home = None;
+    }
     if v.state.home.is_none() {
-        let lib = &v.services.library;
-        let favorites = lib
-            .search(&fp_library::Query {
-                favorites_only: true,
-                sort: Sort::LastPlayed,
-                limit: Some(20),
-                ..Default::default()
-            })
-            .unwrap_or_default();
-        let last_watched = lib
-            .search(&fp_library::Query {
-                watched_only: true,
-                sort: Sort::LastPlayed,
-                limit: Some(1),
-                ..Default::default()
-            })
-            .unwrap_or_default()
-            .pop();
-        v.state.home = Some(HomeRows {
-            continue_watching: lib.continue_watching(20).unwrap_or_default(),
-            last_watched,
-            favorites,
-        });
+        let served: HashSet<String> = servers
+            .iter()
+            .filter(|(id, _)| v.state.server_homes.has(id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        v.state.home = Some(home_rows(v, &served, key));
     }
     let Some(rows) = v.state.home.take() else {
         return;
     };
+    let homes = std::mem::take(&mut v.state.server_homes);
+    // The servers that have a page, with it.
+    let pages: Vec<(&(String, String), &CatalogHome)> = servers
+        .iter()
+        .filter_map(|s| homes.get(&s.0).map(|h| (s, h)))
+        .collect();
+    let heads: Vec<&CatalogHome> = pages.iter().map(|(_, h)| *h).collect();
+    let blocks = crate::app::server_home::layout(
+        rows.continue_watching.len(),
+        rows.last_watched.is_some(),
+        rows.favorites.len(),
+        &heads,
+    );
     page::scroll(ui, |ui| {
         ui.add_space(14.0);
-        let nothing = rows.continue_watching.is_empty()
-            && rows.last_watched.is_none()
-            && rows.favorites.is_empty();
-        if nothing {
+        if blocks == [Block::Sources] {
             page::empty_state(
                 ui,
                 icons::PLAY_CIRCLE,
@@ -518,13 +626,45 @@ fn home(ui: &mut egui::Ui, v: &mut View) {
                 |_| {},
             );
             ui.add_space(24.0);
-        } else {
-            hero(ui, v, &rows);
         }
-        record_row(ui, v, tr!("jf-continue"), &rows.continue_watching);
-        record_row(ui, v, tr!("filter-favorites"), &rows.favorites);
-        super::sources::source_row(ui, v, Screen::Home);
+        for block in &blocks {
+            match *block {
+                Block::Hero(Pick::Local) => hero(ui, v, &rows, false),
+                Block::Hero(Pick::LastWatched) => hero(ui, v, &rows, true),
+                Block::Hero(Pick::Server(i)) => {
+                    let ((source, name), page) = pages[i];
+                    if let Some(item) = page.resume.first() {
+                        server_hero(ui, v, source, name, item);
+                    }
+                }
+                Block::LocalContinue => {
+                    record_row(ui, v, tr!("jf-continue"), &rows.continue_watching);
+                }
+                Block::ServerContinue(i) => {
+                    let ((source, name), page) = pages[i];
+                    let title = tr!("home-continue-on-server", server = name.as_str());
+                    super::catalog::home_continue(ui, v, source, &title, &page.resume);
+                }
+                Block::ServerRow { server, row } => {
+                    let ((source, name), page) = pages[server];
+                    let row = &page.rows[row];
+                    let title = if servers.len() > 1 {
+                        tr!(
+                            "home-row-on-server",
+                            row = row.title.as_str(),
+                            server = name.as_str()
+                        )
+                    } else {
+                        row.title.clone()
+                    };
+                    super::catalog::home_row(ui, v, source, row, &title);
+                }
+                Block::Favorites => record_row(ui, v, tr!("filter-favorites"), &rows.favorites),
+                Block::Sources => super::sources::source_row(ui, v, Screen::Home),
+            }
+        }
     });
+    v.state.server_homes = homes;
     v.state.home = Some(rows);
 }
 

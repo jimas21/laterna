@@ -224,6 +224,7 @@ impl App {
                 item,
                 back_to,
             } => self.open_source_at(source, *item, back_to),
+            Action::RefreshServerHomes => self.refresh_server_homes(),
             Action::ServerPlaylists { source } => self.server_playlists(source),
             Action::ServerHistory { source } => self.server_history(source),
             Action::Browse { source, location } => self.browse(source, location),
@@ -475,6 +476,8 @@ impl App {
         self.show_browser = true;
         self.ui_visible = true;
         self.ui.invalidate();
+        // Servers have heard what was watched: Home asks them again.
+        self.ui.server_homes.expire();
         self.refresh_source(true);
     }
 

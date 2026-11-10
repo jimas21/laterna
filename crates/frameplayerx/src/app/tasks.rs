@@ -48,6 +48,11 @@ pub(super) enum Job {
         source: String,
         result: Result<Vec<fp_sources::CatalogItem>, String>,
     },
+    /// A server's front page for the app's Home.
+    ServerHome {
+        source: String,
+        result: Result<fp_sources::CatalogHome, String>,
+    },
     /// What was watched on a server, for the History tab.
     ServerHistory {
         source: String,
@@ -470,6 +475,7 @@ impl App {
             Job::ServerPlaylists { source, result } => {
                 self.server_playlists_loaded(&source, result);
             }
+            Job::ServerHome { source, result } => self.server_home_loaded(&source, result),
             Job::ServerHistory { source, result } => self.server_history_loaded(&source, result),
             Job::FeedLibrary {
                 source,

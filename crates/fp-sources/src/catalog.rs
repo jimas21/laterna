@@ -4,9 +4,10 @@
 use crate::error::{Error, Result};
 use fp_core::format::VideoFormat;
 use fp_core::source::{Entry, EntryKind};
+use serde::{Deserialize, Serialize};
 
 /// What a library item is.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CatalogKind {
     Movie,
     /// A TV series (holds seasons).
@@ -58,7 +59,8 @@ impl CatalogKind {
 }
 
 /// One catalog item, with what the server browser shows of it.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CatalogItem {
     /// Server id.
     pub id: String,
@@ -127,7 +129,8 @@ pub struct CatalogItem {
 }
 
 /// One version of a film or video: a media source of the item.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CatalogVersion {
     /// The server version id, for [`Catalog::set_version`].
     pub id: String,
@@ -214,7 +217,7 @@ impl CatalogItem {
 }
 
 /// Order of a listing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CatalogSort {
     /// By title.
     #[default]
@@ -249,7 +252,7 @@ impl CatalogSort {
 }
 
 /// Which items a listing keeps.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CatalogFilter {
     /// Everything.
     #[default]
@@ -263,7 +266,8 @@ pub enum CatalogFilter {
 }
 
 /// A server-side listing: search, sort, filter and paging.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CatalogQuery {
     /// Library, folder or collection to list; `None` for the whole server.
     pub parent: Option<String>,
@@ -411,7 +415,8 @@ pub struct CatalogPage {
 }
 
 /// A server's front page.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CatalogHome {
     /// The user's video libraries.
     pub libraries: Vec<CatalogItem>,
@@ -427,7 +432,7 @@ pub struct CatalogHome {
 }
 
 /// How the cards of a row are drawn: one shape per row.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RowShape {
     /// 16:9 art.
     #[default]
@@ -448,7 +453,8 @@ impl RowShape {
 }
 
 /// One row of cards a server arranged: its own title, items and shape.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CatalogRow {
     /// Stable within the server; keys the row's scroll position.
     pub id: String,
@@ -567,6 +573,39 @@ mod tests {
         let folder = CatalogQuery::children(&of_kind(CatalogKind::Folder));
         assert_eq!(folder.sort, CatalogSort::Name);
         assert!(!CatalogSort::Server.default_descending());
+    }
+
+    #[test]
+    fn a_front_page_survives_json_and_ignores_what_it_does_not_know() {
+        let movie = CatalogItem {
+            location: "plex://m/1".into(),
+            backdrop: Some("plex://m/1/art".into()),
+            position: 42.5,
+            ..of_kind(CatalogKind::Movie)
+        };
+        let home = CatalogHome {
+            resume: vec![movie.clone()],
+            rows: vec![CatalogRow {
+                id: "recent".into(),
+                title: "Recently added".into(),
+                items: vec![movie],
+                shape: RowShape::Portrait,
+                more: Some(CatalogQuery {
+                    hub: Some("/hubs/x".into()),
+                    sort: CatalogSort::Added,
+                    ..CatalogQuery::default()
+                }),
+                library: Some("section:1".into()),
+            }],
+            ..CatalogHome::default()
+        };
+        let text = serde_json::to_string(&home).unwrap();
+        assert_eq!(serde_json::from_str::<CatalogHome>(&text).unwrap(), home);
+        // A copy written by another version reads, with the new fields empty.
+        let old: CatalogItem =
+            serde_json::from_str(r#"{"id":"9","name":"Old","kind":"Movie"}"#).unwrap();
+        assert_eq!(old.id, "9");
+        assert_eq!(old.position, 0.0);
     }
 
     #[test]
