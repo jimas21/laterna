@@ -226,7 +226,7 @@ impl ScreenGlow {
             return None;
         }
         let mut cells = [Vec3::ZERO; PATCHES];
-        for (cell, pixel) in cells.iter_mut().zip(bytes.chunks_exact(PIXEL)) {
+        for (cell, pixel) in cells.iter_mut().zip(bytes.as_chunks::<PIXEL>().0) {
             let channel = |i: usize| {
                 let half = u16::from_le_bytes([pixel[2 * i], pixel[2 * i + 1]]);
                 sane(f16_to_f32(half))
