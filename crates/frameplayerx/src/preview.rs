@@ -549,6 +549,12 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(2)?;
             }
+            // The bar's Size button pressed once: the next size, and its toast.
+            Some("size") => {
+                self.app.apply(crate::ui::Action::CycleSize);
+                self.app.repaint_all();
+                self.run_frames(4)?;
+            }
             // `house 0` holds the house lights dark and `house 1` full, as a
             // short test clip ends and would bring them up; `house auto` lets
             // playback dim and raise them again.

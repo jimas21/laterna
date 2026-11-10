@@ -527,14 +527,21 @@ The same at the bottom of the adjust panel's Position tab changes it for
 the video that is playing, and **Save for this video** keeps it with the
 rest of its adjustments. Your room replaces it while it shows.
 
-A flat screen's **Size**, **Distance**, **Width** and **Curvature** are on
-the adjust panel's Position tab too. **Size** has three choices: Small
-(58°), Medium (72°) and Large (90°). The number is how wide the screen looks
-from where you sit, across its long side. Medium is where every video starts.
-While a size is picked, moving the screen nearer or further keeps that size
-(the width changes to match). The Width slider shows the size in degrees
-too. Settings › Video position has the same controls, for where videos
-start; a width you saved before stays as it was. Its size is its width, so zooming a flat screen
+**Size** is how big the screen looks: **Home theater**, **Cinema** or
+**Giant**, with the degrees across your view in small type beside each name
+(58°, 72° and 90°). Bigger fills more of your view. Cinema is where every
+video starts. To compare them while you watch, press the **Size** button on
+the control bar (beside the film button): each press steps to the next size
+and shows its name, and the picture changes at once. The adjust panel's
+Position tab has the same three buttons, and so does Settings › Video
+position, for where videos start. Inside the Cinema place the screen is the
+room's own, so Size picks your seat instead: Giant is the front, Cinema the
+middle and Home theater the back.
+
+A flat screen's **Distance**, **Width** and **Curvature** are on the Position
+tab too. While a size is picked, moving the screen nearer or further keeps
+that size (the width changes to match). A width you saved before stays as it
+was. Its size is its width, so zooming a flat screen
 with the controller makes it wider or narrower, and **Zoom** shows only for
 180°, 360° and fisheye videos. Dragging a flat screen (grip + trigger) also
 changes its distance: it moves about two metres for each metre your hand
@@ -875,8 +882,8 @@ steps aside while the adjust panel is open. A video with its own saved
 screen movements (keyframes) shows those, so dragging it seems to do nothing.
 Settings › General › Window controls turns the bar and handle off. They also
 stay out of sight inside a room (Cinema), whose screen is where the room puts
-it: pick a seat to change how big it looks. They return with the Studio or
-Plain.
+it: the Size button picks a seat to change how big it looks. They return with
+the Studio or Plain.
 
 The browse panel, the adjust panel, the performance overlay and the keyboard
 have the same kind of bar under them. It appears when your laser comes near
@@ -967,10 +974,11 @@ a place while it shows.
   picker at the top: Plain, Your room, Cinema and Studio.
 - **Or set it for every video** in Settings › Places. It is the same
   choice: it stays until you change it, and a restart keeps it.
-- **Seat.** The cinema has three seats, Front, Middle and Back. The seat sets
-  how large the screen looks: from Front a film that fills the screen is
-  about 85° across, from Middle (the first choice) about 72°, and from Back
-  about 58°. Each place remembers its own seat.
+- **Size.** In the cinema, Size is your seat: Giant is the front, Cinema (the
+  first choice) the middle and Home theater the back. A film that fills the
+  screen is about 85° across from the front, 72° from the middle and 58° from
+  the back. The **Size** button on the control bar steps through them while
+  you watch. Each place remembers its own seat.
 - **Seat height.** Beside the seats, a slider raises or lowers where your
   eyes sit in the room, from 30 cm lower to 30 cm higher in steps of 5 cm.
   Use it if you sit low in a bed or a deep couch and the screen looks too
@@ -985,7 +993,7 @@ a place while it shows.
   slider sets how much (50 % to begin with; 0 turns it off to keep the place
   steady).
 - **The screen.** A room has a screen of its own, so the Position tab leaves
-  out the screen's distance, width and curvature there: pick a seat to change
+  out the screen's distance, width and curvature there: pick a Size to change
   how big it looks. The studio keeps your own screen settings. A place
   replaces the background colour.
 - **Screen follows you** (the bed button) does nothing inside a place: the

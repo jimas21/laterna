@@ -8,24 +8,40 @@ pub const BACKGROUND: [f32; 3] = [0.086, 0.086, 0.11];
 /// Metres a flat screen may be from the viewer.
 pub const SCREEN_DISTANCE: std::ops::RangeInclusive<f32> = 1.0..=20.0;
 
-/// A flat screen's size as the angle its long side spans at the eye. The
-/// three presets are Sony's cinematic sizes, rounded.
+/// How big a flat screen looks: Home theater, Cinema or Giant. Each is the
+/// angle the screen's long side spans at the eye (what the app shows beside
+/// the name, small). They are the same sizes the cinema's Back, Middle and
+/// Front seats see.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScreenSize {
-    Small,
-    Medium,
-    Large,
+    HomeTheater,
+    Cinema,
+    Giant,
 }
 
 impl ScreenSize {
-    pub const ALL: [ScreenSize; 3] = [ScreenSize::Small, ScreenSize::Medium, ScreenSize::Large];
+    /// Smallest first.
+    pub const ALL: [ScreenSize; 3] = [
+        ScreenSize::HomeTheater,
+        ScreenSize::Cinema,
+        ScreenSize::Giant,
+    ];
 
     /// Degrees across the long side.
     pub fn degrees(self) -> f32 {
         match self {
-            ScreenSize::Small => 58.0,
-            ScreenSize::Medium => 72.0,
-            ScreenSize::Large => 90.0,
+            ScreenSize::HomeTheater => 58.0,
+            ScreenSize::Cinema => 72.0,
+            ScreenSize::Giant => 90.0,
+        }
+    }
+
+    /// The size after this one, Giant going back round to Home theater.
+    pub fn next(self) -> ScreenSize {
+        match self {
+            ScreenSize::HomeTheater => ScreenSize::Cinema,
+            ScreenSize::Cinema => ScreenSize::Giant,
+            ScreenSize::Giant => ScreenSize::HomeTheater,
         }
     }
 
@@ -53,7 +69,7 @@ pub fn screen_width_for(degrees: f32, distance: f32) -> f32 {
 pub const SCREEN_WIDTH: std::ops::RangeInclusive<f32> = 0.5..=30.0;
 
 /// Metres a flat screen is from the viewer unless told otherwise, and the
-/// width that makes it Medium (72 degrees) there.
+/// width that makes it Cinema (72 degrees) there.
 pub const DEFAULT_SCREEN_DISTANCE: f32 = 4.0;
 pub const DEFAULT_SCREEN_WIDTH: f32 = 5.81;
 
@@ -309,11 +325,11 @@ mod tests {
     }
 
     #[test]
-    fn the_default_screen_is_medium() {
+    fn the_default_screen_is_cinema() {
         let d = ViewSettings::default();
         assert_eq!(
             ScreenSize::of(d.screen_width, d.screen_distance),
-            Some(ScreenSize::Medium)
+            Some(ScreenSize::Cinema)
         );
         assert!((screen_degrees(d.screen_width, d.screen_distance) - 72.0).abs() < 0.1);
         // 2 * 4 * tan(36 deg)
@@ -339,6 +355,19 @@ mod tests {
             None,
             "an in-between size is no preset"
         );
+    }
+
+    #[test]
+    fn next_cycles_small_to_giant_and_round() {
+        use ScreenSize::*;
+        assert_eq!(HomeTheater.next(), Cinema);
+        assert_eq!(Cinema.next(), Giant);
+        assert_eq!(Giant.next(), HomeTheater);
+        // Three steps is back where it began, and each size grows.
+        for size in ScreenSize::ALL {
+            assert_eq!(size.next().next().next(), size);
+        }
+        assert!(HomeTheater.degrees() < Cinema.degrees() && Cinema.degrees() < Giant.degrees());
     }
 
     #[test]

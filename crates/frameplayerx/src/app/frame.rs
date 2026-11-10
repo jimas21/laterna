@@ -53,6 +53,25 @@ impl App {
         }
     }
 
+    /// The bar's Size button: the next of Home theater, Cinema and Giant for
+    /// the flat screen (or, in a room, the seat that sees it so), shown at
+    /// once and named on a toast.
+    pub(super) fn cycle_size(&mut self) {
+        let Some(p) = &mut self.playback else {
+            return;
+        };
+        if p.format.projection != Projection::Flat {
+            return;
+        }
+        let before = p.settings;
+        let size = ui::size::cycle(&mut self.settings, &mut p.settings, self.place_shown);
+        if p.settings != before {
+            p.settings_dirty = true;
+        }
+        self.ui
+            .toast(tr!("toast-screen-size", name = ui::size::name(size)));
+    }
+
     /// The panel the keyboard types into: the library or adjust panel with
     /// a text field in focus.
     pub(super) fn keyboard_target(&self) -> Option<usize> {

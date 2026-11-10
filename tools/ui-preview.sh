@@ -537,9 +537,26 @@ panel adjust adjust-position
 # the house lights and the screen light, and the room sets the screen.
 flat
 panel adjust place-picker-plain
+# The bar's Size button: Cinema to Giant, with its name on a toast, then the
+# size row lit on Giant; two more presses come back to Cinema.
+size
+panel toast size-toast
+panel adjust size-giant
+panel bar player-bar-size
+size
+size
 place cinema
 frames 4
 panel adjust place-picker
+# In the room the same button picks the seat: Giant is the front, Home theater
+# the back.
+size
+panel adjust place-picker-giant
+sbs place-cinema-giant
+size
+panel adjust place-picker-home-theater
+sbs place-cinema-home-theater
+size
 place studio
 frames 4
 panel adjust place-picker-studio
