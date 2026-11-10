@@ -23,7 +23,7 @@ impl App {
             // No frame runs while the headset is off, so tell the server now.
             p.sync_watch();
             // Taking the headset off may be the last thing done.
-            p.save_progress(&self.services.library, true);
+            p.save_progress(&self.services.library, &self.services.writer, true);
             self.headset_paused = true;
             self.ui_visible = true;
         } else if now && !was && std::mem::take(&mut self.headset_paused) {

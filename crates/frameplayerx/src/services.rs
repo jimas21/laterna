@@ -4,6 +4,7 @@
 use crate::drives::REMOVABLE_ROOT;
 use crate::image_cache::ImageCache;
 use crate::settings::{HapticDeviceConfig, Settings};
+use crate::writer::Key;
 use fp_core::ByteSource;
 use fp_core::source::FileSource;
 use fp_core::sync::{read, write};
@@ -291,6 +292,8 @@ pub struct Services {
     device_identifier: String,
     source_save_retry: Option<std::time::Instant>,
     pub library: Library,
+    /// Writes settings, sources and progress off the frame loop.
+    pub writer: crate::writer::Writer,
     pub opener: Arc<Opener>,
     pub images: Arc<ImageCache>,
     pub source_configs: Vec<SourceConfig>,
@@ -418,14 +421,31 @@ impl Services {
             .source_save_retry
             .is_some_and(|at| at.elapsed() >= std::time::Duration::from_secs(10));
         if changed || retry {
-            match fp_sources::save_configs(&Settings::sources_path(), &self.source_configs) {
-                Ok(()) => self.source_save_retry = None,
-                Err(e) => {
-                    log::warn!("saving refreshed source credentials: {e}");
-                    self.source_save_retry = Some(std::time::Instant::now());
-                }
+            // Off the frame loop (a token refreshed by a Plex or Jellyfin
+            // source is written from here, on the frame thread): the
+            // writer says how it went, see `sources_written`. Until it
+            // does, a retry waits another period.
+            let configs = self.source_configs.clone();
+            let path = Settings::sources_path();
+            self.writer.submit(Key::Sources, move || {
+                fp_sources::save_configs(&path, &configs).map_err(|e| e.to_string())
+            });
+            if retry {
+                self.source_save_retry = Some(std::time::Instant::now());
             }
         }
+    }
+
+    /// How the write of the sources made by [`Self::poll_source_updates`]
+    /// went: one that failed is tried again every ten seconds.
+    pub fn sources_written(&mut self, result: &Result<(), String>) {
+        self.source_save_retry = match result {
+            Ok(()) => None,
+            Err(e) => {
+                log::warn!("saving refreshed source credentials: {e}");
+                Some(std::time::Instant::now())
+            }
+        };
     }
 
     pub fn new(settings: &Settings, library: Library) -> Services {
@@ -449,6 +469,7 @@ impl Services {
             device_identifier,
             source_save_retry: None,
             library,
+            writer: crate::writer::Writer::start(),
             opener: opener.clone(),
             images: Arc::new(
                 ImageCache::new(
@@ -543,6 +564,9 @@ impl Services {
         // Convert legacy references while the old endpoint/root is still known.
         let before = touched(&self.source_configs);
         migrate_source_locations(&self.library, &self.opener, &before);
+        // This save is the last: one of refreshed credentials still waiting
+        // or being written is dropped, or waited for.
+        self.writer.cancel(Key::Sources);
         let save_error = fp_sources::save_configs(&Settings::sources_path(), &configs)
             .inspect_err(|e| log::error!("saving sources: {e}"))
             .err()

@@ -84,7 +84,7 @@ impl App {
         {
             p.player.pause();
             p.sync_watch();
-            p.save_progress(&self.services.library, true);
+            p.save_progress(&self.services.library, &self.services.writer, true);
             self.ui.toast(tr!("toast-paused-earbud-out"));
             self.ui_visible = true;
             self.last_activity = Instant::now();

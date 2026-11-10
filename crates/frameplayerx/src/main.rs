@@ -34,6 +34,7 @@ mod tragus;
 mod ui;
 mod watch;
 mod world;
+mod writer;
 
 use app::{App, FrameInput, LayerDraw};
 use fp_render::timing::{self, Series};
@@ -1056,13 +1057,14 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                     .map(|(t, peak)| format!(", {t:?} scene peak {peak:.0} nits"))
                     .unwrap_or_default();
                 log::info!(
-                    "video {} ({}): {} shown, {} dropped, {} stalls, {} queued{hdr}",
+                    "video {} ({}): {} shown, {} dropped, {} stalls, {} queued{hdr}{}",
                     st.video_decoder,
                     if st.hardware { "hardware" } else { "software" },
                     st.frames_shown,
                     st.frames_dropped,
                     st.stalls,
-                    st.video_queue
+                    st.video_queue,
+                    playback::damage_note(&st)
                 );
             }
             pacing.log(&mut session.stats, &mut renderer.fence_wait);

@@ -27,6 +27,7 @@ use crate::world::{
     Panel, Pointer, anchor_facing, anchor_from_head, follow, place, place_around, place_below,
     player_frame, turned_with_picture,
 };
+use crate::writer::{Failing, Key};
 use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
 use fp_library::{Library, PlaylistId};
@@ -160,8 +161,8 @@ pub struct App {
     pub settings: Settings,
     /// The settings last applied.
     saved: Settings,
-    /// When saving the settings last failed; it is tried again.
-    unsaved_since: Option<Instant>,
+    /// Saving the settings, when it fails; it is tried again.
+    settings_failing: Failing,
     /// The latest Quick Connect pairing code request.
     quick_connect_request: u64,
     services: Services,
@@ -337,7 +338,7 @@ impl App {
         sub_fonts.spawn("fp-fonts", ui::subtitle_text::SubtitleText::load);
         let mut app = App {
             saved: settings.clone(),
-            unsaved_since: None,
+            settings_failing: Failing::default(),
             quick_connect_request: 0,
             settings,
             services,
@@ -531,10 +532,9 @@ impl App {
     /// Saves and applies settings edited through the UI.
     fn sync_settings(&mut self) {
         if self.settings == self.saved {
-            if self
-                .unsaved_since
-                .is_some_and(|t| t.elapsed() > SETTINGS_RETRY)
-            {
+            let now = Instant::now();
+            if self.settings_failing.retry_due(now, SETTINGS_RETRY) {
+                self.settings_failing.postpone(now);
                 self.save_settings();
             }
             return;
@@ -580,19 +580,26 @@ impl App {
         self.save_settings();
     }
 
-    /// Writes the settings. A failure is shown once and tried again every
-    /// [`SETTINGS_RETRY`] until it works.
+    /// Hands the settings to the writer thread (not the frame loop's to
+    /// wait on a disk for); newer settings replace ones it has not written
+    /// yet, and it writes what is left as the app exits.
     fn save_settings(&mut self) {
-        match self.settings.save(&Settings::path()) {
-            Ok(()) => self.unsaved_since = None,
-            Err(e) => {
-                if self.unsaved_since.is_none() {
-                    log::warn!("saving settings: {e}");
-                    self.ui
-                        .toast(tr!("error-save-settings", error = e.to_string()));
-                }
-                self.unsaved_since = Some(Instant::now());
-            }
+        let (settings, path) = (self.settings.clone(), Settings::path());
+        self.services.writer.submit(Key::Settings, move || {
+            settings.save(&path).map_err(|e| e.to_string())
+        });
+    }
+
+    /// How a settings write went. A failure is shown once and tried again
+    /// every [`SETTINGS_RETRY`] until it works.
+    fn settings_written(&mut self, result: &Result<(), String>) {
+        let first = self.settings_failing.record(result.is_ok(), Instant::now());
+        if let Err(e) = result
+            && first
+        {
+            log::warn!("saving settings: {e}");
+            self.ui
+                .toast(tr!("error-save-settings", error = e.to_string()));
         }
     }
 
@@ -725,7 +732,7 @@ impl App {
         // does not wait for it.
         self.services.set_worker_busy(true);
         if let Some(p) = self.playback.take() {
-            p.close(&self.services.library);
+            p.close(&self.services.library, &self.services.writer);
         }
         self.services.watch.flush(Duration::from_secs(3));
         self.sync_settings();

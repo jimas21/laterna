@@ -239,9 +239,9 @@ impl App {
         self.check_mounts();
         self.remote_events();
         if let Some(p) = &mut self.playback {
-            p.save_progress(&self.services.library, false);
+            p.save_progress(&self.services.library, &self.services.writer, false);
             p.sync_watch();
-            p.save_key(&self.services.library, false);
+            p.save_key(&self.services.library, &self.services.writer, false);
             p.watch_decoding(self.settings.hardware_decoding);
         }
         self.publish_status();
@@ -1090,6 +1090,7 @@ fn perf_video(
         stalls: st.stalls,
         stuttered: readings.stuttered(),
         decoder,
+        damage: crate::playback::damage_total(st),
         buffer: (st.read_ahead.0 as f32, st.read_ahead.1 as f32),
         read_to_end: st.read_to_end,
         network: on_network.then(|| ui::perf::Network {

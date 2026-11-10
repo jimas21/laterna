@@ -5,6 +5,7 @@ use crate::services::Opener;
 use crate::settings::Settings;
 use crate::subtitles::{self, Pick};
 use crate::watch::{Reports, Watch};
+use crate::writer::{Key, Writer};
 use fp_core::format::{self, ContainerHints, DetectedFormat, Evidence, VideoFormat};
 use fp_core::source::{Entry, EntryKind, SubtitleFile};
 use fp_core::sync::lock;
@@ -107,6 +108,9 @@ pub struct Playback {
     /// and when it was last saved: slider drags save twice a second.
     key_pending: bool,
     key_saved_at: Instant,
+    /// What the chroma key write on its way will have saved, once it has
+    /// (see [`Self::key_written`]).
+    key_inflight: Option<ViewSettings>,
     pub heatmap: Option<Heatmap>,
     pub markers: Vec<(f64, String)>,
     pub subtitle_files: Vec<SubtitleFile>,
@@ -588,6 +592,7 @@ pub fn open(
             saved_settings: settings_v,
             key_pending: false,
             key_saved_at: Instant::now(),
+            key_inflight: None,
             keyframes,
             settings_dirty: false,
             follows_defaults,
@@ -899,17 +904,22 @@ impl Playback {
         self.current_settings().with_global_key(global)
     }
 
-    /// Saves progress every few seconds and at the end.
-    pub fn save_progress(&mut self, library: &Library, force: bool) {
+    /// Saves progress every few seconds and at the end. The write is the
+    /// writer thread's, not this one's (see [`crate::writer`]).
+    pub fn save_progress(&mut self, library: &Library, writer: &Writer, force: bool) {
         if !force && self.last_save.elapsed().as_secs_f64() < 5.0 {
             return;
         }
         self.last_save = Instant::now();
         let finished = self.player.state() == PlayerState::Ended;
-        if let Some(s) = self.session
-            && let Err(e) = library.update_playback(s, self.player.position(), finished)
-        {
-            log::warn!("saving progress: {e}");
+        if let Some(s) = self.session {
+            let (library, position) = (library.clone(), self.player.position());
+            writer.submit(Key::Progress(s), move || {
+                library
+                    .update_playback(s, position, finished)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            });
         }
     }
 
@@ -1025,8 +1035,15 @@ impl Playback {
 
     /// Saves the adjustments with the video: true when saved, false when the
     /// video isn't in the library (its notice says so). A failure keeps them
-    /// unsaved, to save again.
-    pub fn save_settings(&mut self, library: &Library) -> fp_library::Result<bool> {
+    /// unsaved, to save again. This is the user's own click, so it writes
+    /// here and now to say how it went; a chroma key write still on its way
+    /// is dropped first (this saves the key too), or waited for, so that it
+    /// cannot land after.
+    pub fn save_settings(
+        &mut self,
+        library: &Library,
+        writer: &Writer,
+    ) -> fp_library::Result<bool> {
         let Some(id) = self.record_id else {
             self.notice = Some(Notice::new(
                 tr!("notice-pill-not-saved"),
@@ -1034,10 +1051,17 @@ impl Playback {
             ));
             return Ok(false);
         };
+        writer.cancel(Key::Chroma(id));
+        let key_unsaved =
+            std::mem::take(&mut self.key_pending) | self.key_inflight.take().is_some();
         library
             .set_view_settings(id, Some(&kept_with_video(self.settings, self.format)))
             .and_then(|_| library.set_keyframes(id, &self.keyframes))
-            .inspect_err(|e| log::warn!("saving adjustments: {e}"))?;
+            .inspect_err(|e| {
+                log::warn!("saving adjustments: {e}");
+                // The key is still to be saved on its own.
+                self.key_pending = key_unsaved;
+            })?;
         self.settings_dirty = false;
         self.saved_settings = self.settings;
         self.follows_defaults = false;
@@ -1059,20 +1083,18 @@ impl Playback {
     /// Saves the audio and subtitles picked in the player, which the video
     /// opens with next time; what wasn't picked keeps following the
     /// settings.
-    pub fn save_tracks(&self, library: &Library) {
+    pub fn save_tracks(&self, library: &Library, writer: &Writer) {
         let Some(id) = self.record_id else { return };
-        if let Err(e) = library.set_tracks(id, &self.picked) {
-            log::warn!(
-                "saving the tracks picked for {}: {e}",
-                self.request.location
-            );
-        }
+        let (library, picked) = (library.clone(), self.picked.clone());
+        writer.submit(Key::Tracks(id), move || {
+            library.set_tracks(id, &picked).map_err(|e| e.to_string())
+        });
     }
 
     /// Saves this video's chroma key (the Passthrough tab) without the
     /// other, unsaved adjustments: the tab promises it is kept with the
     /// video, and toggling it every time was the result of waiting for Save.
-    pub fn save_key(&mut self, library: &Library, force: bool) {
+    pub fn save_key(&mut self, library: &Library, writer: &Writer, force: bool) {
         if !self.key_pending || (!force && self.key_saved_at.elapsed().as_secs_f64() < 0.5) {
             return;
         }
@@ -1084,13 +1106,26 @@ impl Playback {
         let mut saved = self.saved_settings;
         saved.set_key(&self.settings);
         saved.key_own = self.settings.key_own;
-        match library.set_view_settings(id, Some(&kept_with_video(saved, self.format))) {
-            Ok(()) => {
-                self.saved_settings = saved;
-                self.settings_dirty = self.settings != saved;
-                self.follows_defaults = false;
-            }
-            Err(e) => log::warn!("saving the background removal: {e}"),
+        let (library, kept) = (library.clone(), kept_with_video(saved, self.format));
+        self.key_inflight = Some(saved);
+        writer.submit(Key::Chroma(id), move || {
+            library
+                .set_view_settings(id, Some(&kept))
+                .map_err(|e| e.to_string())
+        });
+    }
+
+    /// The chroma key write for this video ended: when it worked, the key
+    /// counts as saved, as it did when the write was made here. A failure
+    /// leaves the adjustments unsaved (the writer's caller logged it).
+    pub fn key_written(&mut self, result: &Result<(), String>) {
+        let Some(saved) = self.key_inflight.take() else {
+            return;
+        };
+        if result.is_ok() {
+            self.saved_settings = saved;
+            self.settings_dirty = self.settings != saved;
+            self.follows_defaults = false;
         }
     }
 
@@ -1115,9 +1150,9 @@ impl Playback {
     /// network read or a long software decode, and waiting for it here
     /// froze the headset's frame loop (quitting while a 10-bit file over
     /// SMB was buffering hung the app).
-    pub fn close(mut self, library: &Library) {
-        self.save_progress(library, true);
-        self.save_key(library, true);
+    pub fn close(mut self, library: &Library, writer: &Writer) {
+        self.save_progress(library, writer, true);
+        self.save_key(library, writer, true);
         if let Some(w) = self.watch.take() {
             // Near the end, the server counts it as watched.
             w.stop(self.player.position());
@@ -1181,6 +1216,24 @@ pub fn wait_closed(limit: Duration) -> bool {
 }
 
 const DECODE_CHECK_SECS: f64 = 10.0;
+
+/// Pictures, frames and packets the decoder met damaged since the video
+/// opened, all kinds added up. Only counted: nothing acts on it.
+pub fn damage_total(st: &fp_media::Stats) -> u64 {
+    st.pictures_flagged + st.packets_invalid + st.frames_corrupt
+}
+
+/// The damage the decoder met, for the end of the 10 s `video` log line;
+/// empty when there is none, so the line reads as it did.
+pub fn damage_note(st: &fp_media::Stats) -> String {
+    if damage_total(st) == 0 {
+        return String::new();
+    }
+    format!(
+        ", damage: {} flagged pictures, {} invalid packets, {} corrupt frames",
+        st.pictures_flagged, st.packets_invalid, st.frames_corrupt
+    )
+}
 
 /// Over one check period: playback stalled more than once waiting for the
 /// decoder, or dropped more than 5% of frames.
@@ -1328,6 +1381,20 @@ pub(crate) fn slow_decode_notice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_damage_is_silent_until_there_is_some() {
+        let mut st = fp_media::Stats::default();
+        assert_eq!(damage_total(&st), 0);
+        assert_eq!(damage_note(&st), "");
+        st.pictures_flagged = 2;
+        st.frames_corrupt = 1;
+        assert_eq!(damage_total(&st), 3);
+        assert_eq!(
+            damage_note(&st),
+            ", damage: 2 flagged pictures, 0 invalid packets, 1 corrupt frames"
+        );
+    }
 
     #[test]
     fn source_owned_requests_bind_the_owner_without_a_library_record() {
@@ -1484,6 +1551,7 @@ mod tests {
             ..Default::default()
         };
         let reports = Reports::start();
+        let writer = Writer::start();
         let request = OpenRequest {
             location: original.into(),
             source_id: Some("rooted".into()),
@@ -1503,7 +1571,7 @@ mod tests {
         reopen.paused = true;
         reopen.quality = Quality::Original;
         reopen.start_at = Some(0.0);
-        first.close(&library);
+        first.close(&library, &writer);
 
         // Quality changes clone Playback.request. The source now has a
         // different endpoint and must receive the canonical entry, while
@@ -1546,7 +1614,7 @@ mod tests {
         } else {
             assert!(library.get_by_location(original).unwrap().is_none());
         }
-        second.close(&library);
+        second.close(&library, &writer);
         assert!(wait_closed(Duration::from_secs(5)));
     }
 
