@@ -281,9 +281,9 @@ pub struct PlexConfig {
     #[serde(default = "plex_relay_default")]
     pub allow_relay: bool,
     /// The Plex Home profile this source plays as; `None`: the linked
-    /// account itself.
+    /// account itself. Boxed so [`SourceConfig`] stays small.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<crate::plex::auth::PlexProfile>,
+    pub profile: Option<Box<crate::plex::auth::PlexProfile>>,
     /// Section keys left out of tiles, rows, search and history.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_sections: Vec<String>,
@@ -760,17 +760,17 @@ mod tests {
             home: true,
         };
         let mut credentials = PlexCredentials::manual("account-secret".into(), "device-abc".into());
-        credentials.account = Some(account);
+        credentials.account = Some(Box::new(account));
         let config = PlexConfig {
             auth: Some(credentials),
-            profile: Some(PlexProfile {
+            profile: Some(Box::new(PlexProfile {
                 id: 9,
                 uuid: "profile-uuid-1".into(),
                 title: "Guest Name".into(),
                 protected: true,
                 restricted: false,
                 token: "profile-secret".into(),
-            }),
+            })),
             hidden_sections: vec!["3".into()],
             ..Default::default()
         };

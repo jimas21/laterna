@@ -171,7 +171,7 @@ fn the_linked_account_is_named_without_keeping_its_email() {
     assert_eq!(account.uuid, "made-up-account-uuid");
     assert_eq!(account.title, "Account Owner");
     assert!(account.home);
-    credentials.account = Some(account.clone());
+    credentials.account = Some(Box::new(account.clone()));
 
     let saved = serde_json::to_string(&credentials).unwrap();
     let restored: PlexCredentials = serde_json::from_str(&saved).unwrap();

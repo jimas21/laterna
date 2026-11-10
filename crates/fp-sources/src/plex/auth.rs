@@ -153,9 +153,10 @@ pub struct PlexCredentials {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<u64>,
     /// The account these credentials belong to; unknown for links made
-    /// before it was recorded, or when plex.tv would not name it.
+    /// before it was recorded, or when plex.tv would not name it. Boxed to
+    /// keep [`crate::PlexConfig`], the largest source setting, small.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<PlexAccount>,
+    pub account: Option<Box<PlexAccount>>,
 }
 
 impl fmt::Debug for PlexCredentials {

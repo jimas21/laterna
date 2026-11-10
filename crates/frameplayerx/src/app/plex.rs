@@ -31,7 +31,7 @@ fn poll_link(
         return Ok(None);
     };
     match api.account(&credentials) {
-        Ok(account) => credentials.account = Some(account),
+        Ok(account) => credentials.account = Some(Box::new(account)),
         Err(e) => log::info!("cannot name the linked Plex account: {e}"),
     }
     let servers = api.resources(&credentials)?;
