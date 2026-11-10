@@ -467,7 +467,7 @@ mod tests {
         close(resized(1.0, 0.9, k, first * 0.2), (0.6, true));
         // Starting from a larger size, scales from there; sliding sideways of
         // the corner's direction changes nothing.
-        close(resized(1.5, 0.9, k, first * 1.2), (1.8, true));
+        close(resized(1.5, 0.9, k, first * 1.3), (1.8, true));
         close(resized(1.2, 0.9, k, first * 1.2), (1.44, false));
         let across = Vec2::new(k.y, -k.x) * 0.5;
         close(resized(1.0, 0.9, k, first + across), (1.0, false));

@@ -465,7 +465,8 @@ impl App {
     /// One line about the open video and the UI, for the preview harness.
     pub fn status_line(&self) -> String {
         let ui = format!(
-            "ui_visible={} browser={} multitask={} adjust={} tracks={} dashboard_requests={} \n             main_scale={:.2} main_yaw={:.1} main_pitch={:.1} main_depth={:.2}",
+            "ui_visible={} browser={} multitask={} adjust={} tracks={} dashboard_requests={} \
+             main_scale={:.2} main_yaw={:.1} main_pitch={:.1} main_depth={:.2}",
             self.ui_visible,
             self.show_browser,
             u8::from(self.multitasking()),

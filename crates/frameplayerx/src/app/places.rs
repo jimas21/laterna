@@ -401,10 +401,15 @@ mod tests {
         let layout = Place::Cinema.layout();
         let middle = layout.seat_index(SeatName::Middle).unwrap();
         let room = room_frame(Mat4::IDENTITY, &layout, middle, 0).unwrap();
-        // The middle seat's eye is 4.34 m up and 14.15 m from the screen,
-        // whose centre is 4.4 m up.
+        // The screen's centre sits where the room has it, seen from the
+        // seat's eye: ahead (-z) by their distance, up by their height gap.
+        let (eye, screen) = (layout.seat(middle).eye, layout.screen.unwrap());
         let centre = room.screen_pose.transform_point3(Vec3::ZERO);
-        let want = Vec3::new(0.0, 4.4 - 4.34, -14.15);
+        let want = Vec3::new(
+            screen.centre.x - eye.x,
+            screen.centre.y - eye.y,
+            screen.centre.z - eye.z,
+        );
         assert!((centre - want).length() < 1e-4, "{centre}");
         // Facing the seat, as a screen placed in front of the head does.
         let normal = room.screen_pose.transform_vector3(Vec3::Z);

@@ -534,7 +534,10 @@ const BELOW: u32 = 94;
 /// above it (rows 0 to 30, every column) and the seats in front below it
 /// (rows from `BELOW`). Neither holds any of the picture itself.
 fn ceiling_and_seats(img: &[u8]) -> ([f32; 3], [f32; 3]) {
-    (region_mean(img, 0..SIZE, 0..30), region_mean(img, 0..SIZE, BELOW..SIZE))
+    (
+        region_mean(img, 0..SIZE, 0..30),
+        region_mean(img, 0..SIZE, BELOW..SIZE),
+    )
 }
 
 #[test]
