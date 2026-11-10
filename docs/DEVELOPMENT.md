@@ -107,6 +107,7 @@ headset's Noto Sans CJK; for the preview, install it with
 | `fp-library` | The SQLite database: folder scanning, the metadata and thumbnail worker, search, watch history |
 | `fp-sources` | Sources: local folders, HTTP, WebDAV, DLNA, SMB, DeoVR and HereSphere feeds, Jellyfin, Emby and Plex |
 | `fp-haptics` | Funscripts, the sync engine, and TCode, Buttplug and Handy devices |
+| `fp-earbuds` | Battery, noise control and ear detection for AirPods and Beats, read from a local MagicPodsCore, and the pause policy for an earbud coming out |
 | `fp-remote` | The DeoVR remote API and the phone web remote |
 | `fp-updater` | Signed update manifests, download, install and rollback; the `fp-release` maintainer tool |
 | `frameplayerx-install` | The PC installer: pairs with the headset and installs over SSH |
