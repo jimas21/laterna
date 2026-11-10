@@ -203,6 +203,7 @@ impl App {
             buzz,
             quit: self.quit,
             restart: self.restart,
+            open_dashboard: std::mem::take(&mut self.open_dashboard),
         }
     }
 
@@ -544,6 +545,7 @@ impl App {
         }
         let devices = self.services.haptic_statuses();
         let passthrough_available = input.passthrough_available;
+        let dashboard = input.dashboard;
         for idx in [MAIN, BAR, ADJUST, TRACKS, TOAST] {
             if !self.panels[idx].needs_paint() {
                 continue;
@@ -567,6 +569,7 @@ impl App {
                 playback: playback.as_mut(),
                 actions: &mut actions,
                 passthrough_available,
+                dashboard,
                 devices: &devices,
             };
             let r = panels[idx].paint(renderer, input.time, |ctx| match idx {

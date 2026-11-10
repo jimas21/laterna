@@ -30,6 +30,13 @@ pub fn is_worn(state: xr::SessionState) -> bool {
     matches!(state, xr::SessionState::VISIBLE | xr::SessionState::FOCUSED)
 }
 
+/// How many of `quads` quad layers fit in a frame that may hold `max`
+/// composition layers: the projection layer takes one, and what does not fit
+/// is dropped by the caller (it keeps the last ones, the nearest).
+pub fn fit_layers(max: u32, quads: usize) -> usize {
+    quads.min(max.saturating_sub(1) as usize)
+}
+
 struct Eye {
     swapchain: xr::Swapchain<xr::Vulkan>,
     images: Vec<vk::Image>,
@@ -297,6 +304,12 @@ impl XrSession {
         self.session
             .request_display_refresh_rate(hz)
             .ctx("xrRequestDisplayRefreshRateFB")
+    }
+
+    /// The most composition layers one frame may hold, the projection layer
+    /// included; see [`fit_layers`].
+    pub fn max_layers(&self) -> u32 {
+        self.ctx.max_layers()
     }
 
     pub fn is_running(&self) -> bool {
@@ -749,6 +762,17 @@ mod tests {
             fov_text(fov),
             "left -50.0, right 40.0, up 45.0, down -35.0 (90.0 x 80.0 degrees)"
         );
+    }
+
+    #[test]
+    fn the_projection_layer_takes_one_of_the_layers() {
+        assert_eq!(fit_layers(16, 0), 0);
+        assert_eq!(fit_layers(16, 15), 15);
+        assert_eq!(fit_layers(16, 16), 15);
+        assert_eq!(fit_layers(16, 20), 15);
+        assert_eq!(fit_layers(4, 20), 3);
+        assert_eq!(fit_layers(1, 3), 0);
+        assert_eq!(fit_layers(0, 3), 0);
     }
 
     #[test]

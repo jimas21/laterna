@@ -225,7 +225,11 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
                     + 64.0
             })
             .sum();
-        let right = if v.playback.is_some() { 270.0 } else { 120.0 };
+        let mut right = if v.playback.is_some() { 270.0 } else { 120.0 };
+        if v.dashboard {
+            // The dashboard button.
+            right += 56.0;
+        }
         let labelled = ui.available_width() >= labels + right;
         for (s, icon, label) in tabs {
             let selected =
@@ -270,6 +274,15 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
                 .clicked()
             {
                 v.actions.push(Action::Quit);
+            }
+            // Outside the branch above, so it is there while a video plays
+            // (the header then shows Back to video, not Quit).
+            if v.dashboard
+                && widgets::icon_button(ui, icons::SQUARES_FOUR, 48.0, false)
+                    .tip(tr!("library-dashboard"))
+                    .clicked()
+            {
+                v.actions.push(Action::OpenDashboard);
             }
             if v.passthrough_available
                 && widgets::icon_button(ui, icons::ARMCHAIR, 48.0, v.settings.passthrough)

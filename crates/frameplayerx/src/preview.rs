@@ -19,6 +19,8 @@
 //! | `squeeze` | squeeze and release the grip |
 //! | `grip V` / `trigger V` | hold the grip / trigger at V (0..1) until changed |
 //! | `status` | print what is playing and the view settings |
+//! | `dashboard` | press the dashboard button's action (`status` counts them) |
+//! | `expect-dashboard N` | fail the script unless the dashboard button was pressed N times |
 //! | `open LOCATION` | open a file or URL |
 //! | `close` | close the open video, as its Close button does |
 //! | `seek SECONDS` | play the open video from SECONDS |
@@ -99,6 +101,7 @@ impl Sim {
                 display_hz: None,
                 recentred: false,
                 eye_px_per_tan: Some(pixels_per_tan(&proj, self.size)),
+                dashboard: true,
             },
         );
         if let Err(e) = self.renderer.set_video(out.frame.as_ref()) {
@@ -488,6 +491,20 @@ impl Sim {
             Some("recenter") => {
                 self.app.apply(crate::ui::Action::Recenter);
                 self.run_frames(2)?;
+            }
+            // Presses the dashboard button as its action does (the button
+            // itself is clicked with `point` and `click`).
+            Some("dashboard") => {
+                self.app.apply(crate::ui::Action::OpenDashboard);
+                self.run_frames(2)?;
+            }
+            // Fails the script unless the dashboard button was pressed N times.
+            Some("expect-dashboard") => {
+                let want = num(1)? as u32;
+                let got = self.app.dashboard_requests();
+                if got != want {
+                    return Err(format!("{got} dashboard requests, expected {want}").into());
+                }
             }
             Some("aim") => {
                 self.hand.aim = Some((self.hand_pos(), dir_quat(num(1)?, num(2)?)));

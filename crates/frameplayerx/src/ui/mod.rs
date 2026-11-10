@@ -408,6 +408,9 @@ pub enum Action {
     /// Hide the player controls (the trigger on empty space brings them
     /// back).
     HideControls,
+    /// Open SteamVR's dashboard over the app, which keeps running (and the
+    /// video keeps playing).
+    OpenDashboard,
     Quit,
     /// Quit and start again, to run an installed update or use a setting
     /// that is read at start.
@@ -991,6 +994,8 @@ pub struct View<'a> {
     pub playback: Option<&'a mut crate::playback::Playback>,
     pub actions: &'a mut Vec<Action>,
     pub passthrough_available: bool,
+    /// SteamVR's dashboard can be opened from the app.
+    pub dashboard: bool,
     pub devices: &'a [fp_haptics::DeviceStatus],
 }
 
