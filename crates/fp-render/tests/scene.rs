@@ -1010,7 +1010,7 @@ fn ramp(w: u32, h: u32, lo: u8) -> Arc<fp_media::VideoFrame> {
 fn checker(w: u32, h: u32, cell: u32) -> Arc<fp_media::VideoFrame> {
     frame(w, h, |u, v| {
         let (x, y) = ((u * w as f32) as u32, (v * h as f32) as u32);
-        if (x / cell + y / cell) % 2 == 0 {
+        if (x / cell + y / cell).is_multiple_of(2) {
             [255; 3]
         } else {
             [0; 3]
