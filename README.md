@@ -158,7 +158,7 @@ No. Laterna is built only for the Steam Frame, so it can use the Frame's decoder
 
 ### Why does a video stutter?
 
-Usually because it's AV1 or 4:2:2, which the Frame's hardware decoder can't play, so it's decoded on the CPU. The control bar says so. Converting it to HEVC once on a PC makes it play smoothly; the [user guide](docs/USER-GUIDE.md#videos-that-stutter-av1-and-422) has the commands.
+Usually because it's AV1 or 4:2:2, which the Frame's hardware decoder can't play, so it's decoded on the CPU. The control bar says so. Converting it to HEVC once on a PC makes it play smoothly; the [user guide](docs/USER-GUIDE.md#videos-that-stutter-av1-and-422) has the commands. For the smoothest picture overall, switch the Frame to its Performance profile; the [user guide](docs/USER-GUIDE.md#for-the-smoothest-picture) says how.
 
 ---
 

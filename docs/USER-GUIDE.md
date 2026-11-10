@@ -15,6 +15,7 @@ or your network.
 - [Haptics](#haptics)
 - [Remote control](#remote-control)
 - [Language](#language)
+- [For the smoothest picture](#for-the-smoothest-picture)
 - [Troubleshooting](#troubleshooting)
 
 ## Install
@@ -976,6 +977,19 @@ Server names, titles and other text from your servers show as they come.
 
 The translations started as machine drafts. If one reads wrong, the
 [README](../README.md#help-translate) says how to correct it or report it.
+
+## For the smoothest picture
+
+The Steam Frame starts on a power-saving profile that halves the frame rate
+Laterna can draw at, so everything looks choppier than it should. Two
+changes fix that:
+
+1. Open Quick Access and go to **Performance**. Choose the **Performance**
+   profile.
+2. In SteamVR's settings, set the refresh rate to 120 or 144 Hz.
+
+The Performance profile uses more battery and makes more heat. Switch it back
+when you're done if you want the headset to last longer.
 
 ## Troubleshooting
 

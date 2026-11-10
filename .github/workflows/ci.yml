@@ -140,9 +140,36 @@ jobs:
             echo "draft=$draft"
           } >> "$GITHUB_OUTPUT"
 
-  check:
+  # Format and lint first, on their own: neither needs FFmpeg or any system
+  # package (the build scripts are pure Rust), so a slip in either fails the
+  # run in a few minutes instead of after the FFmpeg build. The long jobs
+  # wait for it. Same commands as before, now run once, here.
+  lint:
     if: needs.version.outputs.checks == 'true'
     needs: [version]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install
+      - name: Format
+        run: cargo fmt --all --check
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          # A new Rust starts afresh; new crates build on the last cache.
+          key: cargo-lint-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-lint-${{ hashFiles('rust-toolchain.toml') }}-
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  check:
+    if: needs.version.outputs.checks == 'true'
+    needs: [version, lint]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -191,10 +218,7 @@ jobs:
         with:
           path: third_party/ffmpeg
           key: ffmpeg-${{ hashFiles('tools/build-ffmpeg.sh', 'tools/requirements.txt') }}
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      # Format and Clippy run in the lint job, which this one waits for.
       # Both modes: one catches public docs linking private items, the other
       # broken links in private items' docs.
       - name: Docs
@@ -249,7 +273,7 @@ jobs:
   # The PC-side installer, for each desktop OS.
   installer:
     if: needs.version.outputs.checks == 'true'
-    needs: [version]
+    needs: [version, lint]
     strategy:
       matrix:
         include:
