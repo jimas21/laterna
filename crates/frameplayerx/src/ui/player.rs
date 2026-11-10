@@ -432,7 +432,7 @@ fn browse_and_sound(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
     state: &mut super::UiState,
-    settings: &crate::settings::Settings,
+    settings: &Settings,
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::SQUARES_FOUR, 52.0, false)
@@ -564,7 +564,7 @@ fn transport(
     ui: &mut egui::Ui,
     row: egui::Rect,
     pb: &crate::playback::Playback,
-    settings: &crate::settings::Settings,
+    settings: &Settings,
     queue: &crate::queue::Queue,
     actions: &mut Vec<Action>,
 ) {
@@ -1225,7 +1225,7 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
 fn format_tab(
     ui: &mut egui::Ui,
     pb: &mut crate::playback::Playback,
-    settings: &mut crate::settings::Settings,
+    settings: &mut Settings,
     actions: &mut Vec<Action>,
 ) {
     let fisheye_start = settings.fisheye_start;
@@ -2269,7 +2269,7 @@ fn track_row(ui: &mut egui::Ui, title: &str, detail: &str, on: bool) -> egui::Re
 fn haptics_tab(
     ui: &mut egui::Ui,
     scripts: usize,
-    settings: &mut crate::settings::Settings,
+    settings: &mut Settings,
     devices: &[fp_haptics::DeviceStatus],
 ) {
     ui.label(
