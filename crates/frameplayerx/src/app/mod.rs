@@ -228,7 +228,7 @@ struct PanelDrag {
     panel: usize,
     hand: usize,
     start: (f32, f32),
-    reach: f32,
+    reach: Option<f32>,
     from: [f32; 2],
     depth: f32,
     follow: crate::controls::Damped<3>,

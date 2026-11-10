@@ -110,9 +110,9 @@ const REPEAT_EVERY: f32 = 0.35;
 
 /// How closely a dragged thing trails the hand: with this time constant
 /// (seconds) it has covered about a quarter of a step after one time constant,
-/// nine tenths after four (see [`Damped`]). Short enough
-/// to follow at once, long enough that a hand's tremor, which is magnified at
-/// a panel's distance, doesn't show.
+/// nine tenths after four (see [`Damped`]). Short enough to follow at once,
+/// long enough that a hand's tremor, which is magnified at a panel's distance,
+/// doesn't show.
 pub(crate) const DRAG_TAU: f32 = 0.05;
 
 /// Metres a dragged thing goes in or out for each metre the hand does.
@@ -148,6 +148,11 @@ impl<const N: usize> Damped<N> {
         }
     }
 
+    /// Where it is.
+    pub fn value(&self) -> [f32; N] {
+        self.value
+    }
+
     /// Moves `dt` seconds towards `target` with time constant `tau`, and
     /// returns where it is.
     pub fn step(&mut self, target: [f32; N], tau: f32, dt: f32) -> [f32; N] {
@@ -172,8 +177,9 @@ impl<const N: usize> Damped<N> {
 struct Drag {
     hand: usize,
     start: (f32, f32),
-    /// How far the hand was from the head when the drag began.
-    reach: f32,
+    /// How far the hand was from the head when the drag began, if the head
+    /// was known.
+    reach: Option<f32>,
     /// The picture's yaw, pitch and distance deltas, following the hand.
     follow: Damped<3>,
 }
@@ -218,7 +224,11 @@ impl Controls {
             if gripping(h) && h.trigger > TRIGGER * 0.5 {
                 if let Some((pos, rot)) = h.aim {
                     let (yaw, pitch) = angles(rot, anchor);
-                    let moved = ctx.head.map_or(0.0, |head| reach(head, pos) - d.reach);
+                    // Without the head (then or now) the depth holds where it is.
+                    let moved = match (ctx.head, d.reach) {
+                        (Some(head), Some(r)) => reach(head, pos) - r,
+                        _ => d.follow.value()[2],
+                    };
                     let [yaw, pitch, distance] = d.follow.step(
                         [wrap(yaw - d.start.0), pitch - d.start.1, moved],
                         DRAG_TAU,
@@ -245,7 +255,7 @@ impl Controls {
                     self.drag = Some(Drag {
                         hand: i,
                         start: angles(rot, anchor),
-                        reach: ctx.head.map_or(0.0, |head| reach(head, pos)),
+                        reach: ctx.head.map(|head| reach(head, pos)),
                         follow: Damped::at([0.0; 3]),
                     });
                     out.push(Cmd::DragBegin);
@@ -699,6 +709,34 @@ mod tests {
         h[1].aim = Some((Vec3::new(0.0, 0.0, -0.9), Quat::IDENTITY));
         let out = run(&mut c, &h, ctx(true));
         assert!(matches!(out[..], [Cmd::DragTo { distance: 0.0, .. }]));
+    }
+
+    #[test]
+    fn losing_the_head_mid_drag_holds_the_depth() {
+        let head = Vec3::new(0.0, 1.6, 0.0);
+        let cx = Context {
+            head: Some(head),
+            ..ctx(true)
+        };
+        let at = |z: f32| head + Vec3::new(0.0, -0.2, -z);
+        let mut c = Controls::default();
+        let mut h = dragging_at(at(0.3));
+        run(&mut c, &h, cx);
+        h[1].aim = Some((at(0.7), Quat::IDENTITY));
+        let mut before = 0.0;
+        for _ in 0..40 {
+            if let [Cmd::DragTo { distance, .. }] = run(&mut c, &h, cx)[..] {
+                before = distance;
+            }
+        }
+        assert!(before > 0.3, "{before}");
+        // The head drops out and the hand moves on: the depth stays put.
+        h[1].aim = Some((at(0.4), Quat::IDENTITY));
+        for _ in 0..40 {
+            if let [Cmd::DragTo { distance, .. }] = run(&mut c, &h, ctx(true))[..] {
+                assert!((distance - before).abs() < 1e-4, "{distance} vs {before}");
+            }
+        }
     }
 
     #[test]

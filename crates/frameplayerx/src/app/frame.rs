@@ -111,7 +111,7 @@ impl App {
                 panel,
                 hand,
                 start: angles(rot, frame_of(panel)),
-                reach: head.map_or(0.0, |head| reach(head, pos)),
+                reach: head.map(|head| reach(head, pos)),
                 from: start,
                 depth: *self.depth_of(panel),
                 follow: Damped::at([0.0; 3]),
@@ -134,7 +134,11 @@ impl App {
         if h.squeeze > GRIP * 0.6 {
             if let Some((pos, rot)) = h.aim {
                 let (y, p) = angles(rot, frame_of(panel));
-                let moved = head.map_or(0.0, |head| reach(head, pos) - reach0);
+                // Without the head (then or now) the depth holds where it is.
+                let moved = match (head, reach0) {
+                    (Some(head), Some(r)) => reach(head, pos) - r,
+                    _ => follow.value()[2],
+                };
                 // Where the hand is, a moment behind it: a hand's tremor would
                 // otherwise be magnified at the panel's distance.
                 let [dy, dp, dz] = follow.step([wrap(y - y0), p - p0, moved], DRAG_TAU, input.dt);
