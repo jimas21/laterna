@@ -618,7 +618,8 @@ mod tests {
         let shader = include_str!("../shaders/envcommon.wgsl");
         let line = format!("patch_pos: array<vec4<f32>, {PATCHES}>");
         assert!(shader.contains(&line), "envcommon.wgsl lacks `{line}`");
-        let loops = include_str!("../shaders/env.wgsl").matches("i < 8u").count();
+        let env_shader = include_str!("../shaders/env.wgsl");
+        let loops = env_shader.matches("i < 8u").count();
         assert_eq!(loops, 3, "env.wgsl loops over the patches three times");
         let glow = include_str!("../shaders/scene.wgsl");
         for (name, n) in [("GLOW_COLS", COLS), ("GLOW_ROWS", ROWS)] {
