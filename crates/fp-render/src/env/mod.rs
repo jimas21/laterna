@@ -20,6 +20,7 @@
 //! tested) so that no geometry covers the screen from any seat.
 
 pub mod cinema;
+pub mod home_theater;
 pub mod kit;
 pub mod studio;
 
@@ -30,6 +31,7 @@ use glam::{Mat4, Vec2, Vec3};
 pub enum Place {
     Cinema,
     Studio,
+    HomeTheater,
 }
 
 /// Whether a place is a room around the screen or a backdrop around the
@@ -45,13 +47,14 @@ pub enum PlaceKind {
 
 impl Place {
     /// Every place, in the order the picker lists them.
-    pub const ALL: &'static [Place] = &[Place::Cinema, Place::Studio];
+    pub const ALL: &'static [Place] = &[Place::Cinema, Place::Studio, Place::HomeTheater];
 
     /// The stable id stored in settings: lowercase words joined by hyphens.
     pub fn id(self) -> &'static str {
         match self {
             Place::Cinema => "cinema",
             Place::Studio => "studio",
+            Place::HomeTheater => "home-theater",
         }
     }
 
@@ -63,7 +66,7 @@ impl Place {
 
     pub fn kind(self) -> PlaceKind {
         match self {
-            Place::Cinema => PlaceKind::Room,
+            Place::Cinema | Place::HomeTheater => PlaceKind::Room,
             Place::Studio => PlaceKind::Sky,
         }
     }
@@ -73,6 +76,7 @@ impl Place {
         match self {
             Place::Cinema => cinema::layout(),
             Place::Studio => studio::layout(),
+            Place::HomeTheater => home_theater::layout(),
         }
     }
 
@@ -81,6 +85,7 @@ impl Place {
         match self {
             Place::Cinema => cinema::build(),
             Place::Studio => studio::build(),
+            Place::HomeTheater => home_theater::build(),
         }
     }
 }

@@ -470,9 +470,10 @@ sbs player-scene
 # the build: until then these are the plain background. The clip is named as a
 # 180 degree video and a place shows round flat ones only, so it is shown flat
 # here. The bar's film button, then the cinema with the house lights down and
-# up, from above and from the front seat, then the studio. The lights are held
-# at a level, since the short clip ends and would raise them; Plain and the
-# detected format again after, so every later shot is unchanged.
+# up, from above and from the front seat, then the studio, then the home
+# theater (lights up and down from the couch, then from the back row). The
+# lights are held at a level, since the short clip ends and would raise them;
+# Plain and the detected format again after, so every later shot is unchanged.
 flat
 frames 6
 panel bar player-bar-flat
@@ -497,6 +498,18 @@ seat 1
 place studio
 frames 8
 sbs place-studio
+place home-theater
+house 1
+frames 8
+sbs place-home-theater
+house 0
+frames 4
+sbs place-home-theater-down
+house 1
+seat back
+frames 4
+sbs place-home-theater-back
+seat couch
 house auto
 place void
 flat off
@@ -524,6 +537,9 @@ panel adjust place-picker
 place studio
 frames 4
 panel adjust place-picker-studio
+place home-theater
+frames 4
+panel adjust place-picker-home-theater
 place void
 flat off
 frames 4

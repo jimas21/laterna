@@ -1,4 +1,4 @@
-//! Places (a cinema, a studio) drawn around the picture, rendered on a real
+//! Places (a cinema, a home theater, a studio) drawn around the picture, rendered on a real
 //! (software) Vulkan device: the room surrounds the screen, nearer geometry
 //! hides farther, the sky is above and the floor below, the house lights
 //! light the room, a spherical picture hides it, and without a place the
@@ -38,17 +38,22 @@ fn place_frame(place: Place, seat: SeatName, house: f32) -> EnvFrame {
     }
 }
 
-/// The cinema's own screen holds the picture: the room's frame, the biggest
+/// A room's own screen holds the picture: the room's frame, the biggest
 /// picture that fits it.
-fn cinema_params(settings: ViewSettings, env: EnvFrame) -> VideoParams {
-    let layout = Place::Cinema.layout();
-    let screen = layout.screen.expect("the cinema has a screen");
+fn room_params(place: Place, settings: ViewSettings, env: EnvFrame) -> VideoParams {
+    let layout = place.layout();
+    let screen = layout.screen.expect("a room has a screen");
     let mut p = params(Projection::Flat, StereoLayout::Mono, settings);
     p.screen_pose = env.room_to_world * Mat4::from_translation(screen.centre);
     p.screen_fit = Some(screen.max);
     p.background = [0.0, 0.0, 0.0, 1.0];
     p.env = Some(env);
     p
+}
+
+/// The cinema's screen holds the picture.
+fn cinema_params(settings: ViewSettings, env: EnvFrame) -> VideoParams {
+    room_params(Place::Cinema, settings, env)
 }
 
 /// The same picture on a screen of the user's own, in front of nothing.
@@ -137,6 +142,39 @@ fn a_room_surrounds_the_screen() {
             assert!(!is_red(c), "{name}: a corner is the picture {c:?}");
         }
     }
+    e.destroy(&r);
+}
+
+#[test]
+fn the_home_theater_surrounds_the_screen_from_each_seat_and_lights_up() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let red = frame(160, 90, |_, _| [230, 20, 20]);
+    for seat in [SeatName::Couch, SeatName::Back] {
+        let env = place_frame(Place::HomeTheater, seat, 1.0);
+        let p = room_params(Place::HomeTheater, ViewSettings::default(), env);
+        let [l, rr] = render(&mut r, &mut e, Some(&red), &p, &[]);
+        for (name, img) in [("left", &l), ("right", &rr)] {
+            let at = format!("{seat:?}, {name} eye");
+            assert!(is_red(centre(img)), "{at}: centre {:?}", centre(img));
+            assert!(corner_mean(img) > 0.5, "{at}: the room is black");
+            for c in corners(img) {
+                assert!(!is_red(c), "{at}: a corner is the picture {c:?}");
+            }
+        }
+    }
+    let mut mean = |house: f32| {
+        let env = place_frame(Place::HomeTheater, SeatName::Couch, house);
+        let p = room_params(Place::HomeTheater, ViewSettings::default(), env);
+        let [l, _] = render(&mut r, &mut e, None, &p, &[]);
+        corner_mean(&l)
+    };
+    let (playing, up) = (mean(0.04), mean(1.0));
+    assert!(
+        up > 3.0 * playing,
+        "lights up {up} against lights down {playing}"
+    );
     e.destroy(&r);
 }
 

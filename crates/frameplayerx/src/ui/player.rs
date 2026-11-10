@@ -1537,6 +1537,7 @@ fn place_label(choice: PlaceChoice) -> (&'static str, &'static str) {
         PlaceChoice::YourRoom => (icons::ARMCHAIR, tr!("place-your-room")),
         PlaceChoice::Place(Place::Cinema) => (icons::FILM_STRIP, tr!("place-cinema")),
         PlaceChoice::Place(Place::Studio) => (icons::SUN, tr!("place-studio")),
+        PlaceChoice::Place(Place::HomeTheater) => (icons::HOUSE, tr!("place-home-theater")),
     }
 }
 

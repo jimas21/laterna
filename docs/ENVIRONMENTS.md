@@ -178,10 +178,10 @@ What every place can offer:
 
 What shipped first, and where it differs from the sketch above.
 
-- **Procedural only.** Two places, `cinema` (a room) and `studio` (a sky),
-  made from a small kit in code. No assets, nothing downloaded, nothing
-  added to the app's size. Plain stays the default; "Your room" stays the
-  `passthrough` setting, and wins over a place.
+- **Procedural only.** Three places, `cinema` and `home-theater` (rooms) and
+  `studio` (a sky), made from a small kit in code. No assets, nothing
+  downloaded, nothing added to the app's size. Plain stays the default; "Your
+  room" stays the `passthrough` setting, and wins over a place.
 - **Blend instead of discard.** The scene pass does not `discard` outside the
   screen: it returns premultiplied colour and blends over whatever is behind
   it (the cleared background, or a place). Over the plain background that is
@@ -211,8 +211,10 @@ What shipped first, and where it differs from the sketch above.
    pass; the room kit with `cinema` and `studio`; the environment pass and
    house lights; the picker and Settings › Places; the light from the
    screen. Where each change goes: [ENVIRONMENTS-CODEMAP.md](ENVIRONMENTS-CODEMAP.md).
-2. `home-theater`, a second room from the same kit; an MSAA switch for room
-   edges, its default chosen after an A/B on the Frame.
+2. `home-theater`, a second room from the same kit (built: a 5.6 x 3 x 7 m
+   room, a couch and a back row of armchairs on a riser, cloth panels in wood
+   frames, wall sconces); an MSAA switch for room edges, its default chosen
+   after an A/B on the Frame.
 3. Photographic skies and the Sky places (about a dozen in one step), user
    places, and a default place per library.
 4. The remaining rooms from the kit: `movie-palace`, `giant-screen`,

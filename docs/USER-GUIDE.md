@@ -867,18 +867,19 @@ type on your phone through the web remote.
 ## Places
 
 A place is a setting round a flat video, in place of the empty background: a
-cinema, or a studio. **Plain**, the empty background, is what you get until
+cinema, a home theater or a studio. **Plain**, the empty background, is what you get until
 you pick one. 180°, 360° and fisheye videos fill your view, so they hide the
 place. **Your room** (see [Passthrough videos](#passthrough-videos)) wins over
 a place while it shows.
 
 - **Pick one while a video plays:** press the film button on the control bar,
   beside the armchair. It opens the adjust panel's Position tab with the
-  picker at the top: Plain, Your room, Cinema and Studio.
+  picker at the top: Plain, Your room, Cinema, Studio and Home theater.
 - **Or set it for every video** in Settings › Places. It is the same
   choice: it stays until you change it, and a restart keeps it.
-- **Seat.** The cinema has three seats, Front, Middle and Back. The seat sets
-  how large the screen looks. Each place remembers its own seat.
+- **Seat.** The cinema has three seats, Front, Middle and Back; the home
+  theater has two, the Couch and the Back row. The seat sets how large the
+  screen looks. Each place remembers its own seat.
 - **House lights while playing.** The lights dim in about two seconds when
   the video plays, and come back up in about one when you pause, it ends or
   you close it. A pause to buffer leaves them as they are. The slider sets how

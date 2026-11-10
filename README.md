@@ -28,7 +28,7 @@ The name comes from the *laterna magica*, the magic lantern: the first projector
 - **Settings apply at once**: changing the screen's default position in Settings moves the video you're watching
 
 ### Places to watch *(in progress)*
-- **Environments**: watch from a seat in a cinema, or in a studio, instead of empty space
+- **Environments**: watch from a seat in a cinema, a home theater or a studio, instead of empty space
 - **House lights** that dim when the film starts
 
 ### Plex *(in progress)*

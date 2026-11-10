@@ -1447,6 +1447,8 @@ place-your-room = Your room
 place-cinema = Cinema
 # Short: a chip.
 place-studio = Studio
+# Short: a chip. A small living-room cinema.
+place-home-theater = Home theater
 # Under the chips when places are switched off for this run.
 place-switched-off = Places are switched off for this run.
 # A row: where you sit in the room.
