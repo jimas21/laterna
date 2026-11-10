@@ -97,6 +97,19 @@ impl Body {
             _ => None,
         }
     }
+
+    /// Whether the page starts at its top this frame (asked once): its
+    /// listing was restarted, or a library's tab was just chosen.
+    fn take_to_top(&mut self) -> bool {
+        let tab_chosen = match self {
+            Body::Library(l) => std::mem::take(&mut l.to_top),
+            _ => false,
+        };
+        let listing = self
+            .grid_mut()
+            .is_some_and(|g| std::mem::take(&mut g.to_top));
+        tab_chosen || listing
+    }
 }
 
 /// A library, collection or folder, a page at a time.
@@ -160,6 +173,9 @@ pub struct LibraryPage {
     got: [bool; 3],
     /// The tab the request in flight is for.
     target: LibraryTab,
+    /// A tab was just chosen: the page starts at its top (every tab, the
+    /// Recommended one with no listing included).
+    to_top: bool,
 }
 
 impl LibraryPage {
@@ -184,6 +200,7 @@ impl LibraryPage {
             asked: [true, false, false],
             got: [false; 3],
             target: LibraryTab::Recommended,
+            to_top: false,
         }
     }
 
@@ -233,6 +250,8 @@ impl LibraryPage {
         if !self.got[tab.index()] {
             self.asked[tab.index()] = false;
         }
+        // The page's one scroll area keeps its offset from the tab before.
+        self.to_top = true;
         if let Some(g) = self.grid_of(tab) {
             g.to_top = true;
         }
@@ -520,8 +539,9 @@ pub enum Loaded {
         /// Items asked for by id (a shuffle's): the order stays.
         by_id: bool,
     },
-    /// Failing quietly: the drawer says so, the page goes on.
-    Facets(Result<CatalogFacets, String>),
+    /// Failing quietly: the drawer says so, the page goes on. The tab that
+    /// asked, which is not always the one shown when the answer comes.
+    Facets(LibraryTab, Result<CatalogFacets, String>),
     Series {
         series: Box<CatalogItem>,
         seasons: Vec<CatalogItem>,
@@ -584,7 +604,10 @@ pub fn run(src: &dyn Catalog, load: &Load) -> fp_sources::Result<Loaded> {
             order: None,
             by_id: false,
         },
-        Load::Facets(q) => Loaded::Facets(src.facets(q).map_err(|e| super::errors::source(&e))),
+        Load::Facets(q) => Loaded::Facets(
+            load.tab(),
+            src.facets(q).map_err(|e| super::errors::source(&e)),
+        ),
         Load::Series { id, season } => {
             let series = Box::new(src.item(id)?);
             let seasons = src.seasons(id)?;
@@ -636,7 +659,12 @@ impl CatalogView {
     pub fn begin_request(&mut self, seq: u64, request_seq: u64, load: &Load) -> Option<u64> {
         let page = self.pages.iter_mut().find(|page| page.seq == seq)?;
         if matches!(load, Load::Facets(_)) {
-            if let Some(grid) = page.body.grid_mut() {
+            // The listing that asked, not the one shown by now.
+            let grid = match &mut page.body {
+                Body::Library(l) => l.grid_of(load.tab()),
+                body => body.grid_mut(),
+            };
+            if let Some(grid) = grid {
                 grid.facets = Facets::Asked;
             }
             return Some(page.seq);
@@ -652,7 +680,7 @@ impl CatalogView {
 
     /// Gives an answer to its page, discarding superseded data loads.
     pub fn loaded(&mut self, seq: u64, result: Result<Loaded, String>) {
-        let facets = matches!(&result, Ok(Loaded::Facets(_)));
+        let facets = matches!(&result, Ok(Loaded::Facets(..)));
         let Some(p) = self.pages.iter_mut().find(|p| {
             if facets {
                 p.seq == seq
@@ -712,8 +740,7 @@ impl CatalogView {
                     g.took(page, append, order, by_id);
                 }
             }
-            (Body::Library(l), Loaded::Facets(f)) => {
-                let tab = l.tab;
+            (Body::Library(l), Loaded::Facets(tab, f)) => {
                 if let Some(g) = l.grid_of(tab) {
                     g.facets = match f {
                         Ok(f) => Facets::Got(f),
@@ -734,7 +761,7 @@ impl CatalogView {
                     by_id,
                 },
             ) => g.took(page, append, order, by_id),
-            (Body::Grid(g), Loaded::Facets(f)) => {
+            (Body::Grid(g), Loaded::Facets(_, f)) => {
                 g.facets = match f {
                     Ok(f) => Facets::Got(f),
                     Err(e) => Facets::Failed(e),
@@ -978,10 +1005,7 @@ pub fn page(
     };
     page::status(ui, p.loading && !has_content(&p.body), p.error.as_deref());
     let loading = p.loading;
-    let top = p
-        .body
-        .grid_mut()
-        .is_some_and(|g| std::mem::take(&mut g.to_top));
+    let top = p.body.take_to_top();
     let mut go: Option<Go> = None;
     page::scroll_from(ui, top, |ui| {
         go = match &mut p.body {
@@ -2378,10 +2402,13 @@ mod tests {
         assert!(view.pages[0].error.is_none());
         view.loaded(
             facets,
-            Ok(Loaded::Facets(Ok(CatalogFacets {
-                studios: vec!["Selected studio".into()],
-                ..Default::default()
-            }))),
+            Ok(Loaded::Facets(
+                LibraryTab::Library,
+                Ok(CatalogFacets {
+                    studios: vec!["Selected studio".into()],
+                    ..Default::default()
+                }),
+            )),
         );
         assert!(view.pages[0].loading, "facets do not finish the listing");
         let reply = |id: &str| Loaded::Grid {
@@ -2408,7 +2435,13 @@ mod tests {
         assert!(matches!(&grid.facets, Facets::Got(f) if f.studios == ["Selected studio"]));
 
         view.loaded(current, Err("the current listing failed".into()));
-        view.loaded(facets, Ok(Loaded::Facets(Ok(CatalogFacets::default()))));
+        view.loaded(
+            facets,
+            Ok(Loaded::Facets(
+                LibraryTab::Library,
+                Ok(CatalogFacets::default()),
+            )),
+        );
         assert_eq!(
             view.pages[0].error.as_deref(),
             Some("the current listing failed")
@@ -2499,7 +2532,13 @@ mod tests {
         };
         assert!(grid.unasked_facets().is_none());
         assert!(matches!(grid.facets, Facets::Asked));
-        view.loaded(seq, Ok(Loaded::Facets(Ok(CatalogFacets::default()))));
+        view.loaded(
+            seq,
+            Ok(Loaded::Facets(
+                LibraryTab::Library,
+                Ok(CatalogFacets::default()),
+            )),
+        );
         assert!(view.pages[0].loading);
         assert!(
             matches!(&view.pages[0].body, Body::Grid(grid) if matches!(grid.facets, Facets::Got(_)))
@@ -2565,7 +2604,13 @@ mod tests {
         assert!(g.order.is_some());
         // The drawer's choices don't end the page's loading.
         j.pages[0].loading = true;
-        j.loaded(1, Ok(Loaded::Facets(Ok(CatalogFacets::default()))));
+        j.loaded(
+            1,
+            Ok(Loaded::Facets(
+                LibraryTab::Library,
+                Ok(CatalogFacets::default()),
+            )),
+        );
         assert!(j.pages[0].loading);
     }
 
@@ -2967,6 +3012,52 @@ mod tests {
         let l = library_of(&mut j);
         assert!(l.grid.items[0].played);
         assert!(l.rows.as_ref().unwrap()[0].items[0].played);
+    }
+
+    #[test]
+    fn facets_land_on_the_tab_that_asked() {
+        let mut j = library_view();
+        assert!(j.show_tab("library"));
+        let query = library_of(&mut j).grid.query.clone();
+        // The titles' drawer asks, and the user goes to the collections
+        // before the answer comes.
+        j.begin_request(1, 5, &Load::Facets(query.clone())).unwrap();
+        assert!(j.show_tab("collections"));
+        let l = library_of(&mut j);
+        assert!(matches!(l.grid.facets, Facets::Asked));
+        assert!(matches!(l.collections.facets, Facets::Unasked));
+        let facets = CatalogFacets {
+            studios: vec!["Selected studio".into()],
+            ..Default::default()
+        };
+        let tab = Load::Facets(query).tab();
+        assert_eq!(tab, LibraryTab::Library);
+        j.loaded(1, Ok(Loaded::Facets(tab, Ok(facets))));
+        let l = library_of(&mut j);
+        assert!(matches!(&l.grid.facets, Facets::Got(f) if f.studios == ["Selected studio"]));
+        assert!(
+            matches!(l.collections.facets, Facets::Unasked),
+            "the collections took the titles' facets"
+        );
+        // And a failure goes to the same place.
+        j.loaded(
+            1,
+            Ok(Loaded::Facets(LibraryTab::Collections, Err("no".into()))),
+        );
+        let l = library_of(&mut j);
+        assert!(matches!(&l.collections.facets, Facets::Failed(e) if e == "no"));
+        assert!(matches!(l.grid.facets, Facets::Got(_)));
+    }
+
+    #[test]
+    fn choosing_a_tab_starts_the_page_at_its_top() {
+        let mut j = library_view();
+        assert!(!j.pages[0].body.take_to_top(), "nothing chosen yet");
+        for tab in ["library", "collections", "recommended"] {
+            assert!(j.show_tab(tab));
+            assert!(j.pages[0].body.take_to_top(), "{tab} keeps the old offset");
+            assert!(!j.pages[0].body.take_to_top(), "asked once");
+        }
     }
 
     #[test]

@@ -1554,6 +1554,11 @@ fn seat_label(name: SeatName) -> &'static str {
 const HOUSE_PERCENT: std::ops::RangeInclusive<f32> = 0.0..=40.0;
 const HOUSE_PERCENT_START: f32 = 4.0;
 
+/// The screen light slider is in percent: 0 is off, and the start is
+/// `SCREEN_LIGHT_START` as that.
+const SCREEN_LIGHT_PERCENT: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+const SCREEN_LIGHT_PERCENT_START: f32 = 50.0;
+
 /// The place picker: Plain, Your room and each place as chips, then for the
 /// place chosen its seat, house lights and screen light. Shared by the
 /// adjust panel's Position tab (`in_video`, for the open video's screen) and
@@ -1596,6 +1601,7 @@ pub(super) fn place_controls(
     let seat = crate::app::places::seat_index(settings, place, &layout);
     let mut picked = None;
     let mut house = settings.house_lights_playing * 100.0;
+    let mut light = settings.screen_light_level * 100.0;
     widgets::rows(ui, |r| {
         if layout.seats.len() > 1 {
             r.row(tr!("place-seat"), None, |ui| {
@@ -1619,11 +1625,17 @@ pub(super) fn place_controls(
             let (low, high) = (*HOUSE_PLAYING.start(), *HOUSE_PLAYING.end());
             settings.house_lights_playing = (house / 100.0).clamp(low, high);
         }
-        r.switch(
+        if r.slider(
             tr!("place-screen-light"),
             Some(tr!("place-screen-light-desc")),
-            &mut settings.screen_light,
-        );
+            &mut light,
+            SCREEN_LIGHT_PERCENT,
+            SCREEN_LIGHT_PERCENT_START,
+            " %",
+            0,
+        ) {
+            settings.screen_light_level = (light / 100.0).clamp(0.0, 1.0);
+        }
     });
     if let Some(i) = picked {
         pick_seat(settings, place, i);
@@ -2586,6 +2598,19 @@ mod tests {
         pick_seat(&mut s, Place::Studio, 3);
         let last = Place::Studio.layout().seats.len() - 1;
         assert_eq!(usize::from(s.place_seats["studio"]), last);
+    }
+
+    #[test]
+    fn the_screen_light_slider_starts_where_the_setting_does() {
+        use crate::settings::{SCREEN_LIGHT_START, screen_light_gain};
+        assert_eq!(*SCREEN_LIGHT_PERCENT.start(), 0.0);
+        assert_eq!(*SCREEN_LIGHT_PERCENT.end(), 100.0);
+        assert_eq!(SCREEN_LIGHT_START * 100.0, SCREEN_LIGHT_PERCENT_START);
+        // The bottom is off.
+        assert_eq!(
+            screen_light_gain(*SCREEN_LIGHT_PERCENT.start() / 100.0),
+            0.0
+        );
     }
 
     #[test]

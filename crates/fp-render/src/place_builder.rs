@@ -3,9 +3,10 @@
 //! `Place::build` makes a place's meshes, ambient occlusion and baked
 //! house-light shares: tens of thousands of triangles of CPU work that would
 //! stall an XR frame if done while recording it. A worker thread does it
-//! instead; the renderer asks for a place, shows Plain while it is made, and
-//! uploads the data on the render thread (a copy of a few megabytes) on the
-//! first frame it is ready. No GPU is touched here, so all of it is unit
+//! instead; the renderer asks for a place, keeps showing what it shows (Plain
+//! the first time, the place loaded before it when switching) while it is
+//! made, and uploads the data on the render thread (a copy of a few
+//! megabytes) on the first frame it is ready. No GPU is touched here, so all of it is unit
 //! tested without a device.
 
 use crate::env::{Place, PlaceData};

@@ -55,13 +55,28 @@ struct GlowKey {
 
 impl GlowKey {
     fn of(frame: Option<u64>, p: &SceneParams) -> GlowKey {
+        // The peak of an HDR scene is measured as it plays and moves a little
+        // every frame; the light does not need it to the nit, so it counts
+        // in steps (the first of the levels is the PQ code of the peak).
+        let mut hdr = p.hdr;
+        hdr.x = peak_step(p.hdr.x) as f32;
         GlowKey {
             frame,
-            colour: [p.picture, p.extra, p.hdr],
+            colour: [p.picture, p.extra, hdr],
             mode: p.mode,
             turns: p.display[0],
         }
     }
+}
+
+/// The nits the glow key counts the HDR peak in.
+const GLOW_PEAK_STEP: f32 = 50.0;
+
+/// The peak the PQ code `pq` stands for, in whole steps of
+/// [`GLOW_PEAK_STEP`] nits (the nearest). Not a number is step 0, so a bad
+/// reading cannot make the key differ from itself.
+fn peak_step(pq: f32) -> u32 {
+    (crate::hdr::nits_from_pq(pq) / GLOW_PEAK_STEP).round() as u32
 }
 
 /// Linear-light background format of eye targets.
@@ -2041,10 +2056,14 @@ impl Renderer {
         };
         if !env.has(frame.place) {
             let data = if self.inline_places {
-                build_timed(Place::build, frame.place)
+                Some(build_timed(Place::build, frame.place))
             } else {
                 match self.builds.take(frame.place) {
-                    Built::Ready(data) => data,
+                    Built::Ready(data) => Some(data),
+                    // The next place is still being built: a place that is
+                    // already loaded keeps being drawn until it is ready, then
+                    // is swapped for it, rather than Plain showing in between.
+                    Built::Pending if env.floor().is_some() => None,
                     Built::Pending => return false,
                     Built::Failed => {
                         log::warn!("places aren't shown: one wasn't built");
@@ -2053,11 +2072,13 @@ impl Renderer {
                     }
                 }
             };
-            let garbage = &mut self.slots[slot_idx].garbage_buffers;
-            if let Err(e) = env.load(&self.gpu, frame.place, data, garbage) {
-                log::warn!("places aren't shown: {e}");
-                self.env_failed = true;
-                return false;
+            if let Some(data) = data {
+                let garbage = &mut self.slots[slot_idx].garbage_buffers;
+                if let Err(e) = env.load(&self.gpu, frame.place, data, garbage) {
+                    log::warn!("places aren't shown: {e}");
+                    self.env_failed = true;
+                    return false;
+                }
             }
         }
         let Some((kind, built_floor)) = env.floor() else {
@@ -2125,7 +2146,9 @@ impl Renderer {
     ) -> Option<LitScreen> {
         self.glow_due = false;
         let showing = p.screen.w >= 0.5 && self.slots[slot_idx].has_video;
-        if !(frame.screen_light && showing && self.ensure_glow()) {
+        // A strength of 0 (or nothing a number) is the light off.
+        let on = frame.screen_light > 0.0 && frame.screen_light.is_finite();
+        if !(on && showing && self.ensure_glow()) {
             // Black at once; turned on again, it measures afresh.
             self.light.reset();
             self.glow_held = None;
@@ -2148,6 +2171,7 @@ impl Renderer {
             patches,
             rgb: self.light.rgb,
             normal,
+            gain: frame.screen_light,
         })
     }
 
@@ -2159,8 +2183,12 @@ impl Renderer {
         if !std::mem::take(&mut self.glow_due) {
             return;
         }
-        let ready = match self.tp10_eyes.as_mut() {
-            Some(t) if tp10 => t.ensure_glow(&self.gpu),
+        // A TP10 frame is measured by the TP10 pipeline's own descriptors:
+        // with none to read (no TP10 eyes), the scene pipeline's planes hold
+        // nothing of this frame, so there is nothing to measure.
+        let ready = match (self.tp10_eyes.as_mut(), tp10) {
+            (Some(t), true) => t.ensure_glow(&self.gpu),
+            (None, true) => return,
             _ => true,
         };
         if !ready {
@@ -2792,6 +2820,29 @@ mod tests {
         let loaded = r.env.as_ref().map(|e| e.has(Place::Studio));
         assert_eq!(loaded, Some(false), "the studio was not loaded");
         assert!(r.env.as_ref().is_some_and(|e| e.has(Place::Cinema)));
+    }
+
+    #[test]
+    fn the_glow_key_counts_the_hdr_peak_in_steps() {
+        use crate::hdr::pq_from_nits;
+        let params = |nits: f32| {
+            let mut p = params::build(&VideoParams::default(), None, [Mat4::IDENTITY; 2]);
+            p.hdr = params::hdr_levels(nits);
+            p
+        };
+        let key = |nits: f32| GlowKey::of(Some(3), &params(nits));
+        // A peak that wanders by a few nits as the scene is measured is the
+        // same key; one a step away is not.
+        assert!(key(1000.0) == key(1012.0));
+        assert!(key(1000.0) == key(980.0));
+        assert!(key(1000.0) != key(1100.0));
+        assert_eq!(peak_step(pq_from_nits(1000.0)), 20);
+        assert_eq!(peak_step(pq_from_nits(1030.0)), 21);
+        // Not a number is a step, not a key that never matches itself.
+        assert_eq!(peak_step(f32::NAN), 0);
+        let mut p = params(1000.0);
+        p.hdr.x = f32::NAN;
+        assert!(GlowKey::of(None, &p) == GlowKey::of(None, &p));
     }
 
     #[test]

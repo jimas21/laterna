@@ -54,7 +54,20 @@ pub(crate) struct LitScreen {
     pub rgb: [Vec3; PATCHES],
     /// The screen's normal towards the audience.
     pub normal: Vec3,
+    /// How strongly it lights the place: 1 the strength the place is tuned
+    /// for (the Screen light slider's start), 0 off.
+    pub gain: f32,
 }
+
+/// The least light, linear and neutral, any cell of the picture gives the
+/// place while its light is on, so a dark scene (or a black frame between
+/// two shots) never leaves the room completely black. About what a very dark
+/// grey scene measures.
+pub(crate) const LIGHT_FLOOR: f32 = 0.03;
+
+/// `SCREEN_BOOST` in env.wgsl.
+#[cfg(test)]
+const SCREEN_BOOST: f32 = 5.0;
 
 /// What changes from frame to frame.
 pub(crate) struct EnvInput {
@@ -138,13 +151,13 @@ impl Look {
             u.fog_range.x = fog.start;
             u.fog_range.y = fog.end;
         }
-        if let Some(s) = &input.screen {
+        if let Some(s) = input.screen.as_ref().filter(|s| s.gain > 0.0) {
             u.patch_pos = s.patches;
             for (out, c) in u.patch_rgb.iter_mut().zip(s.rgb) {
-                *out = vec4(c.to_array().map(|v| v * l.spill), 0.0);
+                *out = vec4(c.to_array().map(|v| (v * l.spill).max(LIGHT_FLOOR)), 0.0);
             }
-            // w: how much of the picture's light lands here; 0 is off.
-            u.screen_n = s.normal.extend(l.spill);
+            // w: how strongly the picture's light lands here; 0 is off.
+            u.screen_n = s.normal.extend(s.gain);
         }
         u.fog_range.z = input.floor_drop;
         u.fog_range.w = (input.time % 3600.0) as f32;
@@ -601,6 +614,7 @@ mod tests {
             patches,
             rgb,
             normal: Vec3::Z,
+            gain: 1.0,
         });
         let on = look.uniform(&i);
         assert_eq!(on.patch_pos, patches);
@@ -608,7 +622,47 @@ mod tests {
         for (k, (got, want)) in on.patch_rgb.iter().zip(rgb).enumerate() {
             assert!(got.truncate().abs_diff_eq(want * spill, 1e-6), "{k}");
         }
-        assert_eq!(on.screen_n, Vec4::new(0.0, 0.0, 1.0, spill));
+        assert_eq!(on.screen_n, Vec4::new(0.0, 0.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn the_slider_scales_the_light_and_a_dark_scene_keeps_a_floor() {
+        let look = Look::new(&Place::Cinema.build());
+        let lit = |rgb: Vec3, gain: f32| {
+            let mut i = input(1.0);
+            i.screen = Some(LitScreen {
+                patches: [Vec4::new(0.0, 4.0, 0.0, 1.0); PATCHES],
+                rgb: [rgb; PATCHES],
+                normal: Vec3::Z,
+                gain,
+            });
+            look.uniform(&i)
+        };
+        // The strength reaches the shader in screen_n.w, and not at all
+        // (nothing lit) at 0, as with no screen.
+        assert_eq!(lit(Vec3::splat(0.5), 1.5).screen_n.w, 1.5);
+        let off = lit(Vec3::splat(0.5), 0.0);
+        assert_eq!(off.screen_n, Vec4::ZERO);
+        assert_eq!(off.patch_rgb, [Vec4::ZERO; PATCHES]);
+        // A black picture still gives every cell the floor, in grey; a cell
+        // brighter than it is left as measured.
+        let dark = lit(Vec3::new(0.0, 0.001, 0.0), 1.0);
+        for c in dark.patch_rgb {
+            assert_eq!(c.truncate(), Vec3::splat(LIGHT_FLOOR));
+        }
+        let bright = lit(Vec3::new(0.8, 0.02, 0.2), 1.0);
+        assert!(
+            bright.patch_rgb[0]
+                .truncate()
+                .abs_diff_eq(Vec3::new(0.8, LIGHT_FLOOR, 0.2), 1e-6)
+        );
+    }
+
+    #[test]
+    fn the_shader_boost_is_the_one_here() {
+        let shader = include_str!("../shaders/env.wgsl");
+        let line = format!("const SCREEN_BOOST: f32 = {SCREEN_BOOST:?};");
+        assert!(shader.contains(&line), "env.wgsl lacks `{line}`");
     }
 
     #[test]
