@@ -836,6 +836,76 @@ fn egui_panel_and_pointer_render_in_the_scene() {
 }
 
 #[test]
+fn a_resized_panel_keeps_the_textures_painted_into_it() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let panel = r.create_panel(256, 128).unwrap();
+    let ctx = egui::Context::default();
+    // A picture, like a picture subtitle's: egui sends it once too.
+    let red = [255u8, 0, 0, 255].repeat(8 * 8);
+    let bitmap = ctx.load_texture(
+        "bitmap",
+        egui::ColorImage::from_rgba_unmultiplied([8, 8], &red),
+        egui::TextureOptions::LINEAR,
+    );
+    // Paints a heading and the picture across the panel, one point per pixel.
+    // egui sends its font texture once, with the first glyphs.
+    let paint = |r: &mut Renderer, w: u32, h: u32| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(w as f32, h as f32),
+            )),
+            ..Default::default()
+        };
+        let out = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.heading("FramePlayerX subtitles");
+                ui.image((bitmap.id(), egui::vec2(48.0, 48.0)));
+            });
+        });
+        let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
+        r.begin_frame().unwrap();
+        r.paint_panel(panel, &prims, &out.textures_delta, out.pixels_per_point)
+            .unwrap();
+        r.end_frame().unwrap();
+    };
+    // The panel's size, how many colours it holds, and how many of its pixels
+    // are the picture's solid red.
+    let look = |r: &Renderer| {
+        let (w, h, rgba) = r.read_panel(panel).unwrap();
+        let distinct: std::collections::HashSet<&[u8]> = rgba.chunks(4).collect();
+        let reds = rgba
+            .chunks(4)
+            .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60 && p[3] > 200)
+            .count();
+        ((w, h), distinct.len(), reds)
+    };
+    paint(&mut r, 256, 128);
+    let (size, colours, reds) = look(&r);
+    assert_eq!(size, (256, 128));
+    assert!(colours > 8, "the text is anti-aliased: {colours} colours");
+    assert!(reds > 1000, "the picture is there: {reds}");
+
+    // Bigger, empty until painted again, with the same id.
+    r.resize_panel(panel, 512, 256).unwrap();
+    assert_eq!(r.panel_size(panel), Some((512, 256)));
+    let (_, colours, reds) = look(&r);
+    assert_eq!((colours, reds), (1, 0), "a new picture is clear");
+    // Painted again, egui sends neither texture again: the glyphs and the
+    // picture come from the ones the panel kept, not the plain white one that
+    // stands in for a texture the panel doesn't have (flat blocks).
+    paint(&mut r, 512, 256);
+    let (size, colours, reds) = look(&r);
+    assert_eq!(size, (512, 256));
+    assert!(colours > 8, "the text came back with its glyphs: {colours}");
+    assert!(reds > 1000, "the picture came back: {reds}");
+    r.destroy_panel(panel);
+    e.destroy(&r);
+}
+
+#[test]
 fn height_moves_the_viewer_against_the_horizon() {
     let Some((mut r, mut e)) = setup() else {
         return;

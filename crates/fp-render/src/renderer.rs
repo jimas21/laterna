@@ -600,6 +600,29 @@ impl Renderer {
 
     /// Creates an off-screen UI panel of `width` x `height` pixels.
     pub fn create_panel(&mut self, width: u32, height: u32) -> Result<PanelId> {
+        let (image, set) = self.panel_surface(width, height)?;
+        let panel = Panel {
+            image,
+            set,
+            textures: HashMap::new(),
+            painted: false,
+            version: 0,
+        };
+        match self.panels.iter().position(Option::is_none) {
+            Some(i) => {
+                self.panels[i] = Some(panel);
+                Ok(i)
+            }
+            None => {
+                self.panels.push(Some(panel));
+                Ok(self.panels.len() - 1)
+            }
+        }
+    }
+
+    /// A cleared panel image of `width` x `height` pixels with its mip chain
+    /// and the descriptor set that samples it.
+    fn panel_surface(&mut self, width: u32, height: u32) -> Result<(Image, vk::DescriptorSet)> {
         let mips = 32 - width.max(height).leading_zeros();
         let image = Image::new(
             &self.gpu,
@@ -646,23 +669,31 @@ impl Renderer {
                 mem::SHADER_READ,
             );
         })?;
-        let panel = Panel {
-            image,
-            set,
-            textures: HashMap::new(),
-            painted: false,
-            version: 0,
-        };
-        match self.panels.iter().position(Option::is_none) {
-            Some(i) => {
-                self.panels[i] = Some(panel);
-                Ok(i)
-            }
-            None => {
-                self.panels.push(Some(panel));
-                Ok(self.panels.len() - 1)
-            }
+        Ok((image, set))
+    }
+
+    /// Gives a panel a picture of `width` x `height` pixels, empty until it is
+    /// painted again. Its id stays and so do the egui textures painted into it
+    /// (egui sends each only once, so a panel made afresh would lose them).
+    /// The old picture is destroyed once no frame uses it.
+    pub fn resize_panel(&mut self, id: PanelId, width: u32, height: u32) -> Result<()> {
+        if self.panel_size(id) == Some((width, height)) {
+            return Ok(());
         }
+        let (image, set) = self.panel_surface(width, height)?;
+        let slot = &mut self.slots[self.current];
+        let Some(Some(p)) = self.panels.get_mut(id) else {
+            slot.garbage.push(image);
+            slot.garbage_sets.push(set);
+            return Ok(());
+        };
+        let old = std::mem::replace(&mut p.image, image);
+        let old_set = std::mem::replace(&mut p.set, set);
+        // Copies of the picture made so far are of the old one.
+        p.version += 1;
+        slot.garbage.push(old);
+        slot.garbage_sets.push(old_set);
+        Ok(())
     }
 
     pub fn panel_size(&self, id: PanelId) -> Option<(u32, u32)> {

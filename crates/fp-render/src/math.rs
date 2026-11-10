@@ -45,6 +45,22 @@ pub fn projection(fov: Fov, near: f32, far: f32) -> Mat4 {
     Mat4::from_cols_array(&m)
 }
 
+/// How many pixels of an eye image `width_px` wide fit in one unit of tangent
+/// (the width of the view at distance 1) at the middle of the view, for the
+/// projection `proj` made by [`projection`]. A flat thing `t` wide at distance
+/// `d` spans `t / d * pixels_per_tan` pixels there.
+pub fn pixels_per_tan(proj: &Mat4, width_px: u32) -> f32 {
+    width_px as f32 * proj.x_axis.x / 2.0
+}
+
+/// How many pixels of an eye image `width_px` wide fit in one unit of tangent
+/// (the width of the view at distance 1) at the middle of the view, for the
+/// projection `proj` made by [`projection`]. A flat thing `t` wide at distance
+/// `d` spans `t / d * pixels_per_tan` pixels there.
+pub fn pixels_per_tan(proj: &Mat4, width_px: u32) -> f32 {
+    width_px as f32 * proj.x_axis.x / 2.0
+}
+
 /// World → eye transform for an eye at `position` with `orientation`.
 pub fn view(position: Vec3, orientation: Quat) -> Mat4 {
     Mat4::from_rotation_translation(orientation, position).inverse()
@@ -53,6 +69,46 @@ pub fn view(position: Vec3, orientation: Quat) -> Mat4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pixels_per_tan_counts_the_pixels_of_a_unit_of_tangent() {
+        // 90 degrees across is two units of tangent: 500 pixels each.
+        let p = projection(Fov::symmetric(90.0), 0.05, 100.0);
+        assert!((pixels_per_tan(&p, 1000) - 500.0).abs() < 0.01);
+        // Skewing the view to one side keeps the width.
+        let skew = projection(
+            Fov {
+                left: -0.9,
+                right: 0.5,
+                up: 0.7,
+                down: -0.7,
+            },
+            0.05,
+            100.0,
+        );
+        let width = 0.5f32.tan() + 0.9f32.tan();
+        assert!((pixels_per_tan(&skew, 1000) - 1000.0 / width).abs() < 0.01);
+    }
+
+    #[test]
+    fn pixels_per_tan_counts_the_pixels_of_a_unit_of_tangent() {
+        // 90 degrees across is two units of tangent: 500 pixels each.
+        let p = projection(Fov::symmetric(90.0), 0.05, 100.0);
+        assert!((pixels_per_tan(&p, 1000) - 500.0).abs() < 0.01);
+        // A view tilted to one side has the same pixels per tangent.
+        let skew = projection(
+            Fov {
+                left: -0.9,
+                right: 0.5,
+                up: 0.7,
+                down: -0.7,
+            },
+            0.05,
+            100.0,
+        );
+        let width = 0.5f32.tan() + 0.9f32.tan();
+        assert!((pixels_per_tan(&skew, 1000) - 1000.0 / width).abs() < 0.01);
+    }
 
     #[test]
     fn forward_maps_to_centre_and_up_to_top() {
