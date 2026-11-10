@@ -103,7 +103,7 @@ impl DeviceInfo {
         }
         if !force && self.arch != "aarch64" {
             return Err(InstallError::WrongDevice(format!(
-                "its CPU is {:?}; FramePlayerX needs aarch64 (ARM64)",
+                "its CPU is {:?}; Laterna needs aarch64 (ARM64)",
                 self.arch
             )));
         }

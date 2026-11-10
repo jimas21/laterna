@@ -133,7 +133,7 @@ fn render_text(r: &Report) -> String {
         .get("PRETTY_NAME")
         .cloned()
         .unwrap_or_default();
-    let _ = writeln!(s, "FramePlayerX platform probe {}", r.probe_version);
+    let _ = writeln!(s, "Laterna platform probe {}", r.probe_version);
     let _ = writeln!(
         s,
         "{os} | {} | {} | glibc {}",

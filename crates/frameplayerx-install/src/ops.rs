@@ -26,7 +26,7 @@ pub const DEVKIT_GAME_ID: &str = "frameplayerx";
 /// Extra room required beyond the zip and its unpacked size.
 const SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 
-/// How to add FramePlayerX to the Steam library.
+/// How to add Laterna to the Steam library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum ShortcutMethod {
     /// Valve's devkit helper if present, else edit `shortcuts.vdf`.
@@ -97,7 +97,7 @@ pub fn fetch_latest(
     channel: Channel,
     cache_dir: &Path,
 ) -> Result<PathBuf> {
-    println!("Checking for the latest FramePlayerX release ({channel}) ...");
+    println!("Checking for the latest Laterna release ({channel}) ...");
     let updater = Updater::new()?.arch("aarch64");
     let url = match manifest_url {
         Some(url) => url.to_string(),
@@ -113,7 +113,7 @@ pub fn fetch_latest(
             ))
         })?;
     println!(
-        "Downloading FramePlayerX {} ({:.1} MB) ...",
+        "Downloading Laterna {} ({:.1} MB) ...",
         update.version,
         update.artifact.size as f64 / 1e6
     );
@@ -259,7 +259,7 @@ pub fn install_zip(
     let info = inspect_zip(zip)?;
     let (size, sha256) = hash_file(zip)?;
     println!(
-        "FramePlayerX {} ({:.1} MB), installing to {dir}.",
+        "Laterna {} ({:.1} MB), installing to {dir}.",
         info.version,
         size as f64 / 1e6
     );
@@ -270,14 +270,14 @@ pub fn install_zip(
         upload_and_unpack(remote, device, zip, &dir, &info, size, sha256)?;
         match &current {
             Some(old) => println!(
-                "Installed FramePlayerX {} (replacing {old}; the previous version is kept in {dir}.old).",
+                "Installed Laterna {} (replacing {old}; the previous version is kept in {dir}.old).",
                 info.version
             ),
-            None => println!("Installed FramePlayerX {}.", info.version),
+            None => println!("Installed Laterna {}.", info.version),
         }
     } else {
         println!(
-            "FramePlayerX {} is already installed; only checking the Steam shortcut \
+            "Laterna {} is already installed; only checking the Steam shortcut \
              (use --reinstall to copy the files again).",
             info.version
         );
@@ -331,7 +331,7 @@ fn upload_and_unpack(
     println!("Copying to the headset ...");
     remote.upload(zip, &plan.zip)?;
     println!("Unpacking on the headset ...");
-    let out = run_checked(remote, "unpacking FramePlayerX", &install_script(&plan))?;
+    let out = run_checked(remote, "unpacking Laterna", &install_script(&plan))?;
     let reported = out
         .stdout
         .lines()
@@ -339,7 +339,7 @@ fn upload_and_unpack(
         .map(str::trim);
     if reported != Some(plan.version.as_str()) {
         return Err(InstallError::Remote {
-            what: "unpacking FramePlayerX".into(),
+            what: "unpacking Laterna".into(),
             code: out.code,
             detail: format!("unexpected output: {}", out.stdout.trim()),
         });
@@ -386,7 +386,7 @@ fn register_shortcut(
         restart_steam(remote)?;
     } else {
         println!(
-            "Steam must restart to show FramePlayerX in the library: restart the headset, or \
+            "Steam must restart to show Laterna in the library: restart the headset, or \
              run this again with --restart-steam."
         );
     }
@@ -483,7 +483,7 @@ fn register_with_vdf(
     if device.steam_users.is_empty() {
         println!(
             "No Steam account was found on the headset (sign in to Steam on it first). \
-             To add FramePlayerX by hand: Steam > Add a Non-Steam Game > {}",
+             To add Laterna by hand: Steam > Add a Non-Steam Game > {}",
             spec.exe
         );
         return Ok(());
@@ -492,9 +492,15 @@ fn register_with_vdf(
     let app_id = spec.app_id();
     for user in &device.steam_users {
         let mut doc = read_shortcuts(remote, device, user, tmp.path())?;
+        // An entry kept under another name has another app id, and its
+        // artwork files are named after it.
+        let old_id = shortcut_app_id_in(&doc, spec).filter(|old| *old != app_id);
         let what = upsert_shortcut(&mut doc, spec);
         write_shortcuts(remote, device, user, tmp.path(), &doc)?;
         let art = copy_grid_art(remote, device, user, &spec.start_dir, app_id, info)?;
+        if let Some(old) = old_id {
+            remove_grid_art(remote, device, user, &[old])?;
+        }
         let verb = match what {
             Upsert::Added => "Added",
             Upsert::Updated => "Updated",
@@ -553,6 +559,32 @@ fn copy_grid_art(
     }
 }
 
+/// Deletes the library artwork named after `ids` from an account's
+/// `config/grid/`.
+fn remove_grid_art(
+    remote: &mut dyn Remote,
+    device: &DeviceInfo,
+    user: &str,
+    ids: &[u32],
+) -> Result<()> {
+    let grid = format!("{}/grid", device.steam_config_dir(user));
+    let files: Vec<String> = ids
+        .iter()
+        .flat_map(|id| {
+            GRID_ART
+                .iter()
+                .map(|(_, t)| sh_quote(&format!("{grid}/{}", grid_file_name(t, *id))))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    run_checked(
+        remote,
+        "removing library artwork",
+        &format!("rm -f {}", files.join(" ")),
+    )?;
+    Ok(())
+}
+
 /// Script asking a running Steam to shut down. In Gaming Mode the session
 /// starts it again, which makes it re-read `shortcuts.vdf`.
 pub const RESTART_STEAM_SCRIPT: &str = r#"
@@ -565,7 +597,7 @@ echo "steam=shutdown"
 fn restart_steam(remote: &mut dyn Remote) -> Result<()> {
     let out = remote.run(RESTART_STEAM_SCRIPT)?;
     if out.stdout.contains("steam=not-running") {
-        println!("Steam is not running; it will load FramePlayerX the next time it starts.");
+        println!("Steam is not running; it will load Laterna the next time it starts.");
     } else if out.success() {
         println!(
             "Asked Steam to restart. In Gaming Mode it comes back by itself; if it does not, \
@@ -573,14 +605,14 @@ fn restart_steam(remote: &mut dyn Remote) -> Result<()> {
         );
     } else {
         println!(
-            "Could not restart Steam ({}). Restart the headset to see FramePlayerX in the library.",
+            "Could not restart Steam ({}). Restart the headset to see Laterna in the library.",
             out.stderr.trim()
         );
     }
     Ok(())
 }
 
-/// Removes FramePlayerX from the headset: Steam shortcuts and artwork, the
+/// Removes Laterna from the headset: Steam shortcuts and artwork, the
 /// install folder with its `.old`/`.new` siblings, and (with `purge`) the
 /// user's settings, library database and caches.
 pub fn uninstall(
@@ -614,30 +646,16 @@ pub fn uninstall(
         let removed = remove_shortcut(&mut doc, &spec) | remove_shortcut(&mut doc, &bin_spec);
         if removed {
             write_shortcuts(remote, device, user, tmp.path(), &doc)?;
-            println!("Removed FramePlayerX from the Steam library of account {user}.");
+            println!("Removed Laterna from the Steam library of account {user}.");
             removed_any = true;
         }
         ids.sort_unstable();
         ids.dedup();
-        let grid = format!("{}/grid", device.steam_config_dir(user));
-        let files: Vec<String> = ids
-            .iter()
-            .flat_map(|id| {
-                GRID_ART
-                    .iter()
-                    .map(|(_, t)| sh_quote(&format!("{grid}/{}", grid_file_name(t, *id))))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        run_checked(
-            remote,
-            "removing library artwork",
-            &format!("rm -f {}", files.join(" ")),
-        )?;
+        remove_grid_art(remote, device, user, &ids)?;
     }
     if device.has_devkit_shortcut {
         println!(
-            "If FramePlayerX was added with Valve's devkit tools, remove it from Library > \
+            "If Laterna was added with Valve's devkit tools, remove it from Library > \
              Non-Steam (Devkit Game) on the headset."
         );
     }
@@ -657,14 +675,12 @@ pub fn uninstall(
              \"${XDG_CACHE_HOME:-$HOME/.cache}/frameplayerx\"",
         );
     }
-    run_checked(remote, "removing FramePlayerX's files", &script)?;
+    run_checked(remote, "removing Laterna's files", &script)?;
     println!("Removed {dir}.");
     if opts.purge {
-        println!("Removed FramePlayerX's settings, library database and caches.");
+        println!("Removed Laterna's settings, library database and caches.");
     } else {
-        println!(
-            "Your FramePlayerX settings and library were kept (use --purge to delete them too)."
-        );
+        println!("Your Laterna settings and library were kept (use --purge to delete them too).");
     }
     if removed_any {
         if opts.restart_steam {
@@ -676,7 +692,7 @@ pub fn uninstall(
     Ok(())
 }
 
-/// The stored app id of FramePlayerX's entry, if present.
+/// The stored app id of Laterna's entry, if present.
 fn shortcut_app_id_in(doc: &vdf::Map, spec: &ShortcutSpec) -> Option<u32> {
     let key = find_shortcut(doc, spec)?;
     match doc.get_map("shortcuts")?.get_map(&key)?.get("appid")? {
@@ -721,14 +737,14 @@ pub fn status(remote: &mut dyn Remote, device: &DeviceInfo, dir: &str) -> Result
         }
     }
     match &installed {
-        Some(v) => println!("Installed: FramePlayerX {v} in {dir}"),
-        None => println!("FramePlayerX is not installed in {dir}."),
+        Some(v) => println!("Installed: Laterna {v} in {dir}"),
+        None => println!("Laterna is not installed in {dir}."),
     }
     if let Some(v) = &previous {
         println!("Previous version kept for rollback: {v}");
     }
     if shortcut_users.is_empty() {
-        println!("Steam library: no FramePlayerX shortcut found.");
+        println!("Steam library: no Laterna shortcut found.");
     } else {
         println!(
             "Steam library: shortcut present for account(s) {}.",
@@ -758,7 +774,7 @@ pub fn status(remote: &mut dyn Remote, device: &DeviceInfo, dir: &str) -> Result
 mod tests {
     use super::*;
     use crate::remote::tests::{FakeRemote, sh_unquote};
-    use crate::shortcut::app_id_as_vdf_int;
+    use crate::shortcut::{app_id_as_vdf_int, shortcut_app_id};
     use std::io::Write as _;
     use zip::write::SimpleFileOptions;
 
@@ -797,7 +813,7 @@ mod tests {
     fn opts() -> InstallOptions {
         InstallOptions {
             dir: DEFAULT_INSTALL_DIR.into(),
-            app_name: "FramePlayerX".into(),
+            app_name: "Laterna".into(),
             shortcut: ShortcutMethod::Auto,
             restart_steam: false,
             reinstall: false,
@@ -888,7 +904,7 @@ mod tests {
         );
         let spec = shortcut_spec(
             "/home/steam/frameplayerx",
-            "FramePlayerX",
+            "Laterna",
             &inspect_zip(&zip).unwrap(),
         );
         assert_eq!(e.get_int("appid"), Some(app_id_as_vdf_int(spec.app_id())));
@@ -904,6 +920,49 @@ mod tests {
         assert!(!f.ran(&format!("'{grid}/{id}.png'")));
         // Steam was not touched without --restart-steam.
         assert!(!f.ran("steam -shutdown"));
+    }
+
+    #[test]
+    fn entry_under_the_old_name_is_renamed_with_new_artwork() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = release_zip(tmp.path(), "1.2.3", true);
+        let quoted = "\"/home/steam/frameplayerx/frameplayerx.sh\"";
+        let old_id = shortcut_app_id(quoted, "FramePlayerX");
+        let mut entry = vdf::Map::new();
+        entry.set("appid", Value::Int(app_id_as_vdf_int(old_id)));
+        entry.set("AppName", Value::Str("FramePlayerX".into()));
+        entry.set("Exe", Value::Str(quoted.into()));
+        let mut list = vdf::Map::new();
+        list.set("0", Value::Map(entry));
+        let mut doc = vdf::Map::new();
+        doc.set("shortcuts", Value::Map(list));
+        let mut f = fake();
+        f.files.insert(VDF.into(), vdf::write(&doc).unwrap());
+
+        install_zip(&mut f, &device(), &zip, &opts()).unwrap();
+
+        // Renamed in place: one entry, the new name and the new app id.
+        let doc = vdf::parse(&f.files[&format!("{VDF}.frameplayerx-new")]).unwrap();
+        let list = doc.get_map("shortcuts").unwrap();
+        assert_eq!(list.0.len(), 1);
+        let e = list.get_map("0").unwrap();
+        assert_eq!(e.get_str("AppName"), Some("Laterna"));
+        let spec = shortcut_spec(
+            "/home/steam/frameplayerx",
+            "Laterna",
+            &inspect_zip(&zip).unwrap(),
+        );
+        let id = spec.app_id();
+        let expected = crc32fast::hash(format!("{quoted}Laterna").as_bytes()) | 0x8000_0000;
+        assert_eq!(id, expected);
+        assert_ne!(id, old_id);
+        assert_eq!(e.get_int("appid"), Some(app_id_as_vdf_int(id)));
+
+        // Artwork is written for the new id, and the old id's is removed.
+        let grid = "/home/steam/.local/share/Steam/userdata/42/config/grid";
+        assert!(f.ran(&format!("'{grid}/{id}p.png'")));
+        assert!(f.ran(&format!("'{grid}/{id}_hero.png'")));
+        assert!(f.ran(&format!("rm -f '{grid}/{old_id}p.png'")));
     }
 
     #[test]
@@ -1072,7 +1131,7 @@ mod tests {
 
         let o = UninstallOptions {
             dir: "~/frameplayerx".into(),
-            app_name: "FramePlayerX".into(),
+            app_name: "Laterna".into(),
             purge: false,
             restart_steam: false,
         };
@@ -1090,7 +1149,7 @@ mod tests {
         assert!(!rm.contains("XDG_CONFIG_HOME"));
         let spec = shortcut_spec(
             "/home/steam/frameplayerx",
-            "FramePlayerX",
+            "Laterna",
             &inspect_zip(&zip).unwrap(),
         );
         assert!(f.ran(&format!("{}p.png", spec.app_id())));
@@ -1106,7 +1165,7 @@ mod tests {
         let mut f = fake();
         let o = UninstallOptions {
             dir: HOME.into(),
-            app_name: "FramePlayerX".into(),
+            app_name: "Laterna".into(),
             purge: true,
             restart_steam: false,
         };
@@ -1319,7 +1378,7 @@ mod tests {
         assert_eq!(doc.get_map("shortcuts").unwrap().0.len(), 2);
         let spec = shortcut_spec(
             &dir.display().to_string(),
-            "FramePlayerX",
+            "Laterna",
             &inspect_zip(&z2).unwrap(),
         );
         let id = spec.app_id();
@@ -1352,7 +1411,7 @@ mod tests {
         std::fs::create_dir_all(home.join(".config/frameplayerx")).unwrap();
         let o = UninstallOptions {
             dir: "frameplayerx".into(),
-            app_name: "FramePlayerX".into(),
+            app_name: "Laterna".into(),
             purge: true,
             restart_steam: false,
         };

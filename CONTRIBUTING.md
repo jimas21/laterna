@@ -1,10 +1,10 @@
-# Contributing to FramePlayerX
+# Contributing to Laterna
 
-FramePlayerX is maintained by one person, and every feature, setting and button is something to keep working from then on. These guidelines keep contributions useful and reviews manageable.
+Laterna is maintained by one person, and every feature, setting and button is something to keep working from then on. These guidelines keep contributions useful and reviews manageable.
 
 You don't need to write code to help:
 
-- **Found a bug or have an idea?** Open a [bug report](https://github.com/jimas21/frameplex/issues/new?template=bug_report.md) or a [suggestion](https://github.com/jimas21/frameplex/issues/new?template=feature_request.md).
+- **Found a bug or have an idea?** Open a [bug report](https://github.com/jimas21/laterna/issues/new?template=bug_report.md) or a [suggestion](https://github.com/jimas21/laterna/issues/new?template=feature_request.md).
 - **Spotted a wrong translation?** See [Help translate](README.md#help-translate).
 
 ## Before you write code
@@ -48,7 +48,7 @@ The checks in [Build and test](docs/DEVELOPMENT.md#build-and-test) have to pass,
 
 ## AI tools
 
-AI tools are welcome: FramePlayerX itself is [built with extensive help from Claude Code](README.md#a-note-on-ai). They don't change what is expected of the person submitting the work:
+AI tools are welcome: Laterna itself is [built with extensive help from Claude Code](README.md#a-note-on-ai). They don't change what is expected of the person submitting the work:
 
 - You have read all of it, and can explain it and answer questions about it yourself.
 - You made the design decisions: you questioned the first answer, weighed the alternatives and checked it against the issues and this guide.

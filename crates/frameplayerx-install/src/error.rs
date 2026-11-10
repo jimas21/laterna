@@ -124,14 +124,14 @@ impl InstallError {
                 "Make sure --host points at the Steam Frame. Use --force to install anyway.".into()
             }
             InstallError::Updater(fp_updater::Error::NoPublicKey) => {
-                "This installer build cannot verify downloads yet. Download the FramePlayerX \
+                "This installer build cannot verify downloads yet. Download the Laterna \
                  zip from the releases page and run: frameplayerx-install --zip <file.zip>"
                     .into()
             }
             InstallError::Updater(
                 fp_updater::Error::SignatureMismatch | fp_updater::Error::MalformedSignature(_),
             ) => "The release information failed its signature check, so nothing was \
-                  installed. Try again later, or report this to the FramePlayerX project."
+                  installed. Try again later, or report this to the Laterna project."
                 .into(),
             InstallError::Updater(fp_updater::Error::ChecksumMismatch { .. }) => {
                 "The download was corrupted; run the installer again to re-download.".into()
@@ -142,7 +142,7 @@ impl InstallError {
                     .into()
             }
             InstallError::Vdf { .. } => {
-                "Your Steam shortcut list was left unchanged. You can add FramePlayerX by \
+                "Your Steam shortcut list was left unchanged. You can add Laterna by \
                  hand: Steam > Add a Non-Steam Game, and pick frameplayerx.sh in the install \
                  folder."
                     .into()

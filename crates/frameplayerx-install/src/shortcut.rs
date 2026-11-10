@@ -1,11 +1,11 @@
-//! Non-Steam shortcut for FramePlayerX: the `shortcuts.vdf` entry, its app
+//! Non-Steam shortcut for Laterna: the `shortcuts.vdf` entry, its app
 //! id, library artwork names, and the devkit-utils helper invocation.
 
 use crate::remote::sh_quote;
 use crate::vdf::{Map, Value};
 
 /// Name shown in the Steam library.
-pub const DEFAULT_APP_NAME: &str = "FramePlayerX";
+pub const DEFAULT_APP_NAME: &str = "Laterna";
 /// Tag added to the shortcut (shows up as a collection filter).
 pub const TAG: &str = "VR";
 
@@ -100,14 +100,14 @@ fn ensure_map<'a>(m: &'a mut Map, key: &str) -> &'a mut Map {
     }
 }
 
-/// True when `entry` is a FramePlayerX shortcut: same app id, or the same
+/// True when `entry` is a Laterna shortcut: same app id, or the same
 /// `Exe` (so a renamed library entry is still recognised).
 fn is_ours(entry: &Map, spec: &ShortcutSpec) -> bool {
     let id = app_id_as_vdf_int(spec.app_id());
     entry.get_int("appid") == Some(id) || entry.get_str("Exe") == Some(spec.quoted_exe().as_str())
 }
 
-/// Index of FramePlayerX's entry in the `shortcuts` map, if present.
+/// Index of Laterna's entry in the `shortcuts` map, if present.
 pub fn find_shortcut(doc: &Map, spec: &ShortcutSpec) -> Option<String> {
     doc.get_map("shortcuts")?
         .0
@@ -125,7 +125,7 @@ pub enum Upsert {
     Updated,
 }
 
-/// Adds FramePlayerX's shortcut to a parsed `shortcuts.vdf`, or updates the
+/// Adds Laterna's shortcut to a parsed `shortcuts.vdf`, or updates the
 /// existing one in place. Fields Steam or the user own (play time, hidden
 /// flag, extra tags) are kept on update.
 pub fn upsert_shortcut(doc: &mut Map, spec: &ShortcutSpec) -> Upsert {
@@ -191,7 +191,7 @@ fn next_index(m: &Map) -> usize {
         .unwrap_or(m.0.len())
 }
 
-/// Removes FramePlayerX's shortcut and renumbers the remaining entries
+/// Removes Laterna's shortcut and renumbers the remaining entries
 /// `0..n` as Steam does. Returns whether anything was removed.
 pub fn remove_shortcut(doc: &mut Map, spec: &ShortcutSpec) -> bool {
     let Some(list) = doc.get_map_mut("shortcuts") else {
@@ -239,7 +239,7 @@ mod tests {
 
     fn spec() -> ShortcutSpec {
         ShortcutSpec {
-            app_name: "FramePlayerX".into(),
+            app_name: "Laterna".into(),
             exe: "/home/steam/frameplayerx/frameplayerx.sh".into(),
             start_dir: "/home/steam/frameplayerx".into(),
             icon: "/home/steam/frameplayerx/assets/steam/icon.png".into(),
@@ -259,8 +259,8 @@ mod tests {
     fn app_id_formula() {
         // Reference: crc32 of the concatenation, high bit set.
         let exe = "\"/home/steam/frameplayerx/frameplayerx.sh\"";
-        let expected = crc32fast::hash(format!("{exe}FramePlayerX").as_bytes()) | 0x8000_0000;
-        assert_eq!(shortcut_app_id(exe, "FramePlayerX"), expected);
+        let expected = crc32fast::hash(format!("{exe}Laterna").as_bytes()) | 0x8000_0000;
+        assert_eq!(shortcut_app_id(exe, "Laterna"), expected);
         assert_eq!(spec().app_id(), expected);
         assert!(spec().app_id() >= 0x8000_0000);
         // Known crc32 vector: crc32("123456789") = 0xCBF43926.
@@ -292,7 +292,7 @@ mod tests {
             .and_then(|s| s.get_map("2"))
             .unwrap();
         assert_eq!(e.get_int("appid"), Some(app_id_as_vdf_int(spec().app_id())));
-        assert_eq!(e.get_str("AppName"), Some("FramePlayerX"));
+        assert_eq!(e.get_str("AppName"), Some("Laterna"));
         assert_eq!(
             e.get_str("Exe"),
             Some("\"/home/steam/frameplayerx/frameplayerx.sh\"")
@@ -324,7 +324,7 @@ mod tests {
 
         // Renamed in the library (different app id) is still found by Exe.
         let mut renamed = spec();
-        renamed.app_name = "FramePlayerX Beta".into();
+        renamed.app_name = "Laterna Beta".into();
         assert_eq!(find_shortcut(&doc, &renamed).as_deref(), Some("2"));
 
         // Remove: renumbered, others untouched.
@@ -334,6 +334,35 @@ mod tests {
         let keys: Vec<_> = list.0.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(keys, ["0", "1"]);
         assert_eq!(list.get_map("1").unwrap().get_str("AppName"), Some("b"));
+    }
+
+    #[test]
+    fn entry_under_the_old_name_is_renamed_not_duplicated() {
+        let exe = "/home/steam/frameplayerx/frameplayerx.sh";
+        let old_id = shortcut_app_id(&format!("\"{exe}\""), "FramePlayerX");
+        let mut old = Map::new();
+        old.set("appid", Value::Int(app_id_as_vdf_int(old_id)));
+        old.set("AppName", Value::Str("FramePlayerX".into()));
+        old.set("Exe", Value::Str(format!("\"{exe}\"")));
+        old.set("LastPlayTime", Value::Int(1_700_000_000));
+        let mut list = Map::new();
+        list.0.push(("0".into(), other_entry("a")));
+        list.0.push(("1".into(), Value::Map(old)));
+        let mut doc = Map::new();
+        doc.set("shortcuts", Value::Map(list));
+
+        // The new name gives a new app id, but the Exe still matches.
+        let new = spec();
+        assert_ne!(new.app_id(), old_id);
+        assert_eq!(find_shortcut(&doc, &new).as_deref(), Some("1"));
+        assert_eq!(upsert_shortcut(&mut doc, &new), Upsert::Updated);
+
+        let list = doc.get_map("shortcuts").unwrap();
+        assert_eq!(list.0.len(), 2);
+        let e = list.get_map("1").unwrap();
+        assert_eq!(e.get_str("AppName"), Some("Laterna"));
+        assert_eq!(e.get_int("appid"), Some(app_id_as_vdf_int(new.app_id())));
+        assert_eq!(e.get_int("LastPlayTime"), Some(1_700_000_000));
     }
 
     #[test]

@@ -894,7 +894,7 @@ fn remote(ui: &mut egui::Ui, v: &mut View) {
 fn updates(ui: &mut egui::Ui, v: &mut View) {
     use super::UpdateStatus as U;
     use fp_updater::Channel;
-    heading(ui, &format!("FramePlayerX {}", env!("CARGO_PKG_VERSION")));
+    heading(ui, &format!("Laterna {}", env!("CARGO_PKG_VERSION")));
     widgets::rows(ui, |r| {
         r.switch(
             tr!("settings-check-updates"),
@@ -1036,8 +1036,8 @@ fn about_text(text: &str) -> &str {
 }
 
 /// The project's pages, as About lists them.
-const GITHUB: &str = "github.com/jimas21/frameplex";
-const ISSUES: &str = "github.com/jimas21/frameplex/issues/new/choose";
+const GITHUB: &str = "github.com/jimas21/laterna";
+const ISSUES: &str = "github.com/jimas21/laterna/issues/new/choose";
 const SPONSOR: &str = "github.com/sponsors/remotesojourner";
 
 fn about(ui: &mut egui::Ui, v: &mut View) {

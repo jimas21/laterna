@@ -84,7 +84,7 @@ impl Report {
         let summary = scrub.text(&summary);
         let log = scrub.text(&shorten(log));
         let text = format!(
-            "FramePlayerX {}\n{system}\n\nWhat happened: {summary}\n\nLog of that session:\n{log}",
+            "Laterna {}\n{system}\n\nWhat happened: {summary}\n\nLog of that session:\n{log}",
             env!("CARGO_PKG_VERSION")
         );
         Some(Report { summary, text })
@@ -372,7 +372,7 @@ mod tests {
     use super::*;
 
     const LOG: &str = "\
-    0.012 [INFO ] frameplayerx: FramePlayerX 1.0.0 on SteamOS
+    0.012 [INFO ] frameplayerx: Laterna 1.0.0 on SteamOS
     0.500 [INFO ] fp_sources::mediabrowser: signed in to http://alice:hunter22@jf.lan:8096 as alice
     2.100 [INFO ] frameplayerx::playback: opening /home/deck/Videos/Garden Party_FLAT.webm
     2.300 [INFO ] frameplayerx::playback: format Flat mono (from the file name), 1920x1080
@@ -444,7 +444,7 @@ mod tests {
             "1920x1080",
             "decoding with vp9",
             "Flat mono",
-            "FramePlayerX 1.0.0",
+            "Laterna 1.0.0",
         ] {
             assert!(r.text.contains(kept), "{kept} missing from\n{}", r.text);
         }

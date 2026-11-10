@@ -319,18 +319,18 @@ jobs:
           cd src
           git cliff --bump --unreleased --strip header --output ../dist/RELEASE_NOTES.md || true
           if [ ! -s ../dist/RELEASE_NOTES.md ]; then
-            echo "Release $TAG" > ../dist/RELEASE_NOTES.md
+            echo "Laterna $TAG" > ../dist/RELEASE_NOTES.md
           fi
           if [ "$DRAFT" = true ]; then
             {
-              echo "Alpha built from \`$GITHUB_REF_NAME\` (${GITHUB_SHA::7}), left as a draft for testing: FramePlayerX never offers a draft as an update, so install its zip by hand. Run the workflow again without Alpha to release it as a beta. Changes since the last stable release:"
+              echo "Alpha built from \`$GITHUB_REF_NAME\` (${GITHUB_SHA::7}), left as a draft for testing: Laterna never offers a draft as an update, so install its zip by hand. Run the workflow again without Alpha to release it as a beta. Changes since the last stable release:"
               echo
               cat ../dist/RELEASE_NOTES.md
             } > ../dist/notes.md
             mv ../dist/notes.md ../dist/RELEASE_NOTES.md
           elif [ "$PRERELEASE" = true ]; then
             {
-              echo "Beta built from \`$GITHUB_REF_NAME\` (${GITHUB_SHA::7}). FramePlayerX offers it on the Beta channel only (Settings › Updates). Changes since the last stable release:"
+              echo "Beta built from \`$GITHUB_REF_NAME\` (${GITHUB_SHA::7}). Laterna offers it on the Beta channel only (Settings › Updates). Changes since the last stable release:"
               echo
               cat ../dist/RELEASE_NOTES.md
             } > ../dist/notes.md
@@ -352,7 +352,7 @@ jobs:
           printf '%s\n' "$FP_RELEASE_KEY" > "$RUNNER_TEMP/release.key"
           target/release/fp-release sign ../dist/manifest.json --key "$RUNNER_TEMP/release.key"
           rm -f "$RUNNER_TEMP/release.key"
-          # The signature must match the key FramePlayerX builds carry.
+          # The signature must match the key Laterna builds carry.
           target/release/fp-release verify ../dist/manifest.json
       # A draft until every file is in and reads back as built, so update
       # checks never find a release with files missing.
@@ -376,7 +376,7 @@ jobs:
             flags+=(--prerelease)
           fi
           gh release create "$TAG" "${files[@]}" --draft --target "$GITHUB_SHA" \
-            --title "$TAG" --notes-file dist/RELEASE_NOTES.md "${flags[@]}"
+            --title "Laterna $TAG" --notes-file dist/RELEASE_NOTES.md "${flags[@]}"
           gh release download "$TAG" --dir "$RUNNER_TEMP/uploaded"
           for f in "${files[@]}"; do
             if ! cmp -s "$f" "$RUNNER_TEMP/uploaded/${f##*/}"; then
@@ -391,7 +391,7 @@ jobs:
             exit 0
           fi
           # releases/latest, which frameplayerx-install and the Desktop Mode
-          # launcher read (and stable FramePlayerX when GitHub's release
+          # launcher read (and stable Laterna when GitHub's release
           # list can't be read), must never point at a beta.
           latest=true
           if [ "$PRERELEASE" = true ]; then

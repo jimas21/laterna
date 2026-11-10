@@ -1,4 +1,4 @@
-# The relay FramePlayerX sends crash reports to (worker.js), deployed with
+# The relay Laterna sends crash reports to (worker.js), deployed with
 # Cloudflare's wrangler as docs/DEVELOPMENT.md (Crash reports) describes.
 name = "frameplayerx-crash-relay"
 main = "worker.js"

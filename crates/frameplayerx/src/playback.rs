@@ -1144,7 +1144,7 @@ impl Playback {
 fn hardware_holders() -> String {
     let closing = lock(&CLOSING).iter().filter(|h| !h.is_finished()).count();
     format!(
-        "FramePlayerX holds {} hardware decoder session(s), {closing} closed video(s) still closing",
+        "Laterna holds {} hardware decoder session(s), {closing} closed video(s) still closing",
         fp_media::hardware_sessions()
     )
 }

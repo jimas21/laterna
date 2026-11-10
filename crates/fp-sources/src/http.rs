@@ -63,7 +63,7 @@ impl Default for HttpOptions {
             max_retries: 3,
             retry_delay: Duration::from_millis(250),
             insecure_tls: false,
-            user_agent: concat!("FramePlayerX/", env!("CARGO_PKG_VERSION")).to_string(),
+            user_agent: concat!("Laterna/", env!("CARGO_PKG_VERSION")).to_string(),
             cache: CacheOptions::default(),
             max_forward_skip: 256 << 20,
         }

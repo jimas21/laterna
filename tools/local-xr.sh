@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Runs FramePlayerX on this computer against Monado, the open-source OpenXR
+# Runs Laterna on this computer against Monado, the open-source OpenXR
 # runtime, instead of building and installing on the Steam Frame each time.
 # Monado shows the two eyes in a desktop window and fakes the headset and
 # both controllers from the keyboard and mouse (its "qwerty" driver).
 #
 #   tools/local-xr.sh setup          once: Monado and build tools (apt, sudo),
 #                                    then FFmpeg into third_party/
-#   tools/local-xr.sh run [ARGS...]  Monado + FramePlayerX (ARGS go to
-#                                    FramePlayerX, e.g. a video to open)
+#   tools/local-xr.sh run [ARGS...]  Monado + Laterna (ARGS go to
+#                                    Laterna, e.g. a video to open)
 #   tools/local-xr.sh headless [ARGS...]
 #                                    the same with Monado's null compositor
 #                                    (no window, for quick smoke tests)
@@ -74,7 +74,7 @@ start_monado() {
   command -v monado-service >/dev/null || die "no Monado yet: run tools/local-xr.sh setup"
   [ -f "$runtime_json" ] || die "missing $runtime_json"
   local sock="${XDG_RUNTIME_DIR:-/tmp}/monado_comp_ipc"
-  # One left running (or still shutting down) would take FramePlayerX's
+  # One left running (or still shutting down) would take Laterna's
   # session with it when it goes; this run starts its own.
   if pgrep -x monado-service >/dev/null; then
     echo "== stopping the Monado already running"
@@ -138,7 +138,7 @@ run_player() {
   trap stop_monado EXIT
   start_monado "$@"
   size_window
-  echo "== FramePlayerX"
+  echo "== Laterna"
   XR_RUNTIME_JSON="$runtime_json" \
   LD_LIBRARY_PATH="$ffmpeg_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$(binary)" "${player_args[@]}"

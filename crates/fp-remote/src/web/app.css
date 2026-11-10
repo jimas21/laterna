@@ -13,7 +13,6 @@
   --ok: #5cc46e;
   --warn: #f2b640;
   --error: #f2585e;
-  --logo: #5ca0ff;
   color-scheme: dark;
 }
 
@@ -58,7 +57,6 @@ svg { display: block; }
   justify-content: space-between;
 }
 .brand { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
-.brand .x { color: var(--logo); }
 .conn { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
 .conn .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--text-3); }
 .conn.ok .dot { background: var(--ok); }

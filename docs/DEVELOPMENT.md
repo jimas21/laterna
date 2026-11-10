@@ -1,6 +1,6 @@
-# Developing FramePlayerX
+# Developing Laterna
 
-How to build, test and release FramePlayerX, and how the code fits
+How to build, test and release Laterna, and how the code fits
 together. For using the app, see the [user guide](USER-GUIDE.md).
 
 ## Requirements
@@ -353,7 +353,7 @@ checked again; any other is checked once a day with `If-None-Match` /
 
 ### On this computer with Monado
 
-`tools/local-xr.sh` runs FramePlayerX against [Monado](https://monado.freedesktop.org),
+`tools/local-xr.sh` runs Laterna against [Monado](https://monado.freedesktop.org),
 the open-source OpenXR runtime, so a change can be tried without building
 and installing on the Frame. Monado shows both eyes in a desktop window and
 fakes the headset and controllers from the keyboard and mouse. It works on
@@ -363,7 +363,7 @@ frame rate).
 
 ```bash
 tools/local-xr.sh setup                   # once: Monado, build tools, FFmpeg
-tools/local-xr.sh run                     # Monado + FramePlayerX
+tools/local-xr.sh run                     # Monado + Laterna
 tools/local-xr.sh run ~/Videos/clip.mp4   # ...opening a video
 tools/local-xr.sh headless --exit-after 10 clip.mp4   # no window: smoke test
 tools/local-xr.sh preview /tmp/shots      # every screen as PNGs (ui-preview.sh)
@@ -382,7 +382,7 @@ Click into Monado's debug window (*Monado!*) to drive it:
 
 Its *Qwerty › Help* tab lists every key. The controllers present
 themselves as Khronos simple controllers (select and menu), which
-FramePlayerX binds.
+Laterna binds.
 
 - The window with the eyes opens at 1600×900; `LOCAL_XR_WINDOW=1280x720`
   picks another size, and it can be resized. Under WSL it's Monado's X11
@@ -391,7 +391,7 @@ FramePlayerX binds.
   `XRT_COMPOSITOR_SCALE_PERCENTAGE=200 tools/local-xr.sh run` is sharper,
   `=60` smoother on a software renderer.
 - Monado's log is in `/tmp/monado-service.log`; `-v` turns on
-  FramePlayerX's debug log.
+  Laterna's debug log.
 
 By hand, with Monado's simulated headset and no window:
 
@@ -426,7 +426,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
 
 | Command | What it does |
 |---|---|
-| `frameplayerx --info FILE` | Prints what FramePlayerX detects about a video: format, streams, HDR |
+| `frameplayerx --info FILE` | Prints what Laterna detects about a video: format, streams, HDR |
 | `frameplayerx --decode-bench FILE [--sw]` | Decodes without displaying and prints the decoder and frame rate |
 | `frameplayerx --seek-test FILE\|URL` | Skips through a video headless, checking buffering and that hardware decoders are given back, and measures reads |
 
@@ -505,7 +505,7 @@ Steam can't pass environment variables to an app, so the launcher reads
 
 | Variable | Default | What it does |
 |---|---|---|
-| `FRAMEPLAYERX_REFRESH_RATE` | | A refresh rate in Hz to set in SteamVR's per-app settings for FramePlayerX, unless you chose one there. Unset or `0` sets nothing, so SteamVR's default applies |
+| `FRAMEPLAYERX_REFRESH_RATE` | | A refresh rate in Hz to set in SteamVR's per-app settings for Laterna, unless you chose one there. Unset or `0` sets nothing, so SteamVR's default applies |
 | `FRAMEPLAYERX_RESOLUTION` | | Pixels per eye, set the same way. Unset or `0` sets nothing |
 | `FRAMEPLAYERX_RENDER_SCALE` | | The eye pictures' size as a multiple of the size the runtime recommends (0.5 to 2, a multiple of 8 pixels a side, within the runtime's maximum), instead of Settings › General › Render resolution. The log's `eye buffers` line says what was chosen |
 | `FRAMEPLAYERX_UI_IN_EYES` | | `1` draws the UI into the eye pictures instead of as compositor quad layers, for comparing the two |
@@ -526,7 +526,7 @@ Steam can't pass environment variables to an app, so the launcher reads
 
 What the code relies on about the platform:
 
-- SteamVR runs **on the headset** and is the OpenXR runtime. FramePlayerX
+- SteamVR runs **on the headset** and is the OpenXR runtime. Laterna
   finds the active runtime's manifest and talks to it directly, so there's
   no Khronos loader to ship.
 - Native ARM64 apps run **outside the Steam Linux Runtime** container, so
@@ -548,7 +548,7 @@ What the code relies on about the platform:
 - Turnip has no TP10 images, though the GPU reads TP10. A TP10 texture
   reads wrongly past 2^24 samples, so 10-bit planes are read in bands.
 - SteamOS only mounts ext4 microSD cards itself, and no USB drives;
-  FramePlayerX mounts exFAT, FAT32 and NTFS itself under
+  Laterna mounts exFAT, FAT32 and NTFS itself under
   `/run/media/steamos/<name>`.
 - Apps installed in Developer Mode appear in the Steam library as non-Steam
   games; `frameplayerx-install` writes that entry to `shortcuts.vdf`.
@@ -586,7 +586,7 @@ headset and copies the text and JSON reports into `probe-reports/`.
      goes all the way.
    - Other branches get that version as `X.Y.Z-beta.N` (N one above the
      highest existing beta of it, and always above the latest stable),
-     published as a GitHub pre-release. FramePlayerX offers it on the Beta
+     published as a GitHub pre-release. Laterna offers it on the Beta
      update channel only.
    - Alpha: tick **Alpha** when running the workflow (any branch, `main`
      too) to get `X.Y.Z-alpha.N`, N being the run number, left as a draft

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the FramePlayerX release for the Steam Frame and writes everything
+# Builds the Laterna release for the Steam Frame and writes everything
 # needed to publish it into dist/:
 #
 #   dist/frameplayerx-<version>-aarch64.zip   the install archive
@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
 version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="frameplayerx"))')"
-url_base="https://github.com/jimas21/frameplex/releases/download/v$version"
+url_base="https://github.com/jimas21/laterna/releases/download/v$version"
 notes=""
 key=""
 while [ $# -gt 0 ]; do
@@ -34,7 +34,7 @@ target=aarch64-unknown-linux-gnu
 ffmpeg="$root/third_party/ffmpeg/aarch64/lib"
 [ -f "$ffmpeg/libavcodec.so" ] || { echo "missing $ffmpeg; run tools/build-ffmpeg.sh aarch64" >&2; exit 1; }
 
-echo "== building FramePlayerX $version for the Steam Frame"
+echo "== building Laterna $version for the Steam Frame"
 tools/build-frame.sh -p frameplayerx
 cargo build --release -p fp-updater --bin fp-release
 
@@ -115,7 +115,7 @@ release="target/release/fp-release"
 args=(manifest --version "$version" --zip "dist/$zip" --url-base "$url_base" --out dist/manifest.json)
 [ -n "$notes" ] && args+=(--notes "$notes")
 "$release" "${args[@]}"
-"$release" framedrop --name FramePlayerX --zip "dist/$zip" --url "$url_base/$zip" --out dist/framedrop.json \
+"$release" framedrop --name Laterna --zip "dist/$zip" --url "$url_base/$zip" --out dist/framedrop.json \
   --manifest-url "$url_base/framedrop.json"
 # The same file list for Frame Control install links
 # (frame-control://install?manifest=<url of frameplayerx.json>).

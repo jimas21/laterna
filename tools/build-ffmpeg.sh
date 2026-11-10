@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the FFmpeg libraries FramePlayerX bundles: LGPL, decode-only, no
+# Build the FFmpeg libraries Laterna bundles: LGPL, decode-only, no
 # network protocols (all I/O goes through Rust), with dav1d for software AV1,
 # zlib for compressed Matroska tracks (mkvmerge compresses PGS subtitles)
 # and the V4L2 memory-to-memory decoders for Qualcomm hardware decode.
