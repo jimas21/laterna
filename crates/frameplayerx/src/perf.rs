@@ -524,9 +524,10 @@ impl GpuWindow {
             at(&total, 1.0),
             total.len()
         );
-        let parts: [(&str, Part); 4] = [
+        let parts: [(&str, Part); 5] = [
             ("video", |t| t.video),
             ("eyes", |t| t.eyes),
+            ("glow", |t| t.glow),
             ("panels", |t| t.panels),
             ("layers", |t| t.layers),
         ];
@@ -568,6 +569,7 @@ mod tests {
                 panels: Some(0.1),
                 video: (i % 2 == 0).then_some(1.0),
                 eyes: Some(3.0 + i as f32 / 10.0),
+                glow: None,
                 layers: None,
                 total: Some(4.0 + i as f32 / 10.0),
             }));

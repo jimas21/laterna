@@ -1,6 +1,8 @@
 // A place's meshes: walls, seats, steps, a floor. Lit per vertex by what the
-// place's builder baked (ambient occlusion and the house lights' share), so
-// the work per pixel is a palette lookup, a filtered pattern, fog and dither.
+// place's builder baked (ambient occlusion and the house lights' share) and by
+// the picture (the screen's patches, see `screen_light`), so the work per
+// pixel is a palette lookup, a filtered pattern, fog and dither. The one
+// per-pixel term from the picture is a glossy floor's reflection of it.
 //
 // Opaque, depth tested and written (the picture is drawn over it afterwards
 // with no depth test, so no mesh may stand in front of it). build.rs joins
@@ -24,6 +26,8 @@ struct VsOut {
     // x: ambient occlusion, y: share of the house lights.
     @location(3) light: vec2<f32>,
     @location(4) @interpolate(flat) material: u32,
+    // The picture's light on the surface, linear (irradiance over pi).
+    @location(5) screen: vec3<f32>,
 };
 
 // Pattern codes, the palette's w (`pattern_code` in env_pass.rs).
@@ -33,6 +37,68 @@ const PANEL: u32 = 3u;
 const WOOD: u32 = 4u;
 const EMISSIVE: u32 = 6u;
 const EMISSIVE_HOUSE: u32 = 7u;
+const EMISSIVE_PICTURE: u32 = 8u;
+
+const PI: f32 = 3.14159265358979;
+// The glossy lobe is cos^12 around the reflected view ray: GLOSS_NORM is its
+// normalisation (12 + 2) / 2 pi, and GLOSS_GAIN how much of the picture a
+// glossy floor gives back, times its sheen.
+const GLOSS_NORM: f32 = 2.228;
+const GLOSS_GAIN: f32 = 0.25;
+
+// How much of the screen's light `i` reaches `p`: the light from patch `i`
+// comes with `l` (towards it, shortened when the patch is close, which keeps
+// a point right by the screen from being blinded) and the patch's solid
+// angle times the cosine it shines with, over `pi`. Zero for a patch that is
+// off (area 0).
+struct Lamp {
+    l: vec3<f32>,
+    amount: f32,
+};
+
+fn lamp_at(i: u32, p: vec3<f32>) -> Lamp {
+    let area = env.patch_pos[i].w;
+    let v = env.patch_pos[i].xyz - p;
+    let d2 = max(dot(v, v), area * 0.3);
+    let l = v * inverseSqrt(max(d2, 1e-6));
+    let shines = max(dot(env.screen_n.xyz, -l), 0.0);
+    var o: Lamp;
+    o.l = l;
+    o.amount = select(0.0, area * shines / (PI * max(d2, 1e-6)), area > 0.0);
+    return o;
+}
+
+// The picture's light on a surface at `p` facing `n`, summed over the screen's
+// patches: each patch lights it by the cosine of the angle between `n` and
+// the patch. Linear, times the albedo later (the 1/pi of a matte surface is
+// in `lamp_at`). No shadows: seats do not shade the seats behind them.
+fn screen_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    var e = vec3<f32>(0.0);
+    if (env.screen_n.w <= 0.0) { return e; }
+    for (var i = 0u; i < 8u; i++) {
+        let lamp = lamp_at(i, p);
+        e += env.patch_rgb[i].rgb * (lamp.amount * max(dot(n, lamp.l), 0.0));
+    }
+    return e;
+}
+
+// A glossy floor's mirror image of the picture: each patch through a lobe
+// around the reflected view ray (`pow(x, 12)` as products, no pow).
+fn screen_gloss(p: vec3<f32>, n: vec3<f32>, view_dir: vec3<f32>) -> vec3<f32> {
+    var s = vec3<f32>(0.0);
+    if (env.screen_n.w <= 0.0) { return s; }
+    let r = reflect(-view_dir, n);
+    for (var i = 0u; i < 8u; i++) {
+        let lamp = lamp_at(i, p);
+        let c = max(dot(r, lamp.l), 0.0);
+        let c2 = c * c;
+        let c4 = c2 * c2;
+        let c8 = c4 * c4;
+        // The patch's solid angle (without the 1/pi) times the lobe.
+        s += env.patch_rgb[i].rgb * (lamp.amount * PI * c8 * c4);
+    }
+    return s * GLOSS_NORM;
+}
 
 @vertex
 fn vs_main(v: VsIn) -> VsOut {
@@ -45,6 +111,7 @@ fn vs_main(v: VsIn) -> VsOut {
     o.uv = v.uv;
     o.light = vec2<f32>(v.ao, v.house);
     o.material = v.material;
+    o.screen = screen_light(p, v.normal);
     return o;
 }
 
@@ -124,17 +191,28 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     var col: vec3<f32>;
     if (code >= EMISSIVE) {
-        // Makes its own light: constant, or with the house lights.
-        let gain = select(1.0, env.ambient_up.w, code == EMISSIVE_HOUSE);
-        col = base.rgb * extra.x * gain;
+        // Makes its own light: constant, with the house lights, or with the
+        // picture's mean colour (a little over dark, so the window shows).
+        if (code == EMISSIVE_PICTURE) {
+            var mean = vec3<f32>(0.0);
+            for (var i = 0u; i < 8u; i++) { mean += env.patch_rgb[i].rgb; }
+            col = base.rgb * (mean * (extra.x / 8.0) + vec3<f32>(0.03));
+        } else {
+            let gain = select(1.0, env.ambient_up.w, code == EMISSIVE_HOUSE);
+            col = base.rgb * extra.x * gain;
+        }
     } else {
         let albedo = base.rgb * pattern(code, in.uv, w);
         let amb = mix(env.ambient_down.rgb, env.ambient_up.rgb, n.y * 0.5 + 0.5);
-        // The light from the picture is added to `lit` here.
-        let lit = amb * in.light.x + env.house_rgb.rgb * in.light.y;
+        // The picture's light (per vertex) is lit by the same occlusion.
+        let lit = amb * in.light.x + env.house_rgb.rgb * in.light.y + in.screen * in.light.x;
         // Grazing-angle shine: fabric, or a glossy floor.
         let rim = pow(max(1.0 - abs(dot(n, view_dir)), 0.0), 4.0) * extra.y;
         col = (albedo + vec3<f32>(rim)) * lit;
+        // A plain surface with sheen is glossy: it also gives the picture back.
+        if (code == 0u && extra.y > 0.0) {
+            col += screen_gloss(in.rpos, n, view_dir) * (extra.y * GLOSS_GAIN);
+        }
     }
 
     let span = max(env.fog_range.y - env.fog_range.x, 0.001);

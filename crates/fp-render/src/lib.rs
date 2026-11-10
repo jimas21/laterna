@@ -16,6 +16,8 @@
 //!   catalogue, seats, meshes and lighting as plain data, no GPU.
 //! - `env_pass`: draws a place (its meshes, then its sky) inside each eye's
 //!   pass, behind the picture.
+//! - `glow`: measures the picture's colour, in a tiny pass of its own, for the
+//!   light it gives a place (`env::light` eases it).
 //! - [`testcard`]: a generated test card and test patterns, with their mip
 //!   chains.
 //! - [`hdr`]: HDR on the SDR screen: tone curve, gamut compression and the
@@ -24,6 +26,7 @@
 pub mod capture;
 pub mod env;
 mod env_pass;
+mod glow;
 pub mod gpu;
 pub mod hdr;
 pub mod math;

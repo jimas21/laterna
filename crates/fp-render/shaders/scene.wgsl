@@ -381,6 +381,37 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
 }
 
+// A sample of the picture (the video's own colour values, YUV converted) as
+// linear light for the screen: HDR to its tone curve, then the picture
+// adjustments. Everything the picture shows goes through here, and so does
+// the light it gives the room (`fs_glow`). No dither: that is the caller's.
+fn display_linear(rgb: vec3<f32>) -> vec3<f32> {
+    // HDR: to BT.709 nits, into its gamut, then the tone curve, which also
+    // keeps every channel within the screen's white.
+    var lin: vec3<f32>;
+    let transfer = u32(params.extra.y + 0.5);
+    let wide = params.extra.z > 0.5;
+    if (transfer == 1u || transfer == 2u) {
+        var nits = hdr_nits(rgb, transfer, wide);
+        if (wide) { nits = gamut_compress(nits); }
+        lin = tone_map(nits);
+    } else {
+        lin = srgb_to_linear(rgb);
+        if (wide) {
+            lin = gamut_compress(bt2020_to_709(lin));
+            lin = lin / max(max3(lin), 1.0);
+        }
+    }
+
+    // Picture adjustments, applied in a perceptual (gamma) space.
+    var g = pow(max(lin, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+    g = (g - 0.5) * params.picture.y + 0.5 + params.picture.x;
+    let luma = dot(g, vec3<f32>(0.2126, 0.7152, 0.0722));
+    g = mix(vec3<f32>(luma), g, params.picture.z);
+    g = pow(max(g, vec3<f32>(0.0)), vec3<f32>(1.0 / max(params.picture.w, 0.05)));
+    return srgb_to_linear(clamp(g, vec3<f32>(0.0), vec3<f32>(1.0)));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let eye = pc.eye;
@@ -520,30 +551,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         rgb += vec3<f32>(d * params.yuv_r.x);
     }
 
-    // HDR: to BT.709 nits, into its gamut, then the tone curve, which also
-    // keeps every channel within the screen's white.
-    var lin: vec3<f32>;
-    let transfer = u32(params.extra.y + 0.5);
-    let wide = params.extra.z > 0.5;
-    if (transfer == 1u || transfer == 2u) {
-        var nits = hdr_nits(rgb, transfer, wide);
-        if (wide) { nits = gamut_compress(nits); }
-        lin = tone_map(nits);
-    } else {
-        lin = srgb_to_linear(rgb);
-        if (wide) {
-            lin = gamut_compress(bt2020_to_709(lin));
-            lin = lin / max(max3(lin), 1.0);
-        }
-    }
-
-    // Picture adjustments, applied in a perceptual (gamma) space.
-    var g = pow(max(lin, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
-    g = (g - 0.5) * params.picture.y + 0.5 + params.picture.x;
-    let luma = dot(g, vec3<f32>(0.2126, 0.7152, 0.0722));
-    g = mix(vec3<f32>(luma), g, params.picture.z);
-    g = pow(max(g, vec3<f32>(0.0)), vec3<f32>(1.0 / max(params.picture.w, 0.05)));
-    var col = srgb_to_linear(clamp(g, vec3<f32>(0.0), vec3<f32>(1.0)));
+    var col = display_linear(rgb);
     // Dither last, in the target's code space (dither.wgsl).
     if ((params.display.y & QUALITY_DITHER) != 0u) {
         col = dither_linear(col, in.pos.xy);
@@ -554,4 +562,30 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // alpha so that shows through; a partly covered edge pixel is a plain mix
     // towards it.
     return vec4<f32>(col * alpha * cov, alpha * cov);
+}
+
+// The light the picture gives its place: a 4x2 image, each pixel the mean of
+// 8x8 taps of its cell of the picture (eye 0's half of a stereo frame), after
+// `display_linear`, so it is what the screen shows. Drawn into a tiny target
+// by its own pipelines (src/glow.rs); `fs_main` is not touched by it. Only
+// `sample_yuv` is used, so planes.wgsl and planes_tp10.wgsl both serve it.
+const GLOW_COLS: u32 = 4u;
+const GLOW_ROWS: u32 = 2u;
+const GLOW_TAPS: u32 = 8u;
+
+@fragment
+fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
+    // The pixel's column and row are the cell: row 0 is the picture's top.
+    let cell = vec2<f32>(floor(in.pos.xy));
+    let cells = vec2<f32>(f32(GLOW_COLS), f32(GLOW_ROWS));
+    let taps = f32(GLOW_TAPS);
+    var sum = vec3<f32>(0.0);
+    for (var j = 0u; j < GLOW_TAPS; j++) {
+        for (var i = 0u; i < GLOW_TAPS; i++) {
+            let p = (cell + (vec2<f32>(f32(i), f32(j)) + 0.5) / taps) / cells;
+            let tap = sample_yuv(stored_uv(to_eye_rect(clamp_to_eye(p), 0u)));
+            sum += display_linear(tap);
+        }
+    }
+    return vec4<f32>(sum / (taps * taps), 1.0);
 }

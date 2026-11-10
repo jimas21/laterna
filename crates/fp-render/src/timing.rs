@@ -106,9 +106,12 @@ pub(crate) enum Mark {
     Eyes,
     EyesDone,
     End,
+    /// Around the picture's light for the place, inside the eye passes' time.
+    Glow,
+    GlowDone,
 }
 
-const MARKS: usize = 6;
+const MARKS: usize = 8;
 
 /// One frame's GPU time per part, in milliseconds. A part the frame didn't
 /// have (no video, no eye passes) is `None`.
@@ -120,6 +123,8 @@ pub struct GpuTimes {
     pub video: Option<f32>,
     /// Both eye passes.
     pub eyes: Option<f32>,
+    /// The picture's light for a place, which `eyes` includes.
+    pub glow: Option<f32>,
     /// Copying panels into the compositor's layers.
     pub layers: Option<f32>,
     /// The whole frame.
@@ -142,6 +147,7 @@ fn parts(ticks: [Option<u64>; MARKS], bits: u32, period_ns: f32) -> GpuTimes {
         panels: ms(Mark::Start, Mark::Video),
         video: ms(Mark::Video, Mark::VideoDone),
         eyes: ms(Mark::Eyes, Mark::EyesDone),
+        glow: ms(Mark::Glow, Mark::GlowDone),
         layers: ms(Mark::EyesDone, Mark::End),
         total: ms(Mark::Start, Mark::End),
     }
@@ -350,18 +356,23 @@ mod tests {
     #[test]
     fn parts_are_the_gaps_between_marks() {
         // 52 ns a tick, as on Adreno: 19.2 MHz.
-        let t = parts(at([0, 1000, 21_000, 21_000, 81_000, 85_000]), 64, 52.083);
+        let t = parts(
+            at([0, 1000, 21_000, 21_000, 81_000, 85_000, 30_000, 32_000]),
+            64,
+            52.083,
+        );
         let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-3);
         assert!(near(t.panels, 0.052), "{t:?}");
         assert!(near(t.video, 1.042), "{t:?}");
         assert!(near(t.eyes, 3.125), "{t:?}");
+        assert!(near(t.glow, 0.104), "{t:?}");
         assert!(near(t.layers, 0.208), "{t:?}");
         assert!(near(t.total, 4.427), "{t:?}");
     }
 
     #[test]
     fn a_missing_mark_leaves_only_its_parts_out() {
-        let mut ticks = at([0, 10, 20, 20, 70, 80]);
+        let mut ticks = at([0, 10, 20, 20, 70, 80, 30, 35]);
         ticks[Mark::Eyes as usize] = None;
         ticks[Mark::EyesDone as usize] = None;
         let t = parts(ticks, 64, 1.0);
@@ -373,7 +384,7 @@ mod tests {
     fn a_counter_that_wraps_still_gives_the_gap() {
         // 32 valid bits, wrapping between the marks.
         let start = (1u64 << 32) - 100;
-        let t = parts(at([start, start, start, start, 50, 100]), 32, 1e6);
+        let t = parts(at([start, start, start, start, 50, 100, 0, 0]), 32, 1e6);
         assert_eq!(t.eyes, Some(150.0));
         assert_eq!(t.total, Some(200.0));
     }

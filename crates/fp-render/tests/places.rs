@@ -2,10 +2,12 @@
 //! (software) Vulkan device: the room surrounds the screen, nearer geometry
 //! hides farther, the sky is above and the floor below, the house lights
 //! light the room, a spherical picture hides it, and without a place the
-//! eye passes draw what they always did.
+//! eye passes draw what they always did. The picture's light on the room is
+//! measured from real frames, in every layout a frame can arrive in.
 
 use fp_core::format::{Projection, StereoLayout};
 use fp_core::view::ViewSettings;
+use fp_media::{PixelLayout, VideoFrame};
 use fp_render::capture::OffscreenEyes;
 use fp_render::env::{
     EnvFrame, Lighting, Material, Pattern, Place, PlaceData, SeatName, Sky, Vertex,
@@ -13,6 +15,7 @@ use fp_render::env::{
 use fp_render::{Renderer, VideoParams};
 use glam::{Mat4, Quat, Vec3};
 use std::f32::consts::FRAC_PI_2;
+use std::sync::Arc;
 
 mod common;
 use common::{
@@ -389,5 +392,199 @@ fn no_place_is_unchanged() {
     );
     assert!(never == before, "Plain differs with no place pass");
     fresh_eyes.destroy(&fresh);
+    e.destroy(&r);
+}
+
+/// The cinema playing, as the picture's light sees it: the house lights down
+/// to their level while a film plays, the light on or off, `time` seconds in.
+fn lit_params(time: f64, light: bool) -> VideoParams {
+    let mut env = place_frame(Place::Cinema, SeatName::Middle, 0.04);
+    env.screen_light = light;
+    env.time = time;
+    cinema_params(ViewSettings::default(), env)
+}
+
+/// Four frames of `picture` in the cinema, a second apart from second
+/// `start`: the colours are measured two frames behind and ease over a
+/// quarter of a second, so the last frame has the room fully lit by it.
+/// That frame's left eye.
+fn watch(
+    r: &mut Renderer,
+    e: &mut OffscreenEyes,
+    picture: &Arc<VideoFrame>,
+    start: u32,
+    light: bool,
+) -> Vec<u8> {
+    let mut last = Vec::new();
+    for k in 0..4 {
+        let p = lit_params(f64::from(start + k), light);
+        let [left, _] = render(r, e, Some(picture), &p, &[]);
+        last = left;
+    }
+    last
+}
+
+/// The rows of an eye image from `first` down, as bytes.
+fn rows_from(img: &[u8], first: u32) -> &[u8] {
+    &img[(first * SIZE * 4) as usize..]
+}
+
+/// The mean colour of the rows from `first` down, every column: the stage,
+/// floor and seats below the screen, which the picture lights most.
+fn lower_mean(img: &[u8], first: u32) -> [f32; 3] {
+    let mut sum = [0u32; 3];
+    for y in first..SIZE {
+        for x in 0..SIZE {
+            for (s, v) in sum.iter_mut().zip(px(img, x, y)) {
+                *s += u32::from(v);
+            }
+        }
+    }
+    let n = ((SIZE - first) * SIZE) as f32;
+    sum.map(|s| s as f32 / n)
+}
+
+#[test]
+fn glow_reads_each_patch_of_the_picture() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // Top left red, top right blue, bottom left green, bottom right white.
+    let quadrants = frame(160, 90, |u, v| match (u < 0.5, v < 0.5) {
+        (true, true) => [230, 20, 20],
+        (false, true) => [20, 20, 230],
+        (true, false) => [20, 200, 20],
+        (false, false) => [235, 235, 235],
+    });
+    let p = lit_params(0.0, true);
+    for _ in 0..4 {
+        render(&mut r, &mut e, Some(&quadrants), &p, &[]);
+    }
+    // Four cells across, two down, the top row first: two cells of each.
+    let cells = r.screen_light();
+    let (red, blue, green, white) = (0..2, 2..4, 4..6, 6..8);
+    for (name, cells_of, ok) in [
+        ("red", red, [true, false, false]),
+        ("blue", blue, [false, false, true]),
+        ("green", green, [false, true, false]),
+    ] {
+        for i in cells_of {
+            let c = cells[i];
+            for (ch, lit) in ok.into_iter().enumerate() {
+                if lit {
+                    assert!(c[ch] > 0.4, "cell {i} should be {name}: {c:?}");
+                } else {
+                    assert!(c[ch] < 0.15, "cell {i} should be {name}: {c:?}");
+                }
+            }
+        }
+    }
+    for i in white {
+        let c = cells[i];
+        let bright = c.iter().all(|&v| v > 0.6);
+        assert!(bright, "cell {i} should be white: {c:?}");
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn the_room_takes_the_pictures_colour() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let red = frame(160, 90, |_, _| [230, 20, 20]);
+    let blue = frame(160, 90, |_, _| [20, 20, 230]);
+    let in_red = lower_mean(&watch(&mut r, &mut e, &red, 1, true), 90);
+    let in_blue = lower_mean(&watch(&mut r, &mut e, &blue, 5, true), 90);
+    // The light follows the film: red then blue turns the room from one to
+    // the other, in the colour channel it was lit by.
+    let tint = |m: [f32; 3]| m[0] - m[2];
+    assert!(
+        tint(in_red) - tint(in_blue) > 6.0,
+        "red {in_red:?}, then blue {in_blue:?}"
+    );
+    let (red_up, blue_up) = (in_red[0] - in_blue[0], in_blue[2] - in_red[2]);
+    assert!(red_up > 3.0, "red {in_red:?}, blue {in_blue:?}");
+    assert!(blue_up > 3.0, "red {in_red:?}, blue {in_blue:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn every_upload_layout_lights_the_room_alike() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let p = lit_params(0.0, true);
+    // 200 pixels wide: every layout's rows get padded.
+    let (w, h) = (200u32, 100u32);
+    let mut measure = |rgb: [u8; 3], layout: PixelLayout, full_range: bool| {
+        let rgba: Vec<u8> = (0..w * h)
+            .flat_map(|_| [rgb[0], rgb[1], rgb[2], 255])
+            .collect();
+        let f = VideoFrame::from_rgba_as(w, h, &rgba, layout, full_range).expect("frame");
+        let f = Arc::new(f);
+        for _ in 0..4 {
+            render(&mut r, &mut e, Some(&f), &p, &[]);
+        }
+        r.screen_light()
+    };
+    let layouts = [
+        PixelLayout::I420 { bits: 10 },
+        PixelLayout::Nv12,
+        PixelLayout::P010,
+    ];
+    let paints = [
+        ("red", [230, 20, 20]),
+        ("green", [20, 200, 40]),
+        ("blue", [30, 40, 220]),
+        ("grey", [100, 120, 140]),
+    ];
+    for (name, rgb) in paints {
+        let want = measure(rgb, PixelLayout::I420 { bits: 8 }, true);
+        // The picture is lit up, not black.
+        assert!(want[3].iter().any(|&v| v > 0.05), "{name}: {:?}", want[3]);
+        for layout in layouts {
+            for full_range in [true, false] {
+                // Quantisation moves a level by a few codes, a wrong plane
+                // offset or matrix by tens: in linear light, a few hundredths
+                // against tenths.
+                let got = measure(rgb, layout, full_range);
+                for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                    let mut worst = 0.0f32;
+                    for (a, b) in g.iter().zip(w) {
+                        worst = worst.max((a - b).abs());
+                    }
+                    assert!(
+                        worst < 0.06,
+                        "{name} as {layout:?} full_range={full_range}: cell {i} is \
+                         {g:?}, I420 gives {w:?}"
+                    );
+                }
+            }
+        }
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn screen_light_off_leaves_the_room_unlit_by_the_picture() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let red = frame(160, 90, |_, _| [230, 20, 20]);
+    let blue = frame(160, 90, |_, _| [20, 20, 230]);
+    let off_red = watch(&mut r, &mut e, &red, 1, false);
+    assert_eq!(r.screen_light(), [[0.0; 3]; 8], "something was measured");
+    let off_blue = watch(&mut r, &mut e, &blue, 5, false);
+    // Below the picture the room is the same whatever it shows.
+    assert!(
+        rows_from(&off_red, 90) == rows_from(&off_blue, 90),
+        "the room changed with the picture while its light was off"
+    );
+    // And it is the same room, lit by the picture or not, in the dark: only
+    // the light on the walls and floor differs.
+    let on_red = watch(&mut r, &mut e, &red, 9, true);
+    let (dark, lit) = (lower_mean(&off_red, 90), lower_mean(&on_red, 90));
+    assert!(lit[0] > dark[0] + 3.0, "off {dark:?}, on {lit:?}");
     e.destroy(&r);
 }

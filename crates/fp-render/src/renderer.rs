@@ -6,8 +6,10 @@
 //! garbage list and are destroyed when the slot comes round again, by which
 //! time no submitted frame can still read them.
 
-use crate::env::{Place, PlaceData, PlaceKind, sky_floor};
-use crate::env_pass::{EnvInput, EnvPass};
+use crate::env::light::{PATCHES, ScreenLight, screen_patches};
+use crate::env::{EnvFrame, Place, PlaceData, PlaceKind, sky_floor};
+use crate::env_pass::{EnvInput, EnvPass, LitScreen};
+use crate::glow::ScreenGlow;
 use crate::gpu::Gpu;
 use crate::hdr::PeakDetector;
 use crate::mem::{self, Buffer, Image};
@@ -23,13 +25,40 @@ use ash::vk;
 use egui::epaint::{ClippedPrimitive, Primitive, TextureId, textures::TexturesDelta};
 use fp_core::format::Projection;
 use fp_media::VideoFrame;
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use gpu_allocator::MemoryLocation;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 const SLOTS: usize = 2;
+
+/// What a measurement of the picture for the light it gives its place
+/// depends on: the frame, and the settings its colours pass through. The
+/// picture is measured again when it changes, not when the same frame is
+/// drawn once more.
+#[derive(Clone, Copy, PartialEq)]
+struct GlowKey {
+    frame: Option<u64>,
+    /// The picture adjustments, the transfer and the HDR levels.
+    colour: [Vec4; 3],
+    /// Projection, stereo layout, eye swap and plane layout.
+    mode: [u32; 4],
+    /// Quarter turns that show the frame upright.
+    turns: u32,
+}
+
+impl GlowKey {
+    fn of(frame: Option<u64>, p: &SceneParams) -> GlowKey {
+        GlowKey {
+            frame,
+            colour: [p.picture, p.extra, p.hdr],
+            mode: p.mode,
+            turns: p.display[0],
+        }
+    }
+}
+
 /// Linear-light background format of eye targets.
 pub const PANEL_FORMATS: [vk::Format; 2] = [vk::Format::R8G8B8A8_UNORM, vk::Format::R8G8B8A8_SRGB];
 
@@ -207,6 +236,24 @@ pub struct Renderer {
     /// Making the place pass or loading a place failed: places aren't shown
     /// (the picture is, as without one), and it is not tried again.
     env_failed: bool,
+    /// Measures the picture for the light it gives a place. Made the first
+    /// time a place wants it.
+    glow: Option<ScreenGlow>,
+    /// Making the glow pass failed: a place isn't lit by the picture, and it
+    /// is not tried again.
+    glow_failed: bool,
+    /// The colours the glow pass measured last, which come two frames after
+    /// the frame they are of; kept until a newer measurement or the picture's
+    /// end.
+    glow_held: Option<[Vec3; PATCHES]>,
+    /// What the last measurement was for.
+    glow_key: Option<GlowKey>,
+    /// This frame measures the picture (`picture_light` decided).
+    glow_due: bool,
+    /// The id of the video frame `set_video` was given last.
+    shown_id: Option<u64>,
+    /// The picture's light on the place, eased frame by frame.
+    light: ScreenLight,
     /// Times each frame's parts on the GPU, where it has timestamps.
     timer: Option<FrameTimer>,
     /// The parts of the last frame the GPU finished.
@@ -422,6 +469,13 @@ impl Renderer {
                 hdr_peak: PeakDetector::default(),
                 env: None,
                 env_failed: false,
+                glow: None,
+                glow_failed: false,
+                glow_held: None,
+                glow_key: None,
+                glow_due: false,
+                shown_id: None,
+                light: ScreenLight::default(),
                 timer: FrameTimer::new(&gpu, SLOTS),
                 gpu_times: None,
                 imports: Default::default(),
@@ -795,6 +849,9 @@ impl Renderer {
         if let Some(hist) = self.peak.as_mut().and_then(|p| p.take(self.current)) {
             self.hdr_peak.add(&hist);
         }
+        if let Some(sample) = self.glow.as_mut().and_then(|g| g.take(self.current)) {
+            self.glow_held = Some(sample);
+        }
         if let Some(t) = self.timer.as_mut() {
             // Read before `begin` resets the queries for this frame.
             self.gpu_times = t.read(&self.gpu, self.current);
@@ -835,6 +892,7 @@ impl Renderer {
     }
 
     fn show_video(&mut self, frame: Option<&Arc<VideoFrame>>) -> Result<()> {
+        self.shown_id = frame.map(|f| f.id);
         let Some(f) = frame else {
             let slot = &mut self.slots[self.current];
             if slot.has_video {
@@ -1577,6 +1635,9 @@ impl Renderer {
             }
             slot.quad_vb.bytes()[..bytes.len()].copy_from_slice(bytes);
         }
+        if env_on {
+            self.record_glow(slot_idx, tp10);
+        }
         let slot = &self.slots[slot_idx];
         let (gpu, cmd) = (&self.gpu, slot.cmd);
         let d = &gpu.device;
@@ -1763,6 +1824,7 @@ impl Renderer {
         if !self.ensure_env() {
             return false;
         }
+        let screen = self.picture_light(slot_idx, frame, video, p);
         let Some(env) = self.env.as_mut() else {
             return false;
         };
@@ -1796,6 +1858,7 @@ impl Renderer {
             house: frame.house,
             floor_drop,
             time: frame.time,
+            screen,
         };
         match env.uniform(&input) {
             Some(u) => {
@@ -1804,6 +1867,116 @@ impl Renderer {
             }
             None => false,
         }
+    }
+
+    /// Makes the pass that measures the picture the first time a place wants
+    /// its light. False when it can't be made (now or before).
+    fn ensure_glow(&mut self) -> bool {
+        if self.glow.is_none() && !self.glow_failed {
+            match ScreenGlow::new(&self.gpu, self.scene_pl, SLOTS) {
+                Ok(pass) => self.glow = Some(pass),
+                Err(e) => {
+                    log::warn!("the picture won't light its place: {e}");
+                    self.glow_failed = true;
+                }
+            }
+        }
+        self.glow.is_some()
+    }
+
+    /// Eases the picture's light on the place for the frame being recorded,
+    /// and decides whether this frame measures the picture again
+    /// (`glow_due`): only when the frame shown or the colours it passes
+    /// through changed, so a paused picture, or a 24 Hz film at 144 Hz, costs
+    /// the pass on few frames. `None` when the light is off, there is no
+    /// picture, or the pass can't be made: the place gets nothing from it.
+    fn picture_light(
+        &mut self,
+        slot_idx: usize,
+        frame: EnvFrame,
+        video: &VideoParams,
+        p: &SceneParams,
+    ) -> Option<LitScreen> {
+        self.glow_due = false;
+        let showing = p.screen.w >= 0.5 && self.slots[slot_idx].has_video;
+        if !(frame.screen_light && showing && self.ensure_glow()) {
+            // Black at once; turned on again, it measures afresh.
+            self.light.reset();
+            self.glow_held = None;
+            self.glow_key = None;
+            if let Some(g) = self.glow.as_mut() {
+                g.discard();
+            }
+            return None;
+        }
+        let key = GlowKey::of(self.shown_id, p);
+        if self.glow_key != Some(key) {
+            self.glow_key = Some(key);
+            self.glow_due = true;
+        }
+        self.light.update(self.glow_held, frame.time);
+        let size = Vec2::new(p.screen.x, p.screen.y);
+        let to_room = frame.room_to_world.inverse();
+        let (patches, normal) = screen_patches(video.screen_pose, size, p.screen.z, to_room);
+        Some(LitScreen {
+            patches,
+            rgb: self.light.rgb,
+            normal,
+        })
+    }
+
+    /// Records the pass that measures the picture, before the eye passes: a
+    /// tiny render of the picture's cells with the scene shader's `fs_glow`,
+    /// from the scene pipeline's planes or the TP10 pipeline's descriptors,
+    /// whichever the eye passes read.
+    fn record_glow(&mut self, slot_idx: usize, tp10: bool) {
+        if !std::mem::take(&mut self.glow_due) {
+            return;
+        }
+        let ready = match self.tp10_eyes.as_mut() {
+            Some(t) if tp10 => t.ensure_glow(&self.gpu),
+            _ => true,
+        };
+        if !ready {
+            return;
+        }
+        self.stamp(Mark::Glow);
+        let slot = &self.slots[slot_idx];
+        let (gpu, cmd, set) = (&self.gpu, slot.cmd, slot.scene_set);
+        let scene_pl = self.scene_pl;
+        let tp10_eyes = self.tp10_eyes.as_ref().filter(|_| tp10);
+        if let Some(glow) = self.glow.as_mut() {
+            glow.record(gpu, cmd, slot_idx, |pipe| match tp10_eyes {
+                Some(t) => t.bind_glow(gpu, cmd, slot_idx),
+                None => {
+                    let d = &gpu.device;
+                    // SAFETY: recording; the pipeline and the slot's scene
+                    // set are valid, and the set was updated for this frame.
+                    unsafe {
+                        d.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipe);
+                        d.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            scene_pl,
+                            0,
+                            &[set],
+                            &[],
+                        );
+                    }
+                    Some(scene_pl)
+                }
+            });
+        }
+        self.stamp(Mark::GlowDone);
+    }
+
+    /// The colours the picture's light pass measured last, left to right and
+    /// top to bottom, linear (zero before the first or with the light off):
+    /// for tests.
+    #[doc(hidden)]
+    pub fn screen_light(&self) -> [[f32; 3]; PATCHES] {
+        let held = self.glow_held.unwrap_or([Vec3::ZERO; PATCHES]);
+        held.map(|c| [c.x, c.y, c.z])
     }
 
     /// Loads `data` as the meshes, palette and lighting of `place` instead of
@@ -2261,6 +2434,9 @@ impl Drop for Renderer {
             }
             if let Some(mut e) = self.env.take() {
                 e.destroy(&gpu);
+            }
+            if let Some(mut g) = self.glow.take() {
+                g.destroy(&gpu);
             }
             if let Some(mut t) = self.timer.take() {
                 t.destroy(&gpu);

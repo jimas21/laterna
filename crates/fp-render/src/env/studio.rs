@@ -12,12 +12,14 @@ pub const FLOOR_Y: f32 = -1.25;
 /// The floor is a disc this wide.
 pub const FLOOR_RADIUS: f32 = 40.0;
 
-/// Ring radii of the floor disc: close together near the viewer, where light
-/// baked per vertex shows, and wide towards the horizon.
-/// The last is `FLOOR_RADIUS`.
-const RINGS: [f32; 11] = [1.0, 2.0, 3.5, 5.0, 7.0, 9.0, 12.0, 16.0, 22.0, 30.0, 40.0];
+/// Ring radii of the floor disc: close together near the viewer, where the
+/// light baked per vertex and the screen's light (also worked out per vertex)
+/// show, and wide towards the horizon. The last is `FLOOR_RADIUS`.
+const RINGS: [f32; 14] = [
+    0.75, 1.5, 2.25, 3.0, 4.0, 5.0, 6.5, 8.0, 10.0, 12.5, 16.0, 22.0, 30.0, 40.0,
+];
 
-const SEGMENTS: usize = 64;
+const SEGMENTS: usize = 96;
 
 const ZENITH: [f32; 3] = [0.010, 0.012, 0.018];
 const HORIZON: [f32; 3] = [0.045, 0.045, 0.052];
