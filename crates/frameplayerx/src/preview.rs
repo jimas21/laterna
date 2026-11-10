@@ -12,7 +12,7 @@
 //! | `look YAW PITCH [ROLL]` | head direction (and roll, to lie on your side) in degrees |
 //! | `recenter` | recenter on where the head faces |
 //! | `aim YAW PITCH` | controller ray direction in degrees |
-//! | `point PANEL X Y` | aim at a panel (`main`, `bar`, `adjust`, `keyboard`, `tracks`, `perf`, `window-bar`, `window-corner`) at fractional X, Y (outside 0 to 1 is past its edge) |
+//! | `point PANEL X Y` | aim at a panel (`main`, `bar`, `adjust`, `keyboard`, `tracks`, `perf`, `window-bar`, `window-corner`, and the panels' own `main-bar`, `adjust-bar`, `perf-bar`, `keyboard-bar`, `main-corner`) at fractional X, Y (outside 0 to 1 is past its edge) |
 //! | `click` | pull and release the trigger |
 //! | `button a/b/x/y/menu/stick/shoulder` | press and release a right-hand button |
 //! | `stick X Y FRAMES` | hold the thumbstick |

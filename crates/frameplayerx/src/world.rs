@@ -19,6 +19,10 @@ pub struct Panel {
     /// See [`Panel::growing`].
     grows: bool,
     base_size: Vec2,
+    /// How much bigger (or smaller) than usual the panel is made in the
+    /// room, by the corner handle: its size, not its text (see
+    /// [`Panel::set_world_scale`]).
+    world_scale: f32,
     /// Size in metres.
     pub size: Vec2,
     /// Centre and orientation; the panel faces +Z of this transform.
@@ -64,6 +68,7 @@ impl Panel {
             scale: 1.0,
             grows: false,
             base_size: size,
+            world_scale: 1.0,
             size,
             pose: Mat4::IDENTITY,
             visible: false,
@@ -118,13 +123,31 @@ impl Panel {
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
         if self.grows {
-            self.size = self.base_size * scale;
+            self.size = self.base_size * scale * self.world_scale;
         } else {
             // egui's zoom is its pixels per point: the panel's times the
             // scale.
             self.ctx.set_pixels_per_point(self.ppp * scale);
         }
         self.repaint_requested = true;
+    }
+
+    /// Makes the panel `scale` times as big in the room, its layout and text
+    /// the same on it (so everything on it is that much bigger to the eye).
+    /// Unlike [`Panel::set_scale`], which makes the text bigger.
+    pub fn set_world_scale(&mut self, scale: f32) {
+        if (scale - self.world_scale).abs() < 1e-6 {
+            return;
+        }
+        self.world_scale = scale;
+        let grown = if self.grows { self.scale } else { 1.0 };
+        self.size = self.base_size * grown * scale;
+        self.repaint_requested = true;
+    }
+
+    /// How much bigger than usual the panel is in the room.
+    pub fn world_scale(&self) -> f32 {
+        self.world_scale
     }
 
     /// Gives the panel a texture of `px` pixels laid out at `ppp` pixels per

@@ -128,9 +128,14 @@ pub struct ScreenDrag {
 /// Where the ray from `aim` meets the plane `z` metres along the picture's
 /// frame, as the distance right and up from its origin.
 fn on_plane(picture: Mat4, aim: (Vec3, Quat), z: f32) -> Option<Vec2> {
+    on_plane_ray(picture, aim.0, aim.1 * Vec3::NEG_Z, z)
+}
+
+/// [`on_plane`] for a ray given as where it starts and which way it points.
+pub(super) fn on_plane_ray(picture: Mat4, origin: Vec3, dir: Vec3, z: f32) -> Option<Vec2> {
     let inverse = picture.inverse();
-    let origin = inverse.transform_point3(aim.0);
-    let dir = inverse.transform_vector3(aim.1 * Vec3::NEG_Z);
+    let origin = inverse.transform_point3(origin);
+    let dir = inverse.transform_vector3(dir);
     // The plane is ahead (-Z): a ray along it or away from it never meets it.
     if dir.z > -1e-4 {
         return None;

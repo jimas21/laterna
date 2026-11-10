@@ -8,6 +8,7 @@
 //! and the open video's view.
 
 pub mod layout;
+pub mod panels;
 
 mod drag;
 

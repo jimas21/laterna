@@ -738,6 +738,41 @@ EOF
     XDG_CACHE_HOME="$card_home/.cache" \
     "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
     --script "$card_home/window.fps" --size 1400
+  # The window controls on the library panel: its bar (appears when the laser
+  # is near the panel) and its corner. The corner drag makes the panel bigger
+  # about its middle; the bar drag moves it round you. No video is open, so
+  # the library is up.
+  cat >"$card_home/panels.fps" <<EOF
+wait 2
+frames 6
+point main 0.5 0.5
+frames 4
+shot library-bar
+point main-corner 0.2 0.2
+trigger 1
+frames 2
+aim -40 -32
+frames 30
+trigger 0
+frames 3
+expect main_scale > 1.2
+shot library-resized
+point main 0.5 0.5
+frames 4
+point main-bar 0.5 0.5
+trigger 1
+frames 2
+aim 20 -12
+frames 30
+trigger 0
+frames 3
+expect main_yaw > 5
+shot library-moved
+EOF
+  HOME="$card_home" XDG_CONFIG_HOME="$card_home/.config" XDG_DATA_HOME="$card_home/.local/share" \
+    XDG_CACHE_HOME="$card_home/.cache" \
+    "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
+    --script "$card_home/panels.fps" --size 1400
   rm -rf "$card_home"
 fi
 ls -l "$out"

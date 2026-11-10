@@ -826,6 +826,16 @@ stay out of sight inside a room (Cinema), whose screen is where the room puts
 it: pick a seat to change how big it looks. They return with the Studio or
 Plain.
 
+The browse panel, the adjust panel, the performance overlay and the keyboard
+have the same kind of bar under them. It appears when your laser comes near
+the panel. Hold the trigger on it and move your hand to move the panel round
+you; the thumbstick pushes it away or pulls it near. The browse panel also has
+a handle at its bottom right corner: hold the trigger on it and move your hand
+away from the panel's middle to make it bigger, or towards it to make it
+smaller (from 0.6 to 1.8 times its usual size). Its middle stays where it is,
+and the new size is remembered. **Put back** returns it to its usual size.
+The same Window controls switch turns these off too.
+
 The same grip also moves them nearer or further: with a grip held on a panel
 (the browse panel, control bar, adjust panel or performance overlay), move
 your hand towards your head to bring it closer, or away from it to push it
