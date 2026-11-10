@@ -1,4 +1,4 @@
-# FramePlayerX, in English: the messages every other language translates.
+# Laterna, in English: the messages every other language translates.
 # A comment says where a message shows; "short" means a button, chip or tab,
 # so keep it about as long as the English.
 
@@ -194,7 +194,7 @@ settings-update-unknown = Not checked yet
 settings-update-checking = Checking…
 settings-update-latest = You have the latest version
 settings-update-install = Download and install
-settings-update-restart-desc = Restart FramePlayerX to use it.
+settings-update-restart-desc = Restart Laterna to use it.
 settings-update-restart = Restart now
 settings-update-failed = The update failed
 settings-update-check = Check now
@@ -227,17 +227,17 @@ settings-update-installed = Version { $version } is installed
 
 ## Settings › About
 
-settings-about-tagline = FramePlayerX { $version } · a native VR video player for the Steam Frame
+settings-about-tagline = Laterna { $version } · a VR media player for the Steam Frame
 settings-about-headset = This headset
 settings-about-settings-file = Settings file
 settings-about-log = Log
 settings-about-links = Help and support
-settings-about-github = FramePlayerX on GitHub
+settings-about-github = Laterna on GitHub
 settings-about-github-desc = News, releases and the source code.
 settings-about-issue = Report a problem
 settings-about-issue-desc = Open an issue on GitHub, choose Bug report and attach the log named above.
-settings-about-sponsor = Sponsor FramePlayerX
-settings-about-sponsor-desc = If FramePlayerX is useful to you, you can support its development on GitHub Sponsors.
+settings-about-sponsor = Support FramePlayerX
+settings-about-sponsor-desc = Laterna is built on FramePlayerX. If it is useful to you, you can support its author on GitHub Sponsors.
 settings-about-licences = Video decoding uses FFmpeg (LGPL 2.1+) and dav1d (BSD), shipped as separate libraries in lib/. Text is set in Inter (OFL) with Phosphor icons (MIT). Licences and the source offer are in the licenses/ folder.
 
 ## Language names, as subtitles and audio tracks name them
@@ -542,7 +542,7 @@ sources-add-a-source = Add a source
 sources-add-a-source-facts = A library, Jellyfin, DeoVR, SMB…
 # Short: a button or tooltip.
 common-cancel = Cancel
-pin-lock-help = While it is locked, it can't be browsed, it is left off Home, and its videos are hidden from the watch history, search and the remotes. The PIN unlocks it until FramePlayerX restarts or you lock it again.
+pin-lock-help = While it is locked, it can't be browsed, it is left off Home, and its videos are hidden from the watch history, search and the remotes. The PIN unlocks it until Laterna restarts or you lock it again.
 pin-enter = Enter its PIN.
 pin-new = New PIN
 pin-label = PIN
@@ -831,7 +831,7 @@ jf-version-automatic = Automatic
 
 # Short: a button.
 library-back-to-video = Back to video
-# A tooltip: closes FramePlayerX.
+# A tooltip: closes Laterna.
 library-quit = Quit
 # Short: a button.
 library-dismiss = Dismiss
@@ -1073,7 +1073,7 @@ quick-connect-authorized-toast = Quick Connect authorized!
 worker-thumbnails = Preparing thumbnails
 # Shown with a count: Reading videos 3/40.
 worker-reading = Reading videos
-crash-title = FramePlayerX stopped unexpectedly
+crash-title = Laterna stopped unexpectedly
 crash-desc = It crashed the last time it ran. A crash report tells its developers what went wrong so that they can fix it. Sending one is up to you: nothing is sent unless you choose Send report.
 crash-sending = Sending…
 # Short: a button.
@@ -1125,14 +1125,14 @@ scan-failed = { $name } couldn't be scanned: { $error }
 dlna-search-failed = Network search failed: { $error }
 drive-mount-failed = Couldn't open the drive: { $error }
 drive-found = Found drive "{ $name }"
-update-notice = FramePlayerX { $version } is out: install it from Settings › Updates
+update-notice = Laterna { $version } is out: install it from Settings › Updates
 open-timeout = { $title }: the server sent no video in { $seconds } seconds
 crash-contains = What a report contains
 crash-goes = Where it goes
-crash-contains-versions = The versions of FramePlayerX and of the headset's system software.
-crash-contains-log = What went wrong, and FramePlayerX's log of that session: what it was doing, such as the formats and decoders it used and the errors it met.
+crash-contains-versions = The versions of Laterna and of the headset's system software.
+crash-contains-log = What went wrong, and Laterna's log of that session: what it was doing, such as the formats and decoders it used and the errors it met.
 crash-contains-not = Not the names of your videos or files, your folders, your servers' addresses or any password: the report has placeholders such as <video 1> in their place.
-crash-goes-developers = Only to FramePlayerX's developers, as a private issue on GitHub that only they can read.
+crash-goes-developers = Only to Laterna's developers, as a private issue on GitHub that only they can read.
 crash-goes-nothing-else = No account, name or anything else that identifies you goes with it. Your network address reaches their server with the report, as with any website, but is not kept.
 crash-send-failed = It couldn't be sent: { $error }. Try again, or don't send it.
 error-save-name = Couldn't save the name: { $error }
@@ -1303,7 +1303,7 @@ evidence-default = default
 
 ## The phone remote's web page (it follows the headset's language)
 
-remote-title = FramePlayerX Remote
+remote-title = Laterna Remote
 remote-connecting = Connecting…
 remote-now-playing = Now playing
 remote-nothing-playing = Nothing playing
@@ -1325,15 +1325,15 @@ remote-type = Type into headset
 remote-type-label = Text to send to the headset
 # Short: a button.
 remote-send = Send
-remote-unpaired-title = FramePlayerX Remote: not paired
+remote-unpaired-title = Laterna Remote: not paired
 remote-pair-heading = Pair with the headset
-remote-pair-how = In FramePlayerX, open Settings › Remote control and enter the code it shows.
+remote-pair-how = In Laterna, open Settings › Remote control and enter the code it shows.
 # The pairing code field's label and hint.
 remote-pair-code = Code
 # Short: a button.
 remote-pair = Pair
 remote-pair-wrong = That isn't the code the headset shows. Try again.
-remote-pair-no-code = The headset isn't showing a code. In FramePlayerX, open Settings › Remote control.
+remote-pair-no-code = The headset isn't showing a code. In Laterna, open Settings › Remote control.
 # New pairing code is the headset's button: use its translation.
 remote-pair-stopped = Too many wrong codes. In the headset, press New pairing code under Settings › Remote control.
 # Under the pairing form. Unpair all phones is the headset's button: use its translation.

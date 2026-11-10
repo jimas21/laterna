@@ -1,6 +1,6 @@
 # Installing from Desktop Mode
 
-Installs FramePlayerX on a Steam Frame from its Desktop Mode, with no PC,
+Installs Laterna on a Steam Frame from its Desktop Mode, with no PC,
 and adds it to the Steam library. Both files here are attached to every
 release:
 
@@ -21,7 +21,7 @@ What the installer does:
    it in; if that fails, the installed version is put back. Nothing else
    changes before this, so a bad download or a full disk leaves what was
    installed.
-3. Removes other copies of FramePlayerX: their library entries and the
+3. Removes other copies of Laterna: their library entries and the
    folders they start from. Settings and the watch history live elsewhere
    and stay.
 4. Adds the Steam library entry with its artwork. The Frame's desktop Steam

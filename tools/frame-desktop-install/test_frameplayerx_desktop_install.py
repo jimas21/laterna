@@ -48,12 +48,12 @@ class Shortcut(unittest.TestCase):
     def test_app_id_matches_frameplayerx_install(self):
         # Same formula and vector as shortcut.rs: crc32("123456789") = 0xCBF43926.
         self.assertEqual(zlib.crc32(b'123456789') | 0x80000000, 0xCBF43926)
-        self.assertEqual(fai.app_id('FramePlayerX', self.exe),
-                         zlib.crc32(f'"{self.exe}"FramePlayerX'.encode()) | 0x80000000)
+        self.assertEqual(fai.app_id('Laterna', self.exe),
+                         zlib.crc32(f'"{self.exe}"Laterna'.encode()) | 0x80000000)
 
     def test_add_update_remove(self):
         doc = [['shortcuts', [['0', other('a')], ['1', other('b')]]]]
-        aid, added = fai.upsert(doc, 'FramePlayerX', self.exe, '/home/steamos/frameplayerx', '/i.png')
+        aid, added = fai.upsert(doc, 'Laterna', self.exe, '/home/steamos/frameplayerx', '/i.png')
         self.assertTrue(added)
         doc = fai.vdf_parse(fai.vdf_write(doc))
         e = fai.get(fai.get(doc, 'shortcuts'), '2')
@@ -65,7 +65,7 @@ class Shortcut(unittest.TestCase):
         # Update keeps what Steam and the user own, adds no duplicate.
         fai.put(e, 'LastPlayTime', 1700000000)
         fai.put(e, 'IsHidden', 1)
-        _, added = fai.upsert(doc, 'FramePlayerX', self.exe, '/home/steamos/frameplayerx', '/i.png')
+        _, added = fai.upsert(doc, 'Laterna', self.exe, '/home/steamos/frameplayerx', '/i.png')
         self.assertFalse(added)
         sc = fai.get(doc, 'shortcuts')
         self.assertEqual(len(sc), 3)
@@ -74,7 +74,7 @@ class Shortcut(unittest.TestCase):
         self.assertEqual(len(fai.get(e, 'tags')), 1)
 
         # A copy renamed in Steam is still found by its Exe.
-        _, added = fai.upsert(doc, 'FramePlayerX Beta', self.exe, '/home/steamos/frameplayerx', '')
+        _, added = fai.upsert(doc, 'Laterna Beta', self.exe, '/home/steamos/frameplayerx', '')
         self.assertFalse(added)
 
         self.assertTrue(fai.remove_entries(doc, 'nope', self.exe))
@@ -82,10 +82,22 @@ class Shortcut(unittest.TestCase):
         self.assertEqual([k for k, _ in sc], ['0', '1'])
         self.assertEqual(fai.get(fai.get(sc, '1'), 'AppName'), 'b')
 
+    def test_entry_under_the_old_name_is_renamed_not_duplicated(self):
+        doc = []
+        old_id, _ = fai.upsert(doc, 'FramePlayerX', self.exe, '/home/steamos/frameplayerx', '')
+        new_id, added = fai.upsert(doc, 'Laterna', self.exe, '/home/steamos/frameplayerx', '')
+        self.assertFalse(added)
+        self.assertNotEqual(old_id, new_id)
+        sc = fai.get(doc, 'shortcuts')
+        self.assertEqual(len(sc), 1)
+        e = fai.get(sc, '0')
+        self.assertEqual(fai.get(e, 'AppName'), 'Laterna')
+        self.assertEqual(fai.get(e, 'appid'), fai.signed(new_id))
+
     def test_test_copy_is_separate(self):
         doc = []
-        fai.upsert(doc, 'FramePlayerX', self.exe, '/x', '')
-        _, added = fai.upsert(doc, 'FramePlayerX (test)', '/home/steamos/Apps/frameplayerx/frameplayerx.sh',
+        fai.upsert(doc, 'Laterna', self.exe, '/x', '')
+        _, added = fai.upsert(doc, 'Laterna (test)', '/home/steamos/Apps/frameplayerx/frameplayerx.sh',
                               '/y', '')
         self.assertTrue(added)
         self.assertEqual(len(fai.get(doc, 'shortcuts')), 2)
@@ -122,14 +134,14 @@ class OldVersions(unittest.TestCase):
             notes = os.path.join(home, 'frameplayerx.notes')  # not a leftover name
             self.copy(notes)
             entries = [
-                (1, 'FramePlayerX', os.path.join(dest, 'frameplayerx.sh')),  # this one: kept
-                (2, 'FramePlayerX (old)', os.path.join(build3, 'frameplayerx.sh')),
-                (3, 'FramePlayerX', os.path.join(devkit, 'frameplayerx.sh')),  # by launcher
-                (4, 'FramePlayerX (test)', os.path.join(test, 'frameplayerx.sh')),
+                (1, 'Laterna', os.path.join(dest, 'frameplayerx.sh')),  # this one: kept
+                (2, 'Laterna (old)', os.path.join(build3, 'frameplayerx.sh')),
+                (3, 'Laterna', os.path.join(devkit, 'frameplayerx.sh')),  # by launcher
+                (4, 'Laterna (test)', os.path.join(test, 'frameplayerx.sh')),
                 (5, 'OtherApp', os.path.join(home, 'other', 'other.sh')),
-                (6, 'FramePlayerX', '/usr/bin/elsewhere.sh'),  # by name, folder not ours
-                (7, 'FramePlayerX', ''),  # launcher unknown (Steam's live list): this one
-                (8, 'FramePlayerX Beta', ''),  # launcher unknown, another name
+                (6, 'Laterna', '/usr/bin/elsewhere.sh'),  # by name, folder not ours
+                (7, 'Laterna', ''),  # launcher unknown (Steam's live list): this one
+                (8, 'Laterna Beta', ''),  # launcher unknown, another name
             ]
             entries_old, folders = fai.old_versions(self.app, dest, entries, home)
             self.assertEqual(sorted(a for a, _, _ in entries_old), [2, 3, 4, 6, 8])
@@ -137,12 +149,22 @@ class OldVersions(unittest.TestCase):
             self.assertNotIn(keep, folders)
             self.assertNotIn(dest, folders)
 
+    def test_entries_under_the_old_name_count_as_copies(self):
+        with tempfile.TemporaryDirectory() as home:
+            dest = self.copy(os.path.join(home, 'frameplayerx'))
+            entries = [
+                (1, 'FramePlayerX', os.path.join(dest, 'frameplayerx.sh')),  # this one: kept
+                (2, 'FramePlayerX Beta', ''),  # another copy, launcher unknown
+            ]
+            old, _ = fai.old_versions(self.app, dest, entries, home)
+            self.assertEqual([a for a, _, _ in old], [2])
+
     def test_ignores_folders_without_the_app_or_outside_home(self):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as other:
             dest = os.path.join(home, 'frameplayerx')
             os.makedirs(dest + '.old')  # empty: not a copy
             outside = self.copy(os.path.join(other, 'fp'))
-            _, folders = fai.old_versions(self.app, dest, [(9, 'FramePlayerX', os.path.join(outside, 'frameplayerx.sh'))], home)
+            _, folders = fai.old_versions(self.app, dest, [(9, 'Laterna', os.path.join(outside, 'frameplayerx.sh'))], home)
             self.assertEqual(folders, [])
 
     def test_never_takes_a_shared_folder_for_a_copy(self):
@@ -153,8 +175,8 @@ class OldVersions(unittest.TestCase):
             outer = self.copy(os.path.join(home, 'frameplayer-things'))
             dest = os.path.join(outer, 'frameplayerx')
             entries = [
-                (2, 'FramePlayerX', os.path.join(downloads, 'frameplayerx.sh')),
-                (3, 'FramePlayerX (old)', os.path.join(outer, 'frameplayerx.sh')),
+                (2, 'Laterna', os.path.join(downloads, 'frameplayerx.sh')),
+                (3, 'Laterna (old)', os.path.join(outer, 'frameplayerx.sh')),
             ]
             old, folders = fai.old_versions(self.app, dest, entries, home)
             self.assertEqual(sorted(a for a, _, _ in old), [2, 3])  # the entries go
@@ -374,9 +396,9 @@ class Uninstall(unittest.TestCase):
 
     def test_remove_entries_returns_their_app_ids(self):
         doc = [['shortcuts', [['0', other('a')]]]]
-        aid, _ = fai.upsert(doc, 'FramePlayerX', self.exe, '/home/steamos/frameplayerx', '')
-        self.assertEqual(fai.remove_entries(doc, 'FramePlayerX', self.exe), {aid})
-        self.assertEqual(fai.remove_entries(doc, 'FramePlayerX', self.exe), set())
+        aid, _ = fai.upsert(doc, 'Laterna', self.exe, '/home/steamos/frameplayerx', '')
+        self.assertEqual(fai.remove_entries(doc, 'Laterna', self.exe), {aid})
+        self.assertEqual(fai.remove_entries(doc, 'Laterna', self.exe), set())
         self.assertEqual(len(fai.get(doc, 'shortcuts')), 1)
 
     def test_remove_art_deletes_only_those_apps_artwork(self):

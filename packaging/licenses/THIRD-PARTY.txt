@@ -1,4 +1,4 @@
-FramePlayerX bundles these libraries as separate shared objects in lib/:
+Laterna bundles these libraries as separate shared objects in lib/:
 
 FFmpeg 7.1.1 (libavformat, libavcodec, libavutil, libswresample, libswscale)
   Licence: GNU Lesser General Public License 2.1 or later (LGPL-2.1-or-later),
@@ -6,7 +6,7 @@ FFmpeg 7.1.1 (libavformat, libavcodec, libavutil, libswresample, libswscale)
   Source: https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
   (also http://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/ffmpeg_7.1.1.orig.tar.xz)
   Exact build recipe and configure flags: tools/build-ffmpeg.sh in the
-  FramePlayerX repository, https://github.com/jimas21/frameplex
+  Laterna repository, https://github.com/jimas21/laterna
   You may replace the libraries in lib/ with your own build of the same
   major versions (libavcodec.so.61, libavformat.so.61, libavutil.so.59,
   libswresample.so.5, libswscale.so.8).
@@ -40,11 +40,18 @@ Ubuntu Light, Hack, Noto Emoji and emoji-icon-font, which egui builds in as
   License 1.1 and MIT; texts in rust-crates-extra.txt.
   Source: https://github.com/emilk/egui (crates/epaint_default_fonts)
 
+Font used only to draw the wordmark in the Steam library artwork
+(assets/steam/, made by tools/make-artwork.py; not shipped as a font):
+
+IM Fell English by Igino Marini
+  Licence: SIL Open Font License 1.1, text in assets/fonts/OFL.txt.
+  Source: https://github.com/google/fonts (ofl/imfellenglish)
+
 Pictures embedded in the frameplayerx binary:
 
 Steam Frame controllers (Settings > Controller): renders of Valve's own
   controller models as SteamVR ships them, made with Blender
   (crates/frameplayerx/assets/controllers/). The controllers' design and
   models are Valve Corporation's; these pictures are not covered by
-  FramePlayerX's Apache-2.0 licence. Steam and the Steam logo are
+  Laterna's Apache-2.0 licence. Steam and the Steam logo are
   trademarks of Valve Corporation.

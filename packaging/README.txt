@@ -1,5 +1,5 @@
-FramePlayerX — a native VR video player for the Valve Steam Frame
-==================================================================
+Laterna — a VR media player for the Valve Steam Frame
+=====================================================
 
 Run: ./frameplayerx.sh            (Steam starts it this way)
      ./frameplayerx.sh VIDEO      (open a file or URL directly)
@@ -10,7 +10,7 @@ Files
   lib/                FFmpeg 7.1.1 + dav1d 1.5.3 (LGPL / BSD), see licenses/
   assets/steam/       Steam library artwork
   VERSION             installed version
-  LICENSE, NOTICE     FramePlayerX itself: Apache License 2.0
+  LICENSE, NOTICE     Laterna itself: Apache License 2.0
 
 Your data
   Settings:   ~/.config/frameplayerx/settings.json
@@ -22,4 +22,4 @@ Videos in ~/Videos, ~/Downloads and on microSD cards / USB drives are found
 automatically. Haptic scripts (.funscript) next to a video or in
 ~/.local/share/frameplayerx/Interactive are picked up too.
 
-User guide: https://github.com/jimas21/frameplex/blob/main/docs/USER-GUIDE.md
+User guide: https://github.com/jimas21/laterna/blob/main/docs/USER-GUIDE.md

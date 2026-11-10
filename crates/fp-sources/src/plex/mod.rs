@@ -147,7 +147,7 @@ impl PlexSource {
             vec![
                 ("X-Plex-Token".into(), config.access_token.clone()),
                 ("X-Plex-Client-Identifier".into(), client_id.to_string()),
-                ("X-Plex-Product".into(), "FramePlayerX".into()),
+                ("X-Plex-Product".into(), "Laterna".into()),
                 ("X-Plex-Version".into(), env!("CARGO_PKG_VERSION").into()),
                 ("X-Plex-Device".into(), "Steam Frame".into()),
                 ("X-Plex-Platform".into(), "Linux".into()),

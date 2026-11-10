@@ -153,7 +153,7 @@ impl SmbSource {
         }
         if !cfg!(feature = "smb") {
             return Err(Error::SmbUnavailable(
-                "this build of FramePlayerX was compiled without SMB support".into(),
+                "this build of Laterna was compiled without SMB support".into(),
             ));
         }
         let root = smb_url(&config.host, config.port, &config.share, &config.path);

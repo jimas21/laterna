@@ -62,7 +62,7 @@ struct Args {
 
 const USAGE: &str = "usage: frameplayerx [--verbose] [--exit-after SECONDS] [FILE|URL]
        frameplayerx --preview OUT_DIR [--script FILE] [--size PIXELS] [FILE|URL]
-       frameplayerx --info FILE      (print what FramePlayerX detects about a video)
+       frameplayerx --info FILE      (print what Laterna detects about a video)
        frameplayerx --decode-bench FILE [--frames N] [--sw] [--seek SECONDS]
                    [--checksum N,N,...]  (decode only; print decoder and fps)
        frameplayerx --seek-test FILE|URL [--seeks N] [--step SECONDS] [--rounds N] [--sw]
@@ -164,7 +164,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "-v" | "--verbose" => a.verbose = true,
             "--version" => {
-                println!("FramePlayerX {}", env!("CARGO_PKG_VERSION"));
+                println!("Laterna {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "-h" | "--help" => {
@@ -204,7 +204,7 @@ fn main() {
     };
     logger::init(args.verbose);
     fp_media::init_logging();
-    log::info!("FramePlayerX {} starting", env!("CARGO_PKG_VERSION"));
+    log::info!("Laterna {} starting", env!("CARGO_PKG_VERSION"));
     if args.bench.is_some() || args.seek_test.is_some() {
         allow_hevc_10bit_headless();
     }
@@ -241,7 +241,7 @@ fn main() {
     };
     if let Err(e) = r {
         log::error!("{e}");
-        eprintln!("FramePlayerX: {e}");
+        eprintln!("Laterna: {e}");
         std::process::exit(1);
     }
 }
@@ -498,19 +498,19 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     let mut tries = 0;
     let ctx = loop {
         tries += 1;
-        match XrContext::new("FramePlayerX") {
+        match XrContext::new("Laterna") {
             Ok(c) => break Arc::new(c),
             Err(e) if tries < attempts => {
                 log::info!("OpenXR not ready yet ({e}); retrying");
                 std::thread::sleep(Duration::from_secs(1));
             }
             Err(e) => {
-                return Err(format!("{e}\nIs SteamVR running? FramePlayerX needs an OpenXR runtime (the Steam Frame provides one).").into());
+                return Err(format!("{e}\nIs SteamVR running? Laterna needs an OpenXR runtime (the Steam Frame provides one).").into());
             }
         }
     };
     log::info!("OpenXR runtime {} on {}", ctx.runtime, ctx.system_name);
-    let gpu = Arc::new(Gpu::new(&ctx.creator(), "FramePlayerX")?);
+    let gpu = Arc::new(Gpu::new(&ctx.creator(), "Laterna")?);
     log::info!("GPU {} ({})", gpu.device_name, gpu.driver);
     let mut session = XrSession::new(ctx.clone(), gpu.clone())?;
     log::info!(

@@ -1,24 +1,28 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="FramePlayerX Logo" width="160" />
+  <img src="assets/logo.svg" alt="Laterna logo" width="160" />
 </p>
 
-# FramePlayerX
+# Laterna
 
-[![CI](https://github.com/jimas21/frameplex/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jimas21/frameplex/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/jimas21/frameplex?sort=semver&style=flat&logo=github&label=release)](https://github.com/jimas21/frameplex/releases/latest)
-[![Latest Beta](https://img.shields.io/github/v/release/jimas21/frameplex?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/jimas21/frameplex/releases)
+[![CI](https://github.com/jimas21/laterna/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/jimas21/laterna/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/jimas21/laterna?sort=semver&style=flat&logo=github&label=release)](https://github.com/jimas21/laterna/releases/latest)
+[![Latest Beta](https://img.shields.io/github/v/release/jimas21/laterna?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/jimas21/laterna/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](LICENSE)
 
-A media player for the Valve Steam Frame that runs natively on the headset: flat, 180°, 360° and fisheye video in 2D or 3D, from the headset, a card, a USB drive or a media server. A new name for this fork is on the way.
+A media player for the Valve Steam Frame that runs natively on the headset: flat, 180°, 360° and fisheye video in 2D or 3D, from the headset, a card, a USB drive or a media server.
+
+*Laterna* is short for *laterna magica*, Latin for "magic lantern", the first projector.
+
+Lineage: [FramePlayer](https://github.com/yellkell/frameplayer) (yellkell) → [FramePlayerX](https://github.com/remotesojourner/frameplayerx) (remotesojourner) → Laterna.
 
 > [!NOTE]
-> **Where it comes from.** This project is a fork of [FramePlayerX](https://github.com/remotesojourner/frameplayerx) by remotesojourner, which is itself a fork of [FramePlayer](https://github.com/yellkell/frameplayer) by [yellkell](https://github.com/yellkell), who created the original player and released it as open source. Thank you both. Everything here is Apache-2.0, like the projects it builds on. Its releases and in-app updates come from this repository, signed with its own key.
+> **Where it comes from.** Laterna is a fork of [FramePlayerX](https://github.com/remotesojourner/frameplayerx) by remotesojourner, which is itself a fork of [FramePlayer](https://github.com/yellkell/frameplayer) by [yellkell](https://github.com/yellkell), who created the original player and released it as open source. Thank you both. Everything here is Apache-2.0, like the projects it builds on. Its releases and in-app updates come from this repository, signed with its own key.
 
 ## What's different in this fork
 
 - **Sharper picture**: antialiased screen edges and supersampling when the picture is minified, so distant or tilted screens stop shimmering
 - **Pauses when you take the headset off**, and stays paused until you press play
-- **Earbuds** (in progress): AirPods battery, noise control and pause-when-a-bud-comes-out through the separate open-source MagicPods programs, installed from Settings
+- **Earbuds** (in progress): AirPods battery, noise control and pause-when-a-bud-comes-out through the separate open-source MagicPods programs, installed from Settings. They are Steam Frame forks of [MagicPodsCore](https://github.com/jimas21/MagicPodsCore) and [MagicPodsLinux](https://github.com/jimas21/MagicPodsLinux)
 - **Moving the screen closer or further**, and smoother dragging (in progress)
 - **Environments** (in progress): a cinema and other places to watch in, built from original designs and CC0 assets
 - **Plex** (in progress): your server's own rows and artwork, Plex Home users, and every server linked once
@@ -44,7 +48,7 @@ A media player for the Valve Steam Frame that runs natively on the headset: flat
 - **Custom controls**: choose what each controller button does
 - **Languages**: English, German, Spanish, French, Japanese and Simplified Chinese, following the language Steam is set to; the phone remote follows the headset
 - **Updates**: checks for a new version when it starts, and installs it from Settings when you choose to, on a Stable or a Beta channel
-- **No FramePlayerX account or tracking**: it connects to the servers you add and to GitHub to check for updates. Linking Plex also contacts Plex's account services to sign in, discover servers and renew access. After a crash it asks whether to send a crash report, shows what's in it (no video names, folders or server addresses) and sends nothing unless you choose to
+- **No Laterna account or tracking**: it connects to the servers you add and to GitHub to check for updates. Linking Plex also contacts Plex's account services to sign in, discover servers and renew access. After a crash it asks whether to send a crash report, shows what's in it (no video names, folders or server addresses) and sends nothing unless you choose to
 
 ---
 
@@ -61,25 +65,25 @@ A media player for the Valve Steam Frame that runs natively on the headset: flat
 ## Quick Start
 
 <p align="center">
-  <a href="https://github.com/jimas21/frameplex/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
-  <!-- <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Fframeplex%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a> -->
-  <a href="https://jimas21.github.io/frameplex/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
+  <a href="https://github.com/jimas21/laterna/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+  <!-- <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Flaterna%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a> -->
+  <a href="https://jimas21.github.io/laterna/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 </p>
 
 > [!IMPORTANT]
 > This fork has only **beta** releases so far, and the buttons above install the latest **stable** release, so they don't work yet. Until the first stable release, install a beta: from a PC with `frameplayerx-install --channel beta`, or in Desktop Mode's Konsole with
-> `curl -fsSL https://github.com/jimas21/frameplex/releases/download/v0.18.0-beta.1/frameplayerx-desktop-install.py -o /tmp/fpi.py && python3 /tmp/fpi.py --beta`.
+> `curl -fsSL https://github.com/jimas21/laterna/releases/download/v0.18.0-beta.1/frameplayerx-desktop-install.py -o /tmp/fpi.py && python3 /tmp/fpi.py --beta`.
 > Then set **Settings › Updates** to **Beta** to get the next ones.
 
 1. **Install** with one of the buttons above, or from a terminal:
 
-   - **Desktop Mode, on the headset**: open this page in the headset's browser and press **Desktop Mode** to download the installer. Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm when Desktop Mode asks whether to trust it. A terminal window opens, installs the latest release and adds FramePlayerX to your Steam library. It may ask to close Steam for a moment; the app then shows up in Gaming Mode.
+   - **Desktop Mode, on the headset**: open this page in the headset's browser and press **Desktop Mode** to download the installer. Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm when Desktop Mode asks whether to trust it. A terminal window opens, installs the latest release and adds Laterna to your Steam library. It may ask to close Steam for a moment; the app then shows up in Gaming Mode.
 
    <!-- - **FrameDrop or Frame Control, from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [FrameDrop](https://framedropvr.com) or [Frame Control](https://github.com/saphid/steam-frame). Then press its button in your PC's browser and it installs the latest release on the headset. -->
    - **Frame Control from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [Frame Control](https://github.com/saphid/steam-frame). Then press its button in your PC's browser and it installs the latest release on the headset.
      > **Note:** [FrameDrop](https://framedropvr.com) currently has a bug where it has trouble downloading from GitHub, so it isn't supported yet, but should be once the bug is fixed.
 
-   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/jimas21/frameplex/releases/latest), then:
+   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/jimas21/laterna/releases/latest), then:
 
      ```bash
      frameplayerx-install pair <headset-ip>    # once: the address in Steam Settings › Internet on the headset
@@ -106,10 +110,10 @@ To update later, open **Settings › Updates** and press **Download and install*
 
 ## Help translate
 
-FramePlayerX comes in English, German, Spanish, French, Japanese and Simplified Chinese. All but English started as machine drafts, so some wording is likely to be wrong or awkward, and corrections are welcome.
+Laterna comes in English, German, Spanish, French, Japanese and Simplified Chinese. All but English started as machine drafts, so some wording is likely to be wrong or awkward, and corrections are welcome.
 
-- **Correct or translate** on [Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/), Codeberg's Weblate. No Git needed: sign in with a Codeberg account, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes land in the upstream FramePlayerX repository and reach this fork when it merges upstream.
-- **Report a mistake** without translating: open a [Translation problem](https://github.com/jimas21/frameplex/issues/new?template=translation.yml) issue with the language, where it shows and the wording you'd expect.
+- **Correct or translate** on [Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/), Codeberg's Weblate. No Git needed: sign in with a Codeberg account, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes land in the upstream Laterna repository and reach this fork when it merges upstream.
+- **Report a mistake** without translating: open a [Translation problem](https://github.com/jimas21/laterna/issues/new?template=translation.yml) issue with the language, where it shows and the wording you'd expect.
 - **Add a language**: start it on Codeberg Translate, or ask in an issue. Right-to-left languages (Arabic, Hebrew) and scripts that need shaping (Thai, Hindi and other Indic scripts) can't be shown in the interface yet.
 
 ---
@@ -131,11 +135,11 @@ FramePlayerX comes in English, German, Spanish, French, Japanese and Simplified 
 
 ## License
 
-FramePlayerX is licensed under the [Apache License, Version 2.0](LICENSE). It's a modified version of FramePlayer by yellkell; see [NOTICE](NOTICE). Bundled third-party libraries and fonts keep their own licences, and the controller pictures are renders of Valve's Steam Frame controller models; see [packaging/licenses](packaging/licenses/THIRD-PARTY.txt).
+Laterna is licensed under the [Apache License, Version 2.0](LICENSE). It's a modified version of FramePlayerX by remotesojourner, which is a modified version of FramePlayer by yellkell; see [NOTICE](NOTICE). Bundled third-party libraries and fonts keep their own licences, and the controller pictures are renders of Valve's Steam Frame controller models; see [packaging/licenses](packaging/licenses/THIRD-PARTY.txt).
 
-FramePlayerX is an independent project, not affiliated with or endorsed by Valve. Steam and Steam Frame are trademarks of Valve Corporation.
+Laterna is an independent project, not affiliated with or endorsed by Valve. Steam and Steam Frame are trademarks of Valve Corporation.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in FramePlayerX by you shall be licensed under the Apache License, Version 2.0, without any additional terms or conditions.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Laterna by you shall be licensed under the Apache License, Version 2.0, without any additional terms or conditions.
 
 ---
 
@@ -143,7 +147,7 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 
 ### Does it run on other headsets?
 
-No. FramePlayerX is built only for the Steam Frame, so it can use the Frame's decoder, controllers and runtime directly instead of carrying everything a cross-platform player needs.
+No. Laterna is built only for the Steam Frame, so it can use the Frame's decoder, controllers and runtime directly instead of carrying everything a cross-platform player needs.
 
 ---
 
@@ -161,13 +165,13 @@ Yes, if it offers one of these: Jellyfin (sign in with Quick Connect or a passwo
 
 ### Will it be released on Steam?
 
-Not for now. I develop FramePlayerX for myself in my free time, and I don't see the point in paying Steam's $100 fee to publish it. If donations through [GitHub Sponsors](https://github.com/sponsors/remotesojourner) ever reach that amount, I'll spend them on releasing it on Steam. I don't expect any, though: it's an app built with the help of AI to solve an immediate need of my own. Meanwhile, the installers in [Quick Start](#quick-start) add it to your Steam library like a game.
+Not for now. Laterna is developed in free time, and paying Steam's $100 fee to publish it isn't worth it. Meanwhile, the installers in [Quick Start](#quick-start) add it to your Steam library like a game.
 
 ---
 
 ### Why a fork instead of contributing to FramePlayer?
 
-FramePlayer reached Jellyfin, where most of the films I wanted to watch are, only through DLNA, and I wanted to use it directly. It also didn't support half side-by-side videos. I also had a different idea for browsing sources than its library screen, and while FramePlayer focuses on adult videos, I wanted a player for every kind of media. Together that made a different app rather than a few changes to the original.
+This is why FramePlayerX started as a fork. FramePlayer reached Jellyfin, where most of the films I wanted to watch are, only through DLNA, and I wanted to use it directly. It also didn't support half side-by-side videos. I also had a different idea for browsing sources than its library screen, and while FramePlayer focuses on adult videos, I wanted a player for every kind of media. Together that made a different app rather than a few changes to the original.
 
 ---
 

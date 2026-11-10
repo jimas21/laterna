@@ -235,7 +235,7 @@ impl PlexAuthClient {
     fn client(base: &str, client: &str, token: Option<&str>) -> HttpClient {
         let mut headers = vec![
             ("Accept".into(), "application/json".into()),
-            ("X-Plex-Product".into(), "FramePlayerX".into()),
+            ("X-Plex-Product".into(), "Laterna".into()),
             ("X-Plex-Version".into(), env!("CARGO_PKG_VERSION").into()),
             ("X-Plex-Device".into(), "Steam Frame".into()),
             ("X-Plex-Client-Identifier".into(), client.into()),

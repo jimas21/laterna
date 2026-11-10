@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Install FramePlayerX with Frame Control</title>
-  <meta name="description" content="Opens Frame Control on this PC to install the latest FramePlayerX on a paired Steam Frame.">
+  <title>Install Laterna with Frame Control</title>
+  <meta name="description" content="Opens Frame Control on this PC to install the latest Laterna on a paired Steam Frame.">
   <link rel="icon" href="logo.svg" type="image/svg+xml">
   <!-- The README's Frame Control button lands here: GitHub doesn't keep links
        that open apps (frame-control://), a web page can. Opens Frame Control
@@ -36,22 +36,22 @@
 </head>
 <body>
   <main>
-    <img src="logo.svg" alt="FramePlayerX logo">
+    <img src="logo.svg" alt="Laterna logo">
     <h1>Install FramePlayer<span class="x">X</span></h1>
     <p>Opening Frame Control on this PC to install the latest release on your Steam Frame.</p>
-    <a class="install" id="install" href="https://github.com/jimas21/frameplex/releases/latest">Install with Frame Control</a>
+    <a class="install" id="install" href="https://github.com/jimas21/laterna/releases/latest">Install with Frame Control</a>
     <p>Needs Frame Control running on this PC and the headset paired with it, in Developer Mode.</p>
     <div class="missing" id="missing" hidden>
       <p>Frame Control didn't open. <a href="https://github.com/saphid/steam-frame/releases/latest">Get Frame Control</a>, pair your headset, then press the button again.</p>
     </div>
     <small>
-      Or install another way: <a href="https://github.com/jimas21/frameplex#quick-start">FramePlayerX on GitHub</a>
-      · <a href="https://github.com/jimas21/frameplex/releases/latest">download the release</a>
+      Or install another way: <a href="https://github.com/jimas21/laterna#quick-start">Laterna on GitHub</a>
+      · <a href="https://github.com/jimas21/laterna/releases/latest">download the release</a>
     </small>
   </main>
   <script>
     (() => {
-      const MANIFEST = "https://github.com/jimas21/frameplex/releases/latest/download/frameplayerx.json";
+      const MANIFEST = "https://github.com/jimas21/laterna/releases/latest/download/frameplayerx.json";
       const link = "frame-control://install?manifest=" + encodeURIComponent(MANIFEST);
       const button = document.getElementById("install");
       button.href = link;

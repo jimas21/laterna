@@ -1,5 +1,5 @@
 #!/bin/bash
-# FramePlayerX launcher: what Steam (or Frame Control/FrameDrop) runs.
+# Laterna launcher: what Steam (or Frame Control/FrameDrop) runs.
 #
 # Uses the FFmpeg libraries shipped in lib/.
 here="$(cd "$(dirname "$0")" && pwd)"

@@ -91,7 +91,7 @@ fn code_link_uses_traditional_tokens_and_preserves_its_client_identity() {
             .all(|r| r.header("x-plex-client-identifier") == Some(client.as_str()))
     );
     assert!(requests.iter().all(|r| {
-        r.header("x-plex-product") == Some("FramePlayerX")
+        r.header("x-plex-product") == Some("Laterna")
             && r.header("accept") == Some("application/json")
             && r.header("x-plex-token").is_none()
     }));
@@ -151,7 +151,7 @@ fn saved_device_credentials_still_refresh_with_the_registered_signing_identity()
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|r| {
         r.header("x-plex-client-identifier") == Some("saved-client")
-            && r.header("x-plex-product") == Some("FramePlayerX")
+            && r.header("x-plex-product") == Some("Laterna")
             && r.header("x-plex-token").is_none()
     }));
     let refresh = requests

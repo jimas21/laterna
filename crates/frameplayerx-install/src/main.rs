@@ -14,7 +14,7 @@ use frameplayerx_install::remote::SshRemote;
 use frameplayerx_install::shortcut::DEFAULT_APP_NAME;
 use frameplayerx_install::{InstallError, Result};
 
-/// Install FramePlayerX on a Steam Frame over SSH.
+/// Install Laterna on a Steam Frame over SSH.
 ///
 /// Before the first run: turn on Developer Mode on the headset. Then simply
 /// run `frameplayerx-install`; if this PC is not paired yet it offers to pair
@@ -54,9 +54,9 @@ impl Connection {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Install or update FramePlayerX (the default when no command is given).
+    /// Install or update Laterna (the default when no command is given).
     Install(InstallArgs),
-    /// Remove FramePlayerX and its Steam library entry.
+    /// Remove Laterna and its Steam library entry.
     Uninstall(UninstallArgs),
     /// Show what is installed on the headset.
     Status(StatusArgs),
@@ -99,7 +99,7 @@ struct InstallArgs {
     #[arg(long, default_value = DEFAULT_APP_NAME)]
     name: String,
 
-    /// How to add FramePlayerX to the Steam library.
+    /// How to add Laterna to the Steam library.
     #[arg(long, value_enum, default_value_t = ShortcutMethod::Auto)]
     shortcut: ShortcutMethod,
 
@@ -126,11 +126,11 @@ struct UninstallArgs {
     #[arg(long, default_value = DEFAULT_INSTALL_DIR, value_name = "FOLDER")]
     dir: String,
 
-    /// Name FramePlayerX was given in the Steam library.
+    /// Name Laterna was given in the Steam library.
     #[arg(long, default_value = DEFAULT_APP_NAME)]
     name: String,
 
-    /// Also delete FramePlayerX's settings, library database and caches.
+    /// Also delete Laterna's settings, library database and caches.
     #[arg(long)]
     purge: bool,
 
@@ -199,7 +199,7 @@ fn run(cli: Cli) -> Result<()> {
             let mut remote = SshRemote::new(pair::FRAME_ALIAS, &[])?;
             remote.check_tools()?;
             ops::connect(&mut remote, true)?;
-            println!("\nDone. Now run frameplayerx-install to install FramePlayerX.");
+            println!("\nDone. Now run frameplayerx-install to install Laterna.");
             Ok(())
         }
     }
@@ -272,7 +272,7 @@ fn install(args: InstallArgs) -> Result<()> {
         },
     )?;
     println!(
-        "\nDone. FramePlayerX {version} is on the headset: find \"{}\" in the Steam library \
+        "\nDone. Laterna {version} is on the headset: find \"{}\" in the Steam library \
          (Library > Non-Steam).",
         args.name
     );

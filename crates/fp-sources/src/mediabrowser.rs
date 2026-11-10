@@ -36,7 +36,7 @@ const JSON_LIMIT: u64 = 64 << 20;
 const PAGE_SIZE: usize = 200;
 
 /// Client name reported in the MediaBrowser authorization header.
-const CLIENT_NAME: &str = "FramePlayerX";
+const CLIENT_NAME: &str = "Laterna";
 
 /// Device name reported in the MediaBrowser authorization header.
 const DEVICE_NAME: &str = "SteamFrame";
@@ -1407,14 +1407,14 @@ mod tests {
     fn test_mediabrowser_header() {
         let unauthed = mediabrowser_header(None);
         assert!(unauthed.starts_with(
-            "MediaBrowser Client=\"FramePlayerX\", Device=\"SteamFrame\", DeviceId=\""
+            "MediaBrowser Client=\"Laterna\", Device=\"SteamFrame\", DeviceId=\""
         ));
         assert!(unauthed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(!unauthed.contains("Token="));
 
         let authed = mediabrowser_header(Some("test_access_token"));
         assert!(authed.starts_with(
-            "MediaBrowser Client=\"FramePlayerX\", Device=\"SteamFrame\", DeviceId=\""
+            "MediaBrowser Client=\"Laterna\", Device=\"SteamFrame\", DeviceId=\""
         ));
         assert!(authed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(authed.contains("Token=\"test_access_token\""));

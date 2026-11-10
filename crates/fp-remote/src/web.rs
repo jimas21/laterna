@@ -430,7 +430,7 @@ fn pair(body: &[u8], ctx: &Ctx) -> Reply {
         }
         Entered::NoCode => (
             "remote-pair-no-code",
-            "The headset isn't showing a code. In FramePlayerX, open Settings › Remote control.",
+            "The headset isn't showing a code. In Laterna, open Settings › Remote control.",
         ),
         Entered::Stopped => (
             "remote-pair-stopped",

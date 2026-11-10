@@ -1,5 +1,5 @@
 #!/bin/bash
-# Renders every FramePlayerX screen to flat PNGs for design review, with the
+# Renders every Laterna screen to flat PNGs for design review, with the
 # desktop preview (no headset; any Vulkan driver, lavapipe on CI).
 #
 # Usage: tools/ui-preview.sh OUT_DIR

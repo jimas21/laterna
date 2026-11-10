@@ -1,6 +1,6 @@
-# FramePlayerX user guide
+# Laterna user guide
 
-FramePlayerX plays flat, 180°, 360°, fisheye and YouTube-style (EAC) videos,
+Laterna plays flat, 180°, 360°, fisheye and YouTube-style (EAC) videos,
 2D or 3D, on the Steam Frame, from the headset, a microSD card, a USB drive
 or your network.
 
@@ -21,16 +21,16 @@ or your network.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the installer:
 
-<a href="https://github.com/jimas21/frameplex/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+<a href="https://github.com/jimas21/laterna/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
 
 Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm
 when Desktop Mode asks whether to trust it. A terminal window opens and:
 
 - downloads the latest stable release and checks it against the checksum
   GitHub recorded for it;
-- removes other copies of FramePlayerX and their library entries (your
+- removes other copies of Laterna and their library entries (your
   settings and watch history stay);
-- installs it into `~/frameplayerx` and adds **FramePlayerX** to the Steam
+- installs it into `~/frameplayerx` and adds **Laterna** to the Steam
   library with its artwork.
 
 If Steam can't be updated while it's running, the installer asks to close
@@ -46,15 +46,15 @@ FrameDrop or Valve's SteamOS Devkit Client.
 **With FrameDrop or Frame Control, from a PC.** With the app running on
 your PC and the headset paired, press the button in your PC's browser:
 
-<a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Fframeplex%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="../assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a>
-<a href="https://jimas21.github.io/frameplex/frame-control.html"><img src="../assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
+<a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Flaterna%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="../assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a>
+<a href="https://jimas21.github.io/laterna/frame-control.html"><img src="../assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 
 GitHub doesn't keep links that open apps, so the Frame Control button opens a
 small page that opens Frame Control. If that doesn't work, paste this link
 into the browser's address bar instead:
 
 ```
-frame-control://install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Fframeplex%2Freleases%2Flatest%2Fdownload%2Fframeplayerx.json
+frame-control://install?manifest=https%3A%2F%2Fgithub.com%2Fjimas21%2Flaterna%2Freleases%2Flatest%2Fdownload%2Fframeplayerx.json
 ```
 
 Either app reads the release's manifest (`framedrop.json` or
@@ -81,7 +81,7 @@ pair when it cannot log in.
 
 It reuses the `frame` SSH alias created when pairing, installs into
 `~/frameplayerx` (keeping the previous version as `~/frameplayerx.old`) and
-adds **FramePlayerX** to the Steam library with artwork. Add
+adds **Laterna** to the Steam library with artwork. Add
 `--restart-steam` to make it show up right away.
 
 **By hand.** Copy the zip to the headset, unzip it into your home folder
@@ -89,7 +89,7 @@ and add `~/frameplayerx/frameplayerx.sh` to Steam as a non-Steam game.
 
 ## Updating
 
-FramePlayerX checks for a new version each time it starts, but doesn't
+Laterna checks for a new version each time it starts, but doesn't
 install it by itself. To update, open **Settings › Updates**: when a new
 version is out it's listed there with what changed. Press **Download and
 install**, then **Restart now**. **Check now** looks again without
@@ -110,11 +110,11 @@ left off. Your videos are never touched.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the uninstaller:
 
-<a href="https://github.com/jimas21/frameplex/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Uninstall in Desktop Mode" width="240" /></a>
+<a href="https://github.com/jimas21/laterna/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Uninstall in Desktop Mode" width="240" /></a>
 
 Open `Uninstall-FramePlayerX.desktop` from your Downloads folder and
 confirm when Desktop Mode asks whether to trust it. A terminal window
-opens, asks you to confirm, removes FramePlayerX, then asks whether to
+opens, asks you to confirm, removes Laterna, then asks whether to
 delete your settings and watch history too. If it closes Steam, the entry
 is gone when you return to Gaming Mode, which it offers to do.
 
@@ -122,7 +122,7 @@ From Konsole, the same installer's `--remove` does this, and
 `--remove --purge` deletes your settings and watch history without asking:
 
 ```
-curl -fsSL https://github.com/jimas21/frameplex/releases/latest/download/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py
+curl -fsSL https://github.com/jimas21/laterna/releases/latest/download/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py
 python3 /tmp/frameplayerx-desktop-install.py --remove
 ```
 
@@ -139,7 +139,7 @@ Add `--restart-steam` so the library updates right away.
 folder, `~/frameplayerx`, so either way above removes it.
 
 **By hand.** Delete the `frameplayerx` and `frameplayerx.old` folders in
-your home folder, and remove FramePlayerX from the Steam library.
+your home folder, and remove Laterna from the Steam library.
 
 **Deleting your settings and watch history later.** If you kept them, or
 removed the app by hand, they stay behind. To delete them, run this in
@@ -280,7 +280,7 @@ keeps the order. Grids load more as you scroll to their end.
 Under **Sources › Add source › Plex**, **Link with code** is selected by
 default. Press **Get pairing code**, then visit [plex.tv/link](https://plex.tv/link)
 on your phone or computer. Sign in to Plex there if asked and enter the
-code shown in FramePlayerX. The headset waits for approval, then shows
+code shown in Laterna. The headset waits for approval, then shows
 your servers. Choose an owned or shared server, wait for its connection
 test, then **Save**. If the code expires, get another code and try again;
 **Cancel** stops waiting.
@@ -323,13 +323,13 @@ Plex's `*.plex.direct` hostnames are normal HTTPS server addresses. Some
 routers or DNS providers block their resolution through DNS rebinding
 protection; see [Plex's secure connection guide](https://support.plex.tv/articles/206225077-how-to-use-secure-server-connections/).
 If DNS lookup fails or the connection times out or cannot be opened,
-FramePlayerX tries that connection's advertised IP address and port, when
+Laterna tries that connection's advertised IP address and port, when
 available. It keeps the original HTTPS hostname and certificate checks, and verifies
 the server's identity. The log records the IP attempt. This fallback does
 not apply to Relay. Across VLANs, the headset still needs a route and
 firewall permission to the server's port.
 
-`app.plex.tv` provides the web app and account sign-in. FramePlayerX uses
+`app.plex.tv` provides the web app and account sign-in. Laterna uses
 the selected server's media connection; entering `app.plex.tv` in the
 manual address field starts account linking. Plex Home profile switching,
 live TV, music, photos, cloud Watchlist and casting are not supported.
@@ -341,7 +341,7 @@ the padlock next to it under **Sources** (or on its tile on Home) and choose
 a PIN (4 to 8 digits). While it is locked it can't be browsed, it is left
 off Home, and its videos are left out of the watch history, search and the
 phone remote; opening one asks for the PIN. **Unlock** opens it until
-FramePlayerX restarts; one press of the padlock locks it again. To change
+Laterna restarts; one press of the padlock locks it again. To change
 the PIN or remove it, edit the source (the pencil under **Sources**).
 Removing the source also removes its PIN. This keeps guests out, it doesn't
 encrypt anything: the files themselves stay as they are.
@@ -352,7 +352,7 @@ own, if it shows the same videos.
 
 ### Parallel downloads
 
-A server's form has a **Parallel downloads** switch, off by default. On, FramePlayerX downloads several parts of a video at once over separate connections while it plays, the way some download managers do. This helps if the server limits the speed of each connection. If it doesn't, the switch may gain nothing, and a server on hard drives can get slower, because the drives have to jump between parts of the file. SMB shares and DLNA servers don't have the switch.
+A server's form has a **Parallel downloads** switch, off by default. On, Laterna downloads several parts of a video at once over separate connections while it plays, the way some download managers do. This helps if the server limits the speed of each connection. If it doesn't, the switch may gain nothing, and a server on hard drives can get slower, because the drives have to jump between parts of the file. SMB shares and DLNA servers don't have the switch.
 
 ### Editing a source
 
@@ -379,7 +379,7 @@ from a new server address.
 
 ### Watch sync with Jellyfin, Emby, Plex and HereSphere
 
-These servers keep track of what you watch, and FramePlayerX keeps them in
+These servers keep track of what you watch, and Laterna keeps them in
 step with the headset:
 
 - **Jellyfin and Emby** hear when a video starts, pauses, resumes, jumps or
@@ -417,8 +417,8 @@ each kind of video, say Movies in `~/Videos/Movies` and Gaming clips on the
 card, and each keeps its own videos. Libraries can't overlap: a folder
 inside a library, or holding one, can't be another.
 
-FramePlayerX looks for new and removed videos in a library when you add
-it, when FramePlayerX starts, when its card is inserted, each time you open
+Laterna looks for new and removed videos in a library when you add
+it, when Laterna starts, when its card is inserted, each time you open
 it, and when you press **Scan now** on its page. Its thumbnails are made in
 the background, on one core at low priority, from the video's keyframes,
 and wait while a video plays. The pencil next to it under **Sources** renames it or moves
@@ -434,7 +434,7 @@ pick its folder again.
 
 ### microSD cards and USB drives (VR180 and everything else)
 
-FramePlayerX notices when a card or drive is inserted (a "Found drive"
+Laterna notices when a card or drive is inserted (a "Found drive"
 message appears) and you can browse it under **On this device**. To have
 its videos with thumbnails, filters and sorting, make a library of it, or
 of a folder on it (see [Libraries](#libraries)).
@@ -445,12 +445,12 @@ videos onto it and put it in the Frame. exFAT has no 4 GB file limit, so
 8K files are fine; FAT32 cannot hold files over 4 GB.
 
 - The Frame's SteamOS only mounts ext4 cards itself (the kind Steam
-  formats for games) and no USB drives. FramePlayerX mounts exFAT, FAT32
+  formats for games) and no USB drives. Laterna mounts exFAT, FAT32
   and NTFS cards, and USB drives, itself while it is running, under
   `/run/media/steamos/<name>`.
 - Steam may say the card needs formatting. **Don't format it from Steam**:
   that erases the card and makes it ext4, which Windows and macOS can't
-  read. FramePlayerX still finds the videos.
+  read. Laterna still finds the videos.
 - An ext4 card formatted by Steam works too (shared with games: Steam game
   folders, `steamapps`, are skipped), but only the Frame can read it.
 - When the card is removed its library's videos stay listed with your
@@ -622,7 +622,7 @@ Subtitles show in any script, with the fonts on the headset: Arabic and
 Hebrew read right to left, and Chinese, Japanese or Korean need a font
 that covers them. If subtitles in a language show nothing or boxes, copy a
 font for it (the Noto fonts cover every language) into
-`~/.local/share/fonts` and restart FramePlayerX; frameplayerx.log names
+`~/.local/share/fonts` and restart Laterna; frameplayerx.log names
 the characters it had no font for.
 
 ### Videos that stutter: AV1 and 4:2:2
@@ -716,12 +716,12 @@ as it plays, without converting anything: see below.
 Jellyfin, Emby and Plex can transcode a video live, while it plays, and DeoVR
 feeds and HereSphere APIs may offer heights their server transcodes to on
 request. Nothing is made ahead of time: the server starts encoding from
-the file when FramePlayerX asks, and stops when it stops asking. For those
+the file when Laterna asks, and stops when it stops asking. For those
 videos the pill on the control bar starts with the **Quality** playing;
 press it for the Quality list beside the audio tracks and subtitles:
 
 - **Automatic** (the default): the file as it is. When the file can't play
-  here (a format FramePlayerX has no decoder for, or a picture the hardware
+  here (a format Laterna has no decoder for, or a picture the hardware
   decoder has no room for), it asks the server to transcode it to the
   tallest height offered and says so on the control bar. It never changes
   the quality while a video plays.
@@ -848,7 +848,7 @@ video it turns the video's own mask on and off.
 
 Many passthrough videos carry a see-through mask inside the
 picture, and their names end in `_alpha` (for example
-`Scene_4096p_FISHEYE190_alpha.mp4`). FramePlayerX reads the mask by itself:
+`Scene_4096p_FISHEYE190_alpha.mp4`). Laterna reads the mask by itself:
 only the people stay and the room shows around them, with nothing to set.
 For a file whose name doesn't say so (renamed, or named by a server), press
 **Room** on the control bar, or turn on **Use the video's mask** in the
@@ -872,7 +872,7 @@ Settings again.
 ## Haptics
 
 Haptics are off until you turn on **Settings › General › Haptic devices**.
-Until then FramePlayerX shows nothing about them and loads no scripts.
+Until then Laterna shows nothing about them and loads no scripts.
 
 Scripts (`.funscript`, including multi-axis `video.surge.funscript` etc.)
 are found next to the video, in `~/.local/share/frameplayerx/Interactive`
@@ -903,7 +903,7 @@ The phone's page is in the headset's language, and changes with it.
 
 ## Language
 
-FramePlayerX comes in English, German, Spanish, French, Japanese and
+Laterna comes in English, German, Spanish, French, Japanese and
 Simplified Chinese. **Settings › General › Language** starts on
 **Automatic**, which follows the language Steam is set to (English when
 Steam's isn't one of these); choose one to keep it whatever Steam's is.
@@ -936,23 +936,23 @@ The translations started as machine drafts. If one reads wrong, the
 
   Without a video open, it shows only Display, CPU, GPU and Memory.
 - After a crash, the next start asks whether to send a crash report to
-  FramePlayerX's developers, as a private issue on GitHub. It contains the
-  versions of FramePlayerX and the headset's system, what went wrong, and
+  Laterna's developers, as a private issue on GitHub. It contains the
+  versions of Laterna and the headset's system, what went wrong, and
   the log of that session with the names of your videos, files and folders,
   your servers' addresses and any password replaced by placeholders such as
   `<video 1>`. **Show the report** shows exactly what would be sent;
   nothing is sent unless you choose **Send report**.
-- To report a problem yourself, **Settings › About** links to FramePlayerX's
+- To report a problem yourself, **Settings › About** links to Laterna's
   GitHub page, its issue form (choose Bug report and attach the log below)
   and its GitHub Sponsors page. A link opens in Steam's browser; the
   address beside it works on a phone or a computer too.
 - Log: `~/.local/share/frameplayerx/frameplayerx.log`; the run before is kept
   as `frameplayerx.log.old` (the one to send after a freeze or crash, once
-  FramePlayerX has been started again)
+  Laterna has been started again)
 - Settings: `~/.config/frameplayerx/settings.json` (delete to reset)
 - Network source passwords: `~/.config/frameplayerx/sources.json`
   (readable only by you)
-- "Is SteamVR running?": FramePlayerX needs the headset's OpenXR runtime;
+- "Is SteamVR running?": Laterna needs the headset's OpenXR runtime;
   start it from the Steam library, not a desktop terminal.
 - "… has signed this headset out": a Jellyfin server ends a Quick
   Connect sign-in when the account's password changes or the device is

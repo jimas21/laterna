@@ -1,4 +1,4 @@
-//! `frameplayerx-install`: puts FramePlayerX on a paired Steam Frame from a
+//! `frameplayerx-install`: puts Laterna on a paired Steam Frame from a
 //! Windows, macOS or Linux PC.
 //!
 //! It drives the system `ssh`/`scp` (so it reuses the pairing done by
