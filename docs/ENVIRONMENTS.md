@@ -170,21 +170,49 @@ What every place can offer:
   video needs a schema version and a `MediaRecord` column, so it comes
   last.
 
+## Milestone 1 as built
+
+What shipped first, and where it differs from the sketch above.
+
+- **Procedural only.** Two places, `cinema` (a room) and `studio` (a sky),
+  made from a small kit in code. No assets, nothing downloaded, nothing
+  added to the app's size. Plain stays the default; "Your room" stays the
+  `passthrough` setting, and wins over a place.
+- **Blend instead of discard.** The scene pass does not `discard` outside the
+  screen: it returns premultiplied colour and blends over whatever is behind
+  it (the cleared background, or a place). Over the plain background that is
+  the same picture as before, and keyed pixels show the place.
+- **No `frag_depth` yet.** The picture is drawn over the place with the depth
+  test off, so rooms are built (and tested) so that no geometry is ever in
+  front of the screen from any seat. `frag_depth` comes with models.
+- **The screen's colour from the scene shader, not a compute pass.** The
+  frame can be a copied image, a buffer shared with the decoder or 10-bit
+  video sampled in place, and only the scene shader can read all three. A
+  second entry point in it renders a tiny grid of the picture's colours
+  through the same colour chain, and the CPU smooths it.
+- **Places are string ids.** The setting is a string (`void`, `cinema`,
+  `studio`), not an enum: a settings file with a value this build lacks
+  would otherwise reset every setting. A place this build does not know shows
+  Plain.
+- **The picker** is the film button on the control bar (the Position tab) and
+  Settings › Places. The preview harness has `place`, `seat` and `house`
+  commands, and `tools/ui-preview.sh` takes the shots.
+- **Off switch.** `FRAMEPLAYERX_PLACES=0` stops the app asking for a place. It
+  does not undo the depth buffer and the blended picture in the eye pass.
+
 ## Milestones
 
-1. Toolchain: WSL2 Ubuntu (needs a reboot, so it waits for a window:
-   `wsl --install --web-download`, reboot, `wsl --install -d Ubuntu-24.04`),
-   then `tools/local-xr.sh setup`, build and run the preview harness
-   unchanged. Where each change goes: [ENVIRONMENTS-CODEMAP.md](ENVIRONMENTS-CODEMAP.md).
-2. Depth + env pass + the first part of the room kit, with the screen
-   light: `home-theater` (the smallest room that proves the hard parts);
-   check in the preview harness and Monado.
-3. Video average colour pass; house-light dimming; stepped floor and seat
-   rows in the kit: `cinema`.
-4. Picker UI and settings; sky draw and the shared ground; the Sky places
-   (about a dozen in one step) and user places.
-5. The remaining rooms from the kit: `movie-palace`, `giant-screen`,
+1. Milestone 1 (above), built with CI as the only compiler and the preview
+   harness as the screenshot: the depth buffer and blended picture in the eye
+   pass; the room kit with `cinema` and `studio`; the environment pass and
+   house lights; the picker and Settings › Places; the light from the
+   screen. Where each change goes: [ENVIRONMENTS-CODEMAP.md](ENVIRONMENTS-CODEMAP.md).
+2. `home-theater`, a second room from the same kit; an MSAA switch for room
+   edges, its default chosen after an A/B on the Frame.
+3. Photographic skies and the Sky places (about a dozen in one step), user
+   places, and a default place per library.
+4. The remaining rooms from the kit: `movie-palace`, `giant-screen`,
    `screening-room`, `arthouse`, `living-room`, `loft`, `bedroom`, `cabin`,
    `observation-deck`, `underwater`. Seats and variants.
-6. On the Frame: frame timing at 2160 px and 120 Hz, the compressed sky
+5. On the Frame: frame timing at 2160 px and 120 Hz, the compressed sky
    path, then glTF models and `.glb` user places.

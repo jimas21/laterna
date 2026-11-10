@@ -438,6 +438,8 @@ pub enum SettingsTab {
     General,
     Playback,
     VideoPosition,
+    /// The place round flat videos and the menus.
+    Places,
     /// Sound and subtitles.
     Sound,
     Passthrough,
@@ -1003,6 +1005,10 @@ pub struct View<'a> {
     pub playback: Option<&'a mut crate::playback::Playback>,
     pub actions: &'a mut Vec<Action>,
     pub passthrough_available: bool,
+    /// Whether places may show at all (`FRAMEPLAYERX_PLACES=0` says no).
+    pub places_enabled: bool,
+    /// The place showing round the picture and the menus now, if any.
+    pub place_shown: Option<fp_render::env::Place>,
     /// SteamVR's dashboard can be opened from the app.
     pub dashboard: bool,
     pub devices: &'a [fp_haptics::DeviceStatus],
