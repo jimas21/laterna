@@ -313,6 +313,21 @@ pub enum Action {
         source: String,
         back_to: Screen,
     },
+    /// Opens a source's browser on `item` (a server's playlist, or a video's
+    /// details); leaving it returns to `back_to`.
+    OpenSourceAt {
+        source: String,
+        item: Box<fp_sources::CatalogItem>,
+        back_to: Screen,
+    },
+    /// Asks a server for its video playlists, for the Playlists tab.
+    ServerPlaylists {
+        source: String,
+    },
+    /// Asks a server for what was watched on it, for the History tab.
+    ServerHistory {
+        source: String,
+    },
     /// Lists a folder of a source.
     Browse {
         source: String,
@@ -831,6 +846,14 @@ pub struct UiState {
     /// The playlists, and the open one's videos, as last read.
     pub playlists: Option<Vec<fp_library::Playlist>>,
     pub playlist_items: Option<(PlaylistId, Vec<fp_library::PlaylistEntry>)>,
+    /// The video playlists of each server, once asked for: read again after
+    /// a change to the library.
+    pub server_playlists: Option<Vec<playlists::ServerPlaylists>>,
+    /// What the server chosen on the History screen watched, once asked for.
+    pub server_history: Option<playlists::ServerHistory>,
+    /// The server whose history the History screen shows (`None`: this
+    /// headset's).
+    pub history_source: Option<String>,
     /// A new playlist's name, or the open one's while it is renamed.
     pub playlist_name: String,
     pub renaming: bool,
@@ -921,6 +944,9 @@ impl Default for UiState {
             playlist: None,
             playlists: None,
             playlist_items: None,
+            server_playlists: None,
+            server_history: None,
+            history_source: None,
             playlist_name: String::new(),
             renaming: false,
             delete_armed: None,
@@ -963,6 +989,8 @@ impl UiState {
         self.home = None;
         self.playlists = None;
         self.playlist_items = None;
+        self.server_playlists = None;
+        self.server_history = None;
         self.up_next = None;
         if let Some(SourceView {
             page: SourcePage::Library(l),

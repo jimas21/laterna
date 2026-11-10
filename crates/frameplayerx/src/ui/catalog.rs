@@ -1216,6 +1216,27 @@ fn page_for(item: CatalogItem, caps: CatalogCapabilities) -> (Load, Body) {
     }
 }
 
+/// The page a card of another screen (a server's playlist or history) opens
+/// on the server: a video's details, else what `page_for` makes of it.
+pub fn open_page(item: CatalogItem, caps: CatalogCapabilities) -> (Load, Body) {
+    if item.kind.playable() {
+        let load = Load::Item {
+            id: item.id.clone(),
+        };
+        let body = Body::Item {
+            item: Box::new(item),
+        };
+        (load, body)
+    } else {
+        page_for(item, caps)
+    }
+}
+
+/// Opens `body` on top of the pages shown, loading until answer `seq`.
+pub fn push_page(j: &mut CatalogView, seq: u64, body: Body) {
+    j.open(seq, body);
+}
+
 /// Where the page shown is on the server, as the header's second line: the
 /// pages opened to reach it ("Movies › Blade Runner", the last three), or
 /// what the server is on its front page.
@@ -1254,7 +1275,7 @@ fn has_content(body: &Body) -> bool {
 }
 
 /// Opens `item`, starting from the server's resume point.
-fn request(source: &str, item: &CatalogItem, from_start: bool) -> OpenRequest {
+pub(super) fn request(source: &str, item: &CatalogItem, from_start: bool) -> OpenRequest {
     OpenRequest {
         location: item.location.clone(),
         source_id: Some(source.to_string()),
@@ -1326,7 +1347,7 @@ fn format_badge(format: Option<fp_core::format::VideoFormat>) -> Option<String> 
 }
 
 /// An item's card, a poster or 16:9 art.
-fn item_card(
+pub(super) fn item_card(
     ui: &mut egui::Ui,
     v: &mut View,
     item: &CatalogItem,

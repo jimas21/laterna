@@ -43,6 +43,16 @@ pub(super) enum Job {
         seq: u64,
         result: Box<Result<ui::catalog::Loaded, String>>,
     },
+    /// A server's video playlists, for the Playlists tab.
+    ServerPlaylists {
+        source: String,
+        result: Result<Vec<fp_sources::CatalogItem>, String>,
+    },
+    /// What was watched on a server, for the History tab.
+    ServerHistory {
+        source: String,
+        result: Result<Vec<fp_sources::CatalogItem>, String>,
+    },
     /// A scene feed's listing; `cached`: the one saved last time, shown
     /// while the server answers.
     FeedLibrary {
@@ -457,6 +467,10 @@ impl App {
                     j.loaded(seq, *result);
                 }
             }
+            Job::ServerPlaylists { source, result } => {
+                self.server_playlists_loaded(&source, result);
+            }
+            Job::ServerHistory { source, result } => self.server_history_loaded(&source, result),
             Job::FeedLibrary {
                 source,
                 result,

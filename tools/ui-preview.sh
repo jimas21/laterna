@@ -117,6 +117,15 @@ PLEX_HUBS = {"MediaContainer": {"Hub": [
      "more": False, "librarySectionID": 1, "Metadata": PLEX_COLLECTIONS},
 ]}}
 
+# A video playlist the server keeps (it has a collage, not a poster), and what
+# was watched on the server, newest first.
+PLEX_PLAYLISTS = {"MediaContainer": {"totalSize": 1, "Metadata": [
+    {"ratingKey": "950", "type": "playlist", "playlistType": "video", "title": "Friday films",
+     "leafCount": 4, "composite": "/plex-images/v_sunset"},
+]}}
+PLEX_WATCHED = [dict(item, lastViewedAt=1_790_000_000 - 3600 * n, viewCount=1)
+                for n, item in enumerate(PLEX_ITEMS[:5])]
+
 # The people a search finds (one without a picture); each is in a few videos.
 PEOPLE = [
     {"Id": "p_riley", "Name": "Riley Brooks", "Type": "Person", "ImageTags": {"Primary": "r"}},
@@ -194,6 +203,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = {"MediaContainer": {"friendlyName": "Plex"}}
         elif path == "/library/sections":
             body = {"MediaContainer": {"Directory": [{"key": "1", "type": "movie", "title": "Personal videos", "thumb": "/plex-images/v_sunset"}]}}
+        elif path == "/playlists":
+            body = PLEX_PLAYLISTS
+        elif path == "/playlists/950/items":
+            body = {"MediaContainer": {"Metadata": PLEX_ITEMS[:4], "offset": 0, "totalSize": 4}}
+        elif path == "/library/all":
+            # Films, then episodes (the preview has no episodes).
+            watched = PLEX_WATCHED if q.get("type") == ["1"] else []
+            body = {"MediaContainer": {"Metadata": watched, "offset": 0, "totalSize": len(watched)}}
         elif path == "/library/sections/1/all" and q.get("type") == ["18"]:
             body = {"MediaContainer": {"Metadata": PLEX_COLLECTIONS, "offset": 0, "totalSize": len(PLEX_COLLECTIONS)}}
         elif path in ("/hubs/promoted", "/hubs", "/hubs/sections/1"):
