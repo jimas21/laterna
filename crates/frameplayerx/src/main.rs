@@ -840,6 +840,10 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         let input = session.input(frame.state.predicted_display_time);
         let dt = last.elapsed().as_secs_f32().min(0.1);
         last = Instant::now();
+        let eye_px_per_tan = frame
+            .eyes
+            .as_ref()
+            .map(|e| fp_render::math::pixels_per_tan(&e[0].proj, session.extent.width));
         renderer.begin_frame()?;
         gpu_ms.push(renderer.gpu_times());
         let out = app.frame(
@@ -856,6 +860,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                     .filter(|&ns| ns > 0)
                     .map(|ns| 1e9 / ns as f32),
                 recentred,
+                eye_px_per_tan,
             },
         );
         frames += 1;

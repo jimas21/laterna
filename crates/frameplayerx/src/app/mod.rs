@@ -53,6 +53,10 @@ pub struct FrameInput {
     pub display_hz: Option<f32>,
     /// The system recentered (the Steam button held) since the last frame.
     pub recentred: bool,
+    /// How many pixels of an eye image make a unit of tangent, at the middle of
+    /// the view (`fp_render::math::pixels_per_tan`), so things painted for the
+    /// eyes can be painted at the size they are shown. `None` when not known.
+    pub eye_px_per_tan: Option<f32>,
 }
 
 /// A panel or pointer ray for the compositor to draw as its own quad layer,
@@ -161,6 +165,9 @@ pub struct App {
     perf_shown: ui::perf::Overlay,
     sub_key: String,
     sub_textures: Vec<egui::TextureHandle>,
+    /// How many pixels of an eye image make a unit of tangent, as last
+    /// reported (see [`FrameInput::eye_px_per_tan`]).
+    sub_px_per_tan: Option<f32>,
     /// The subtitle panel holds a 3D video's pictures, an eye's on each half.
     subs_split: bool,
     /// Sets subtitle text in any script, once its fonts have loaded.
@@ -311,6 +318,7 @@ impl App {
             perf_shown: Default::default(),
             sub_key: String::new(),
             sub_textures: Vec::new(),
+            sub_px_per_tan: None,
             subs_split: false,
             sub_shaper: None,
             sub_fonts,

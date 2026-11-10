@@ -641,7 +641,7 @@ impl App {
                 let rel = anchor_rot.inverse() * rot;
                 p.player.set_head_orientation(rel.to_array());
             }
-            self.subtitles(renderer, input.time, player, &s);
+            self.subtitles(renderer, input.time, player, &s, input.eye_px_per_tan);
         } else {
             self.subs.visible = false;
         }
@@ -726,6 +726,7 @@ impl App {
         time: f64,
         anchor: Mat4,
         s: &fp_core::view::ViewSettings,
+        px_per_tan: Option<f32>,
     ) {
         if self.sub_shaper.is_none() {
             self.sub_shaper = self.sub_fonts.poll().pop();
@@ -747,8 +748,26 @@ impl App {
         self.subs.visible = !cues.is_empty();
         let d = s.subtitle_distance.clamp(0.5, 20.0);
         let w = 0.9 * d;
-        self.subs.size = Vec2::new(w, w * 320.0 / 1600.0);
+        self.subs.size = Vec2::new(w, w * SUBTITLE_POINTS[1] / SUBTITLE_POINTS[0]);
         self.subs.pose = place(anchor, 0.0, d, -0.2 * d, 0.0);
+        // Painted at the size the eyes show it, so the glyphs are drawn
+        // sharp rather than drawn big and minified.
+        // The last size the eyes were known to have stands in while the runtime
+        // isn't asking for a picture.
+        self.sub_px_per_tan = px_per_tan.or(self.sub_px_per_tan);
+        let wanted = subtitle_px(self.sub_px_per_tan, self.subs.size.x / d, self.subs_split);
+        let px = settled_subtitle_px(self.subs.px, wanted);
+        if self.subs.visible && px != self.subs.px {
+            let ppp = px[0] as f32 / SUBTITLE_POINTS[0];
+            match self.subs.resize(renderer, px, ppp) {
+                Ok(()) => {
+                    log::debug!("subtitles painted at {}x{}", px[0], px[1]);
+                    // The new picture is empty.
+                    self.sub_key.clear();
+                }
+                Err(e) => log::error!("subtitles: {e}"),
+            }
+        }
         if key != self.sub_key && self.subs.visible {
             self.sub_key = key;
             let textures = &mut self.sub_textures;
@@ -766,6 +785,57 @@ impl App {
                 log::error!("subtitles: {e}");
             }
         }
+    }
+}
+
+/// The subtitle panel's layout in egui points, whatever its size in pixels.
+const SUBTITLE_POINTS: [f32; 2] = [1600.0, 320.0];
+/// The subtitle panel's width in pixels with no eye size to go by, and the most
+/// it is given.
+const SUBTITLE_PX_MAX: u32 = 1600;
+/// Widths are rounded up to a multiple of this.
+const SUBTITLE_PX_STEP: u32 = 32;
+/// The least it is given: smaller would be unreadable even if the eyes were
+/// that coarse.
+const SUBTITLE_PX_MIN: u32 = 480;
+/// Pixels painted for each eye pixel the panel covers: a little over one, so
+/// the glyphs are about as fine as the eye can show them and the eye pass
+/// reads the picture near its sharpest level.
+const SUBTITLE_PAINT_PER_EYE_PX: f32 = 1.25;
+
+/// The subtitle panel's picture size in pixels. `px_per_tan` is how many
+/// pixels of an eye image make a unit of tangent (see
+/// `fp_render::math::pixels_per_tan`), `tan_width` how many of those units the
+/// panel spans (its width over its distance), `split` that it holds a picture
+/// for each eye side by side, each as wide as one picture would be. With no
+/// eye size known the picture is the usual 1600 x 320.
+fn subtitle_px(px_per_tan: Option<f32>, tan_width: f32, split: bool) -> [u32; 2] {
+    let usual = [SUBTITLE_PX_MAX, SUBTITLE_POINTS[1] as u32];
+    let Some(per_tan) = px_per_tan.filter(|p| p.is_finite() && *p > 0.0) else {
+        return usual;
+    };
+    if !tan_width.is_finite() || tan_width <= 0.0 {
+        return usual;
+    }
+    let eye_px = tan_width * per_tan * SUBTITLE_PAINT_PER_EYE_PX;
+    let one = (eye_px.ceil() as u32)
+        .div_ceil(SUBTITLE_PX_STEP)
+        .saturating_mul(SUBTITLE_PX_STEP)
+        .clamp(SUBTITLE_PX_MIN, SUBTITLE_PX_MAX);
+    let width = if split { one * 2 } else { one };
+    // The panel keeps its shape.
+    let height = (width as f32 * SUBTITLE_POINTS[1] / SUBTITLE_POINTS[0]).round() as u32;
+    [width, height]
+}
+
+/// `wanted`, unless it is a small step down from `current`: a field of view
+/// that wavers by a few pixels would otherwise make the panel change size
+/// back and forth, each time a new picture to paint.
+fn settled_subtitle_px(current: [u32; 2], wanted: [u32; 2]) -> [u32; 2] {
+    if wanted[0] > current[0] || wanted[0] + 2 * SUBTITLE_PX_STEP <= current[0] {
+        wanted
+    } else {
+        current
     }
 }
 
@@ -877,6 +947,48 @@ fn perf_video(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtitles_are_painted_at_the_size_the_eyes_show_them() {
+        // A panel 0.9 of a unit of tangent across.
+        let px = |per_tan: Option<f32>, split| subtitle_px(per_tan, 0.9, split);
+        assert_eq!(px(None, false), [1600, 320], "no eye size known");
+        assert_eq!(px(None, true), [1600, 320]);
+        // 1440 pixel eyes (about 507 per tangent) and 2160 pixel eyes.
+        assert_eq!(px(Some(507.0), false), [576, 115]);
+        assert_eq!(px(Some(760.0), false), [864, 173]);
+        // Never finer than the usual size, nor coarser than readable.
+        assert_eq!(px(Some(4000.0), false), [1600, 320]);
+        assert_eq!(px(Some(100.0), false), [480, 96]);
+        // Each eye's half is as wide as one picture would be.
+        assert_eq!(px(Some(507.0), true), [1152, 230]);
+        assert_eq!(px(Some(4000.0), true), [3200, 640]);
+        // Nonsense falls back to the usual size.
+        for bad in [f32::NAN, 0.0, -3.0, f32::INFINITY] {
+            assert_eq!(px(Some(bad), false), [1600, 320], "{bad}");
+        }
+        assert_eq!(subtitle_px(Some(507.0), 0.0, false), [1600, 320]);
+        // Layout in points stays 1600 x 320 whatever the pixels.
+        let [w, h] = px(Some(507.0), false);
+        let ppp = w as f32 / SUBTITLE_POINTS[0];
+        assert!((h as f32 / ppp - SUBTITLE_POINTS[1]).abs() < 1.0);
+    }
+
+    #[test]
+    fn the_subtitle_panel_ignores_a_wavering_field_of_view() {
+        let size = |per_tan: f32| subtitle_px(Some(per_tan), 0.9, false);
+        let (at, one_up, two_up) = (size(507.0), size(520.0), size(550.0));
+        assert_eq!((at, one_up, two_up), ([576, 115], [608, 122], [640, 128]));
+        // A step up is taken at once, a single step down is not.
+        assert_eq!(settled_subtitle_px(at, one_up), one_up);
+        assert_eq!(settled_subtitle_px(one_up, at), one_up);
+        // Two steps down are, and so is a change of kind such as 3D pictures.
+        assert_eq!(settled_subtitle_px(two_up, at), at);
+        let split = subtitle_px(Some(507.0), 0.9, true);
+        assert_eq!(settled_subtitle_px(at, split), split);
+        assert_eq!(settled_subtitle_px(split, at), at);
+        assert_eq!(settled_subtitle_px(at, at), at);
+    }
 
     #[test]
     fn a_toast_sits_above_the_bar_and_any_picker() {
