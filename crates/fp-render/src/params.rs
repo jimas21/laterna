@@ -307,9 +307,9 @@ pub(crate) fn build(
 
 /// Chroma (BT.709 Cb, Cr) of an sRGB-encoded colour, as the shader computes it
 /// from the video's samples.
-pub(crate) fn chroma(rgb: [f32; 3]) -> glam::Vec2 {
+pub(crate) fn chroma(rgb: [f32; 3]) -> Vec2 {
     let [r, g, b] = rgb;
-    glam::Vec2::new(
+    Vec2::new(
         -0.1146 * r - 0.3854 * g + 0.5 * b,
         0.5 * r - 0.4542 * g - 0.0458 * b,
     )

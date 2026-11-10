@@ -87,7 +87,7 @@ mod tests {
         assert!(layout.floor_y < 0.0 && layout.screen.is_none());
         assert_eq!(layout.seats.len(), 1);
         assert_eq!(layout.seats[0].eye, Vec3::ZERO);
-        let radius = |p: [f32; 3]| Vec3::from(p).xz().length();
+        let radius = |p: [f32; 3]| p[0].hypot(p[2]);
         let widest = data.vertices.iter().map(|v| radius(v.pos));
         let widest = widest.fold(0.0, f32::max);
         assert!((widest - FLOOR_RADIUS).abs() < 1e-3);
