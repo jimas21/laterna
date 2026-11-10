@@ -478,12 +478,22 @@ impl PlexAuthClient {
     /// Lists server resources only. Player devices commonly have null
     /// accessToken and must not make the entire response fail to parse.
     pub fn resources(&self, credentials: &PlexCredentials) -> Result<Vec<PlexResource>> {
+        self.resources_with(&credentials.client_identifier, &credentials.access_token)
+    }
+
+    /// The servers a plex.tv token can reach, for a token that is not the
+    /// saved account's: a Plex Home profile's own.
+    pub fn resources_with(
+        &self,
+        client_identifier: &str,
+        token: &str,
+    ) -> Result<Vec<PlexResource>> {
         let response = Self::json(
             &self.base,
             "GET",
             "/resources?includeHttps=1&includeRelay=1&includeIPv6=1",
-            &credentials.client_identifier,
-            Some(&credentials.access_token),
+            client_identifier,
+            Some(token),
             None,
         )?;
         let rows = response

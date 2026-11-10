@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::Url;
 
-use auth::{DEVICE, PRODUCT, PlexAuthClient, PlexConnection};
+use auth::{DEVICE, PRODUCT, PlexAuthClient, PlexConnection, PlexCredentials};
 
 const JSON_LIMIT: u64 = 32 << 20;
 const PAGE_LIMIT: usize = 200;
@@ -31,6 +31,9 @@ const PAGE_LIMIT: usize = 200;
 const LISTING_LIMIT: usize = 100_000;
 /// How long a connection that failed is tried after the others.
 const FAILED_FOR: Duration = Duration::from_secs(60);
+/// The least time between two questions to plex.tv about where a server is
+/// and which token it accepts, however many requests fail in between.
+const REDISCOVER_EVERY: Duration = Duration::from_secs(60);
 /// How long a video's details are reused: opening one reads them several
 /// times, each a round trip to the server.
 const METADATA_FRESH: Duration = Duration::from_secs(10);
@@ -81,6 +84,9 @@ pub struct PlexSource {
     unreachable: Mutex<Option<Instant>>,
     connecting: Mutex<()>,
     refreshing: Mutex<()>,
+    /// When plex.tv was last asked for this server's token and addresses, and
+    /// whether it answered (it can be unreachable while the server is not).
+    last_rediscovery: Mutex<Option<(Instant, bool)>>,
     auth_api: PlexAuthClient,
     changed: AtomicBool,
     versions: Mutex<HashMap<String, String>>,
@@ -112,6 +118,7 @@ impl PlexSource {
             unreachable: Default::default(),
             connecting: Mutex::new(()),
             refreshing: Mutex::new(()),
+            last_rediscovery: Mutex::new(None),
             auth_api: PlexAuthClient::new(),
             changed: AtomicBool::new(false),
             versions: Default::default(),
@@ -119,6 +126,15 @@ impl PlexSource {
             facets: Default::default(),
             encoding: Default::default(),
         })
+    }
+
+    /// Asks another account API instead of plex.tv. For protocol tests, which
+    /// can only reach a loopback one (see [`PlexAuthClient::with_test_endpoint`]).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_auth_api(mut self, api: PlexAuthClient) -> Self {
+        self.auth_api = api;
+        self
     }
 
     /// Tests credentials and server identity, returning the chosen connection
@@ -159,27 +175,41 @@ impl PlexSource {
         )
     }
 
-    fn refresh(&self, force: bool) -> Result<()> {
+    /// Brings the saved sign-in up to date. `Ok(true)` means the token or the
+    /// addresses were replaced, so what failed is worth trying again.
+    ///
+    /// A device key renews through its signed assertion. A code link has none,
+    /// and its token does not expire on a schedule: it only stops working, and
+    /// then, when forced (the server answered 401 or 498), the account is asked
+    /// for the server's current token and addresses. A pasted token has no
+    /// account to ask.
+    ///
+    /// `stale` is the token a forced call was refused with. Reads run in
+    /// parallel and all fail with the same dead token; once one of them has
+    /// renewed it, the others find a different token here and just retry.
+    fn refresh(&self, force: bool, stale: Option<&str>) -> Result<bool> {
         let _guard = lock(&self.refreshing);
         let before = lock(&self.config).clone();
         let Some(auth) = &before.auth else {
-            return Ok(());
+            return Ok(false);
         };
+        if force && stale.is_some_and(|token| token != before.access_token) {
+            return Ok(true);
+        }
+        if auth.device_key.is_none() {
+            return if force {
+                self.rediscover(&before, auth)
+            } else {
+                Ok(false)
+            };
+        }
         let now = unix_now();
         if !force
             && auth
                 .expires_at
                 .is_none_or(|at| at > now.saturating_add(120))
         {
-            return Ok(());
-        }
-        // A pasted token has no registered device key, so cannot be refreshed.
-        if auth.device_key.is_none() {
-            return if force {
-                Err(Error::SignedOut(self.name.clone()))
-            } else {
-                Ok(())
-            };
+            return Ok(false);
         }
         let credentials = self.auth_api.refresh(auth)?;
         let resources = self.auth_api.resources(&credentials)?;
@@ -195,21 +225,101 @@ impl PlexSource {
             .unwrap_or_else(|| credentials.access_token.clone());
         config.auth = Some(credentials);
         config.connections = resource.connections;
+        self.reset_connections();
+        Ok(true)
+    }
+
+    /// Asks the account where the server is now, for a server none of whose
+    /// addresses answered. Nothing happens for a source without an account or
+    /// with a device key (which renews in [`Self::refresh`]).
+    fn refresh_connections(&self) -> Result<bool> {
+        let _guard = lock(&self.refreshing);
+        let before = lock(&self.config).clone();
+        match &before.auth {
+            Some(auth) if auth.device_key.is_none() => self.rediscover(&before, auth),
+            _ => Ok(false),
+        }
+    }
+
+    /// Reads this server's current token and addresses from the account, at
+    /// most once per [`REDISCOVER_EVERY`]. `Ok(true)` when either changed.
+    ///
+    /// The account refusing the token is [`Error::SignedOut`]. plex.tv being
+    /// out of reach is its own error and never that: on the LAN the headset
+    /// keeps working without it. The caller holds `refreshing`.
+    fn rediscover(&self, before: &PlexConfig, auth: &PlexCredentials) -> Result<bool> {
+        if let Some((at, answered)) = *lock(&self.last_rediscovery)
+            && at.elapsed() < REDISCOVER_EVERY
+        {
+            return if answered {
+                Ok(false)
+            } else {
+                Err(account_unreachable())
+            };
+        }
+        // A Plex Home profile lists the servers with its own token.
+        let token = before
+            .profile
+            .as_ref()
+            .map(|p| p.token.as_str())
+            .filter(|t| !t.is_empty())
+            .unwrap_or(&auth.access_token);
+        let api = &self.auth_api;
+        let listed = api.resources_with(&auth.client_identifier, token);
+        let answered = match &listed {
+            Ok(_) => true,
+            Err(e) => account_refused(e),
+        };
+        *lock(&self.last_rediscovery) = Some((Instant::now(), answered));
+        let resources = match listed {
+            Err(e) if account_refused(&e) => return Err(Error::SignedOut(self.name.clone())),
+            listed => listed?,
+        };
+        let resource = resources
+            .into_iter()
+            .find(|r| r.machine_identifier == before.machine_identifier)
+            .ok_or_else(|| {
+                Error::Auth("Plex account no longer has access to this server".into())
+            })?;
+        let access_token = resource.access_token.unwrap_or_else(|| token.to_owned());
+        let mut config = lock(&self.config);
+        if config.access_token == access_token && config.connections == resource.connections {
+            return Ok(false);
+        }
+        config.access_token = access_token;
+        config.connections = resource.connections;
+        self.reset_connections();
+        Ok(true)
+    }
+
+    /// Forgets the chosen address and what failed, and has the new settings
+    /// saved by [`Source::updated_config`].
+    fn reset_connections(&self) {
         *lock(&self.endpoint) = None;
         lock(&self.failed_connections).clear();
         *lock(&self.unreachable) = None;
         self.changed.store(true, Ordering::Release);
-        Ok(())
     }
 
     fn client(&self) -> Result<Endpoint> {
-        self.refresh(false)?;
+        self.refresh(false, None)?;
+        let stale = lock(&self.config).access_token.clone();
         match self.connect_client() {
-            Err(Error::SignedOut(_)) => {
-                self.refresh(true)?;
-                self.connect_client()
+            Err(Error::SignedOut(name)) => {
+                if self.refresh(true, Some(&stale))? {
+                    self.connect_client()
+                } else {
+                    Err(Error::SignedOut(name))
+                }
             }
-            result => result,
+            // None of the addresses answered: the server may have moved, or
+            // the headset left home.
+            Err(error) => match self.refresh_connections() {
+                Ok(true) => self.connect_client(),
+                Err(signed_out @ Error::SignedOut(_)) => Err(signed_out),
+                Ok(false) | Err(_) => Err(error),
+            },
+            ok => ok,
         }
     }
 
@@ -295,7 +405,7 @@ impl PlexSource {
                     JSON_LIMIT,
                 )
                 .and_then(|r| {
-                    if matches!(r.status, 401 | 498) && config.auth.is_some() {
+                    if matches!(r.status, 401 | 498) {
                         Err(Error::SignedOut(self.name.clone()))
                     } else {
                         r.error_for_status(&base)
@@ -327,18 +437,23 @@ impl PlexSource {
         let mut renewed = false;
         let mut reconnected = false;
         loop {
+            // The token the cached address is about to be asked with.
+            let stale = lock(&self.config).access_token.clone();
             let endpoint = self.client()?;
             let url = resource_url(&endpoint.base, path)?;
             let reply = endpoint
                 .client
                 .request(method, &url, headers, None, JSON_LIMIT);
-            if !renewed
-                && reply.as_ref().is_ok_and(|r| matches!(r.status, 401 | 498))
-                && lock(&self.config).auth.is_some()
-            {
-                self.refresh(true)?;
-                renewed = true;
-                continue;
+            if reply.as_ref().is_ok_and(|r| matches!(r.status, 401 | 498)) {
+                // Renewed once already, or nothing to renew with (a pasted
+                // token, or the account gave the same one back): the server
+                // will not take this sign-in.
+                let renewable = lock(&self.config).auth.is_some();
+                if !renewed && renewable && self.refresh(true, Some(&stale))? {
+                    renewed = true;
+                    continue;
+                }
+                return Err(Error::SignedOut(self.name.clone()));
             }
             // A cached LAN address can disappear when the headset leaves
             // home. Retry reads through another identity-checked connection.
@@ -593,6 +708,23 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
+
+/// Whether plex.tv answered, and said this token is not accepted.
+fn account_refused(error: &Error) -> bool {
+    match error {
+        Error::Auth(_) => true,
+        Error::HttpStatus { status, .. } => matches!(status, 401 | 498),
+        _ => false,
+    }
+}
+
+fn account_unreachable() -> Error {
+    Error::Http {
+        url: "plex.tv".into(),
+        message: "the Plex account could not be reached".into(),
+    }
+}
+
 fn container(value: &Value) -> &Value {
     get(value, "MediaContainer").unwrap_or(value)
 }
