@@ -38,6 +38,8 @@ const METADATA_FRESH: Duration = Duration::from_secs(10);
 const POSTER: (u32, u32) = (480, 480);
 const LANDSCAPE: (u32, u32) = (640, 640);
 const BACKDROP: (u32, u32) = (1280, 720);
+/// A library's tile on My Media: 16:9, so a picture is not cropped to it twice.
+const LIBRARY_TILE: (u32, u32) = (640, 360);
 /// How long a server none of whose addresses answered isn't asked again. Each
 /// silent address takes seconds, and a grid of posters would queue behind them.
 const UNREACHABLE_FOR: Duration = Duration::from_secs(3);
