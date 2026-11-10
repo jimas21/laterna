@@ -283,10 +283,13 @@ jobs:
           - os: windows-latest
             name: frameplayerx-install-windows-x86_64
             exe: frameplayerx-install.exe
-          # Pinned: macos-latest went three runs without a runner on 2026-11-10.
-          - os: macos-15
+          # Built on an Intel Mac for Apple silicon: GitHub's arm64 Mac runners
+          # went four runs without capacity on 2026-11-10 ("not acquired by
+          # Runner of type hosted"); the Intel pool is separate.
+          - os: macos-15-intel
             name: frameplayerx-install-macos-arm64
             exe: frameplayerx-install
+            target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -302,12 +305,22 @@ jobs:
           key: cargo-installer-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-installer-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
       - run: cargo test -p frameplayerx-install
-      - run: cargo build --release -p frameplayerx-install
+      - name: Build
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            rustup target add "${{ matrix.target }}"
+            cargo build --release -p frameplayerx-install --target "${{ matrix.target }}"
+          else
+            cargo build --release -p frameplayerx-install
+          fi
       - name: Stage
         shell: bash
         run: |
           mkdir -p out
-          cp "target/release/${{ matrix.exe }}" "out/${{ matrix.name }}${{ endsWith(matrix.exe, '.exe') && '.exe' || '' }}"
+          dir=target/release
+          if [ -n "${{ matrix.target }}" ]; then dir="target/${{ matrix.target }}/release"; fi
+          cp "$dir/${{ matrix.exe }}" "out/${{ matrix.name }}${{ endsWith(matrix.exe, '.exe') && '.exe' || '' }}"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
