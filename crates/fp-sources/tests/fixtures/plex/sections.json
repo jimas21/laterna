@@ -1,0 +1,44 @@
+{
+  "MediaContainer": {
+    "size": 5,
+    "Directory": [
+      {
+        "key": "1",
+        "type": "movie",
+        "title": "Films",
+        "thumb": "/:/resources/movie.png",
+        "art": "/:/resources/movie-fanart.jpg",
+        "composite": "/library/sections/1/composite/1700000000"
+      },
+      {
+        "key": "2",
+        "type": "show",
+        "title": "Series",
+        "thumb": "/library/sections/2/thumb/1700000003",
+        "art": "/library/sections/2/art/1700000001",
+        "composite": "/library/sections/2/composite/1700000002"
+      },
+      {
+        "key": "3",
+        "type": "video",
+        "title": "Clips",
+        "thumb": "/:/resources/video.png",
+        "art": "/:/resources/video-fanart.jpg"
+      },
+      {
+        "key": "4",
+        "type": "show",
+        "title": "Cartoons",
+        "thumb": "/library/sections/4/thumb/1700000004",
+        "art": "/:/resources/show-fanart.jpg"
+      },
+      {
+        "key": "5",
+        "type": "artist",
+        "title": "Songs",
+        "thumb": "/library/sections/5/thumb/1700000005",
+        "composite": "/library/sections/5/composite/1700000006"
+      }
+    ]
+  }
+}

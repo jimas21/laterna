@@ -50,12 +50,12 @@ mod xml;
 pub use cache::{CacheOptions, CacheStats};
 pub use catalog::{
     Catalog, CatalogCapabilities, CatalogFacets, CatalogFilter, CatalogHome, CatalogItem,
-    CatalogKind, CatalogPage, CatalogQuery, CatalogSort, CatalogVersion,
+    CatalogKind, CatalogPage, CatalogQuery, CatalogRow, CatalogSort, CatalogVersion, RowShape,
 };
 pub use config::{
     CardRef, Credentials, DlnaConfig, FeedConfig, HttpConfig, LibraryConfig, LocalConfig,
     MediaBrowserConfig, PlexConfig, SmbConfig, SourceConfig, SourceKind, default_config_path,
-    load_configs, save_configs,
+    load_configs, save_configs, write_private,
 };
 pub use dlna::{DlnaDevice, DlnaSource, SsdpResponse, discover};
 pub use error::{Error, Result};

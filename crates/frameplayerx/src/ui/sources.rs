@@ -593,7 +593,7 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
         ),
     };
     let save = if f.kind == SourceKind::Plex {
-        super::plex::form(ui, f, id, v.actions)
+        super::plex::form(ui, f, id, &configs, v.actions)
     } else if let Some(SourceConfig::Dlna(_)) = &editing {
         dlna_edit_form(ui, f, id)
     } else if f.kind == SourceKind::Dlna {
@@ -1453,6 +1453,7 @@ mod tests {
             max_height: None,
             local_only: false,
             allow_relay: true,
+            ..Default::default()
         };
         let saved = SourceConfig::Plex(cfg.clone());
         let form = edit_form(&saved);

@@ -405,6 +405,7 @@ impl App {
         app.check_last_run();
         app.scan_libraries(|_| true, false, false);
         app.connect_devices();
+        app.plex_name_accounts();
         if app.settings.check_updates && fp_updater::RELEASE_PUBLIC_KEY.is_some() {
             app.check_updates();
             app.start_check = Some(app.update_check);

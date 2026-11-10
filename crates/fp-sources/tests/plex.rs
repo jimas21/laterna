@@ -106,6 +106,7 @@ fn config(server: &TestServer) -> PlexConfig {
         max_height: None,
         local_only: false,
         allow_relay: true,
+        ..Default::default()
     }
 }
 
@@ -199,7 +200,7 @@ fn traditional_link_discovers_the_server_token_and_reads_authenticated_media() {
 
 #[test]
 fn a_rejected_traditional_link_requires_relinking_without_a_jwt_refresh() {
-    use fp_sources::plex::auth::PlexCredentials;
+    use fp_sources::plex::auth::{PlexAuthClient, PlexCredentials};
 
     for status in [401, 498] {
         let server = TestServer::start(move |request| {
@@ -209,16 +210,19 @@ fn a_rejected_traditional_link_requires_relinking_without_a_jwt_refresh() {
                 resp(status, "token rejected", &[])
             }
         });
+        // The account no longer accepts the token either.
+        let account = TestServer::start(|_| resp(401, "unauthorized", &[]));
         let mut cfg = config(&server);
         cfg.auth = Some(PlexCredentials::manual(
             "account-secret".into(),
             "linked-client".into(),
         ));
-        assert!(matches!(
-            PlexSource::new(&cfg).unwrap().probe(),
-            Err(fp_sources::Error::SignedOut(_))
-        ));
+        let api = PlexAuthClient::with_test_endpoint(&account.base).unwrap();
+        let source = PlexSource::new(&cfg).unwrap().with_auth_api(api);
+        let result = source.probe();
+        assert!(matches!(result, Err(fp_sources::Error::SignedOut(_))));
         assert_eq!(server.requests().len(), 2, "no repeated server requests");
+        assert_eq!(account.requests().len(), 1, "the account is asked once");
     }
 }
 

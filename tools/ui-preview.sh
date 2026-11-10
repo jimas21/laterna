@@ -98,6 +98,25 @@ PLEX_ITEMS = [{
                "Part": [{"key": "/plex-media/preview.mp4", "file": item["Path"]}]}],
 } for i, item in enumerate(LATEST_VR)]
 
+# What a Plex server arranged for its front page: a row of its newest, a
+# collection promoted with its own picture, and its collections.
+PLEX_COLLECTIONS = [{
+    "ratingKey": str(900 + i), "type": "collection", "subtype": "movie", "title": title,
+    "childCount": "3", "thumb": f"/plex-images/{image}", "art": f"/plex-images/{image}",
+} for i, (title, image) in enumerate([("Weekend trips", "v_mountain"), ("Night owls", "v_city")])]
+
+PLEX_HUBS = {"MediaContainer": {"Hub": [
+    {"hubIdentifier": "movie.recentlyadded.1", "title": "Recently Added Movies", "type": "movie",
+     "context": "hub.movie.recentlyadded", "key": "/hubs/home/recentlyAdded?type=1&sectionID=1",
+     "more": True, "librarySectionID": 1, "Metadata": PLEX_ITEMS[:4]},
+    {"hubIdentifier": "custom.collection.1.900", "title": "Weekend trips", "type": "movie",
+     "context": "hub.custom.collection", "key": "/library/collections/900/children",
+     "more": True, "librarySectionID": 1, "Metadata": PLEX_ITEMS[1:5]},
+    {"hubIdentifier": "library.collections.1", "title": "Collections", "type": "collection",
+     "context": "hub.library.collections", "key": "/library/sections/1/all?type=18",
+     "more": False, "librarySectionID": 1, "Metadata": PLEX_COLLECTIONS},
+]}}
+
 # The people a search finds (one without a picture); each is in a few videos.
 PEOPLE = [
     {"Id": "p_riley", "Name": "Riley Brooks", "Type": "Person", "ImageTags": {"Primary": "r"}},
@@ -175,6 +194,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = {"MediaContainer": {"friendlyName": "Plex"}}
         elif path == "/library/sections":
             body = {"MediaContainer": {"Directory": [{"key": "1", "type": "movie", "title": "Personal videos", "thumb": "/plex-images/v_sunset"}]}}
+        elif path == "/library/sections/1/all" and q.get("type") == ["18"]:
+            body = {"MediaContainer": {"Metadata": PLEX_COLLECTIONS, "offset": 0, "totalSize": len(PLEX_COLLECTIONS)}}
+        elif path in ("/hubs/promoted", "/hubs", "/hubs/sections/1"):
+            body = PLEX_HUBS
+        elif path == "/hubs/home/recentlyAdded" or (path.startswith("/library/collections/") and path.endswith("/children")):
+            start = int(q.get("X-Plex-Container-Start", [0])[0])
+            size = int(q.get("X-Plex-Container-Size", [60])[0])
+            body = {"MediaContainer": {"Metadata": PLEX_ITEMS[start:start + size], "offset": start, "totalSize": len(PLEX_ITEMS)}}
         elif path == "/library/sections/1/all":
             start = int(q.get("X-Plex-Container-Start", [0])[0])
             size = int(q.get("X-Plex-Container-Size", [60])[0])
@@ -609,6 +636,12 @@ panel main plex-grid
 filters
 wait 1
 panel main plex-filters
+open-source plex
+wait 2
+point main 0.6 0.6
+stick 0 -1 30
+frames 8
+panel main plex-home-rows
 open-source plex
 wait 1
 catalog-search sunset

@@ -380,6 +380,12 @@ pub enum Action {
         pin: fp_sources::plex::auth::PlexPin,
     },
     PlexConnect(fp_sources::PlexConfig),
+    /// Tests every server switched on in the Plex list and adds those that
+    /// answer, together.
+    PlexAddServers {
+        generation: u64,
+        configs: Vec<fp_sources::PlexConfig>,
+    },
     AddDevice(HapticDeviceConfig),
     RemoveDevice(usize),
     ReconnectDevices,

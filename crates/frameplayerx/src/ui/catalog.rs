@@ -12,7 +12,7 @@ use crate::playback::OpenRequest;
 use egui::{Align2, Color32, RichText, Sense, Vec2};
 use fp_sources::{
     Catalog, CatalogCapabilities, CatalogFacets, CatalogFilter, CatalogHome, CatalogItem,
-    CatalogKind, CatalogPage, CatalogQuery, CatalogSort,
+    CatalogKind, CatalogPage, CatalogQuery, CatalogRow, CatalogSort, RowShape,
 };
 use std::time::{Duration, Instant};
 
@@ -90,6 +90,9 @@ pub struct Grid {
     pub base_tags: Vec<String>,
     /// Sorted or filtered anew: the grid goes back to its top.
     pub to_top: bool,
+    /// The listing began in the server's own order (a collection, a
+    /// playlist or a row's "See all"), which stays one of its sorts.
+    pub server_order: bool,
 }
 
 /// A grid's genres, years, studios and tags, asked for when its Filters
@@ -115,6 +118,7 @@ impl Grid {
         Grid {
             title,
             base_tags: query.tags.clone(),
+            server_order: query.sort == CatalogSort::Server,
             query,
             items: Vec::new(),
             total: 0,
@@ -576,6 +580,7 @@ impl CatalogView {
                         .iter_mut()
                         .chain(h.next_up.iter_mut())
                         .chain(h.latest.iter_mut().flat_map(|(_, l)| l.iter_mut()))
+                        .chain(h.rows.iter_mut().flat_map(|r| r.items.iter_mut()))
                     {
                         set(i);
                     }
@@ -625,6 +630,8 @@ enum Go {
     /// tallest that fits).
     Version(String, Option<String>),
     Search(String),
+    /// A row's whole listing, under the row's title.
+    SeeAll(String, CatalogQuery),
 }
 
 /// A server's page; true when Back was clicked.
@@ -816,6 +823,12 @@ fn follow(v: &mut View, source: &str, j: &mut CatalogView, go: Go) {
             ask(v, seq, load);
             j.open(seq, body);
         }
+        Go::SeeAll(title, query) => {
+            let seq = v.state.next_seq();
+            let (load, body) = see_all_page(title, query);
+            ask(v, seq, load);
+            j.open(seq, body);
+        }
         Go::Tag(tag) => {
             let seq = v.state.next_seq();
             let query = CatalogQuery {
@@ -828,6 +841,17 @@ fn follow(v: &mut View, source: &str, j: &mut CatalogView, go: Go) {
             j.open(seq, body);
         }
     }
+}
+
+/// What a row's "See all" loads, and the grid that shows it.
+fn see_all_page(title: String, query: CatalogQuery) -> (Load, Body) {
+    let query = CatalogQuery {
+        start: 0,
+        limit: PAGE,
+        ..query
+    };
+    let body = Body::Grid(Box::new(Grid::new(title, query.clone())));
+    (Load::Grid(query), body)
 }
 
 /// What opening a library, collection, folder, series or season loads,
@@ -941,7 +965,10 @@ fn card_facts(item: &CatalogItem) -> String {
                 _ => {}
             }
         }
-        CatalogKind::BoxSet | CatalogKind::Folder | CatalogKind::Library => {
+        CatalogKind::BoxSet
+        | CatalogKind::Folder
+        | CatalogKind::Library
+        | CatalogKind::Playlist => {
             if let Some(n) = item.child_count {
                 f.push(tr!("count-items", count = (n as usize)));
             }
@@ -990,6 +1017,7 @@ fn item_card(
     let placeholder = match item.kind {
         CatalogKind::Series | CatalogKind::Season => icons::MONITOR_PLAY,
         CatalogKind::Library | CatalogKind::Folder | CatalogKind::BoxSet => icons::FOLDERS,
+        CatalogKind::Playlist => icons::PLAYLIST,
         CatalogKind::Person => icons::USER,
         _ => icons::FILM_STRIP,
     };
@@ -1017,13 +1045,19 @@ fn item_card(
     )
 }
 
-/// What clicking a card in `list` does.
-fn card_go(c: page::CardResponse, list: &[CatalogItem], i: usize) -> Option<Go> {
+/// What clicking a card in `list` does. Played `alone`, a card plays only
+/// itself (Continue Watching and a server's rows: what follows it there is
+/// not what comes next); otherwise the rest of the list is queued after it.
+fn card_go(c: page::CardResponse, list: &[CatalogItem], i: usize, alone: bool) -> Option<Go> {
     let item = &list[i];
     if c.more {
         Some(Go::Details(item.clone()))
     } else if c.open && item.kind.playable() {
-        Some(Go::Play(list.to_vec(), i, false))
+        if alone {
+            Some(Go::Play(vec![item.clone()], 0, false))
+        } else {
+            Some(Go::Play(list.to_vec(), i, false))
+        }
     } else if c.open {
         Some(Go::Open(item.clone()))
     } else {
@@ -1031,31 +1065,99 @@ fn card_go(c: page::CardResponse, list: &[CatalogItem], i: usize) -> Option<Go> 
     }
 }
 
-/// A titled row of cards.
-fn item_row(
-    ui: &mut egui::Ui,
-    v: &mut View,
-    title: &str,
-    items: &[CatalogItem],
-    landscape: bool,
-) -> Option<Go> {
+/// A titled row of cards as a page draws it.
+struct Shelf<'a> {
+    /// Keys its scroll position.
+    id: String,
+    title: String,
+    items: &'a [CatalogItem],
+    /// One shape for the whole row; `None` lets each card pick its own.
+    shape: Option<RowShape>,
+    /// What "See all" opens, when the server has more.
+    more: Option<&'a CatalogQuery>,
+    /// Its cards play alone, see [`card_go`].
+    alone: bool,
+}
+
+impl<'a> Shelf<'a> {
+    fn new(id: &str, title: &str, items: &'a [CatalogItem], shape: Option<RowShape>) -> Self {
+        Shelf {
+            id: id.to_string(),
+            title: title.to_string(),
+            items,
+            shape,
+            more: None,
+            alone: false,
+        }
+    }
+
+    /// Whether card `i` is a poster.
+    fn portrait(&self, i: usize) -> bool {
+        match self.shape {
+            Some(shape) => shape == RowShape::Portrait,
+            None => self.items[i].kind.portrait(),
+        }
+    }
+}
+
+/// The rows of a server's front page in the order they are drawn: My
+/// Media, Continue Watching, then the server's own rows when it sent any,
+/// else the next episodes and the newest in each library.
+fn home_shelves(h: &CatalogHome) -> Vec<Shelf<'_>> {
+    let landscape = Some(RowShape::Landscape);
+    let my_media = Shelf::new("my-media", tr!("jf-my-media"), &h.libraries, landscape);
+    let mut resume = Shelf::new("continue", tr!("jf-continue"), &h.resume, landscape);
+    resume.alone = true;
+    let mut shelves = vec![my_media, resume];
+    if h.rows.is_empty() {
+        let next_up = Shelf::new("next-up", tr!("jf-next-up"), &h.next_up, landscape);
+        shelves.push(next_up);
+        for (library, items) in &h.latest {
+            let title = tr!("jf-latest-in", library = library.name.as_str());
+            let id = format!("latest:{}", library.id);
+            shelves.push(Shelf::new(&id, &title, items, None));
+        }
+    } else {
+        shelves.extend(h.rows.iter().map(row_shelf));
+    }
+    shelves
+}
+
+/// A server's row, drawn in the shape it chose.
+fn row_shelf(row: &CatalogRow) -> Shelf<'_> {
+    let id = format!("row:{}", row.id);
+    let mut shelf = Shelf::new(&id, &row.title, &row.items, Some(row.shape));
+    shelf.more = row.more.as_ref();
+    shelf.alone = true;
+    shelf
+}
+
+/// Draws a row; what clicking it asks for.
+fn shelf_view(ui: &mut egui::Ui, v: &mut View, shelf: &Shelf<'_>) -> Option<Go> {
     let mut go = None;
-    page::carousel(ui, title, None, items.len(), |ui, i| {
-        let portrait = !landscape && items[i].kind.portrait();
-        let c = item_card(ui, v, &items[i], portrait);
-        go = go.take().or_else(|| card_go(c, items, i));
+    let label = shelf.more.map(|_| tr!("catalog-see-all"));
+    let (items, alone) = (shelf.items, shelf.alone);
+    let (id, title, n) = (&shelf.id, &shelf.title, items.len());
+    let all = page::carousel_keyed(ui, id, title, None, n, label, |ui, i| {
+        let c = item_card(ui, v, &items[i], shelf.portrait(i));
+        go = go.take().or_else(|| card_go(c, items, i, alone));
     });
-    go
+    match (go, shelf.more) {
+        (None, Some(query)) if all => Some(Go::SeeAll(shelf.title.clone(), query.clone())),
+        (go, _) => go,
+    }
+}
+
+/// A titled row of cards, each in the shape its kind has.
+fn item_row(ui: &mut egui::Ui, v: &mut View, title: &str, items: &[CatalogItem]) -> Option<Go> {
+    shelf_view(ui, v, &Shelf::new(title, title, items, None))
 }
 
 fn home_rows(ui: &mut egui::Ui, v: &mut View, h: &CatalogHome) -> Option<Go> {
     ui.add_space(6.0);
-    let mut go = item_row(ui, v, tr!("jf-my-media"), &h.libraries, true);
-    go = go.or(item_row(ui, v, tr!("jf-continue"), &h.resume, true));
-    go = go.or(item_row(ui, v, tr!("jf-next-up"), &h.next_up, true));
-    for (library, items) in &h.latest {
-        let title = tr!("jf-latest-in", library = library.name.as_str());
-        go = go.or(item_row(ui, v, &title, items, false));
+    let mut go = None;
+    for shelf in home_shelves(h) {
+        go = go.or(shelf_view(ui, v, &shelf));
     }
     if h.libraries.is_empty() {
         page::empty_state(
@@ -1094,7 +1196,7 @@ fn search_results(
     ui.add_space(6.0);
     let mut go = None;
     for (section, items) in results {
-        go = go.or(item_row(ui, v, section, items, false));
+        go = go.or(item_row(ui, v, section, items));
     }
     if results.is_empty() && !loading {
         page::empty_state(
@@ -1106,6 +1208,24 @@ fn search_results(
         );
     }
     go
+}
+
+/// The orders a listing offers, the server's own first when it began in it.
+fn sorts(server_order: bool) -> Vec<(CatalogSort, &'static str)> {
+    let mut sorts = Vec::new();
+    if server_order {
+        sorts.push((CatalogSort::Server, tr!("sort-server-order")));
+    }
+    sorts.extend([
+        (CatalogSort::Name, tr!("sort-title")),
+        (CatalogSort::Added, tr!("sort-date-added")),
+        (CatalogSort::Released, tr!("sort-release-date")),
+        (CatalogSort::Rating, tr!("filter-rating")),
+        (CatalogSort::Runtime, tr!("filter-length")),
+        (CatalogSort::LastWatched, tr!("sort-last-watched")),
+        (CatalogSort::Random, tr!("sort-shuffle")),
+    ]);
+    sorts
 }
 
 /// A searchable, sortable, filterable listing, loading more as its end
@@ -1144,30 +1264,19 @@ fn grid(
     });
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        if page::sort_bar(
-            ui,
-            &[
-                (CatalogSort::Name, tr!("sort-title")),
-                (CatalogSort::Added, tr!("sort-date-added")),
-                (CatalogSort::Released, tr!("sort-release-date")),
-                (CatalogSort::Rating, tr!("filter-rating")),
-                (CatalogSort::Runtime, tr!("filter-length")),
-                (CatalogSort::LastWatched, tr!("sort-last-watched")),
-                (CatalogSort::Random, tr!("sort-shuffle")),
-            ],
-            &mut g.query.sort,
-        ) {
+        if page::sort_bar(ui, &sorts(g.server_order), &mut g.query.sort) {
             g.query.descending = g.query.sort.default_descending();
             changed = true;
         }
-        changed |= if g.query.sort == CatalogSort::Random {
-            page::shuffle_again(ui)
-        } else {
-            page::direction(
+        changed |= match g.query.sort {
+            CatalogSort::Random => page::shuffle_again(ui),
+            // The server's order has no other way round.
+            CatalogSort::Server => false,
+            _ => page::direction(
                 ui,
                 &mut g.query.descending,
                 [tr!("sort-largest-first"), tr!("sort-smallest-first")],
-            )
+            ),
         };
         page::count_label(ui, &tr!("count-items", count = g.total));
     });
@@ -1220,7 +1329,7 @@ fn grid(
     };
     page::grid(ui, items.len(), width, |ui, i| {
         let c = item_card(ui, v, &items[i], portrait);
-        go = go.take().or_else(|| card_go(c, items, i));
+        go = go.take().or_else(|| card_go(c, items, i, false));
     });
     if items.len() < g.total && page::load_more(ui, loading) {
         go = Some(Go::Reload(Load::Grid(g.next_page())));
@@ -2183,6 +2292,147 @@ mod tests {
         let (seq, load) = j.reload().unwrap();
         assert_eq!(seq, 2);
         assert!(matches!(load, Load::Search(t) if t == "aliens"));
+    }
+
+    fn row(id: &str, title: &str, kind: CatalogKind) -> CatalogRow {
+        let items = vec![item(&format!("{id}-1"), kind)];
+        CatalogRow {
+            id: id.into(),
+            title: title.into(),
+            shape: RowShape::of(&items),
+            items,
+            ..CatalogRow::default()
+        }
+    }
+
+    fn home_with(rows: Vec<CatalogRow>) -> CatalogHome {
+        let library = item("lib", CatalogKind::Library);
+        CatalogHome {
+            libraries: vec![library.clone()],
+            resume: vec![item("e1", CatalogKind::Episode)],
+            next_up: vec![item("n1", CatalogKind::Episode)],
+            latest: vec![(library, vec![item("m1", CatalogKind::Movie)])],
+            rows,
+        }
+    }
+
+    fn shelf_ids(h: &CatalogHome) -> Vec<String> {
+        home_shelves(h).into_iter().map(|s| s.id).collect()
+    }
+
+    #[test]
+    fn server_rows_replace_latest_and_keep_their_order() {
+        assert_eq!(
+            shelf_ids(&home_with(Vec::new())),
+            ["my-media", "continue", "next-up", "latest:lib"],
+            "a server without rows keeps the old front page"
+        );
+        let h = home_with(vec![
+            row("b", "Second in the list", CatalogKind::Movie),
+            row("a", "First in the alphabet", CatalogKind::Episode),
+        ]);
+        assert_eq!(shelf_ids(&h), ["my-media", "continue", "row:b", "row:a"]);
+        let shelves = home_shelves(&h);
+        assert_eq!(shelves[2].title, "Second in the list");
+        assert_eq!(shelves[2].shape, Some(RowShape::Portrait));
+        assert!(shelves[2].portrait(0));
+        assert_eq!(shelves[3].shape, Some(RowShape::Landscape));
+        assert!(!shelves[3].portrait(0));
+    }
+
+    #[test]
+    fn marks_reach_server_rows() {
+        let mut j = CatalogView::new(1);
+        let h = home_with(vec![row("a", "Row", CatalogKind::Movie)]);
+        j.loaded(1, Ok(Loaded::Home(h)));
+        j.mark("a-1", Mark::Played, true);
+        j.mark("a-1", Mark::Favorite, true);
+        let Body::Home { home: Some(h), .. } = &j.pages[0].body else {
+            panic!()
+        };
+        assert!(h.rows[0].items[0].played && h.rows[0].items[0].favorite);
+        assert!(!h.resume[0].played);
+    }
+
+    #[test]
+    fn a_home_row_card_plays_alone() {
+        let list: Vec<CatalogItem> = ["m1", "m2", "m3"]
+            .iter()
+            .map(|id| item(id, CatalogKind::Movie))
+            .collect();
+        let click = page::CardResponse {
+            open: true,
+            ..page::CardResponse::default()
+        };
+        let Some(Go::Play(alone, at, false)) = card_go(click, &list, 1, true) else {
+            panic!()
+        };
+        assert_eq!((alone.len(), at, alone[0].id.as_str()), (1, 0, "m2"));
+        let Some(Go::Play(queued, at, false)) = card_go(click, &list, 1, false) else {
+            panic!()
+        };
+        assert_eq!((queued.len(), at), (3, 1));
+        // A folder opens whichever way, a click elsewhere on the card is no play.
+        let folder = [item("c1", CatalogKind::BoxSet)];
+        assert!(matches!(
+            card_go(click, &folder, 0, true),
+            Some(Go::Open(_))
+        ));
+        assert!(card_go(page::CardResponse::default(), &list, 0, true).is_none());
+
+        let h = home_with(vec![row("a", "Row", CatalogKind::Movie)]);
+        let alone: Vec<bool> = home_shelves(&h).iter().map(|s| s.alone).collect();
+        assert_eq!(alone, [false, true, true]);
+        let old: Vec<bool> = home_shelves(&home_with(Vec::new()))
+            .iter()
+            .map(|s| s.alone)
+            .collect();
+        assert_eq!(old, [false, true, false, false]);
+    }
+
+    #[test]
+    fn see_all_opens_the_rows_listing() {
+        let more = CatalogQuery {
+            hub: Some("/hubs/made-up/rows".into()),
+            sort: CatalogSort::Server,
+            limit: 12,
+            start: 12,
+            ..CatalogQuery::default()
+        };
+        let mut a = row("a", "Row title", CatalogKind::Movie);
+        a.more = Some(more.clone());
+        let b = row("b", "Complete row", CatalogKind::Movie);
+        let h = home_with(vec![a, b]);
+        let shelves = home_shelves(&h);
+        assert_eq!(shelves[2].more, Some(&more));
+        assert!(shelves[3].more.is_none(), "a complete row has no See all");
+
+        let (load, body) = see_all_page("Row title".into(), more.clone());
+        let Load::Grid(q) = load else { panic!() };
+        assert_eq!(q.hub, more.hub);
+        assert_eq!((q.start, q.limit, q.sort), (0, PAGE, CatalogSort::Server));
+        let Body::Grid(g) = body else { panic!() };
+        assert_eq!(g.title, "Row title");
+        assert!(g.server_order);
+        assert_eq!(g.query, q);
+    }
+
+    #[test]
+    fn the_servers_order_is_offered_first_where_the_listing_began_in_it() {
+        assert_eq!(sorts(true)[0].0, CatalogSort::Server);
+        assert_eq!(sorts(true).len(), sorts(false).len() + 1);
+        assert!(sorts(false).iter().all(|s| s.0 != CatalogSort::Server));
+        let collection = CatalogQuery::children(&item("c1", CatalogKind::BoxSet));
+        assert!(Grid::new("Collection".into(), collection).server_order);
+        assert!(!Grid::new("Movies".into(), CatalogQuery::default()).server_order);
+    }
+
+    #[test]
+    fn a_playlist_is_a_landscape_card_with_its_item_count() {
+        let mut list = item("p1", CatalogKind::Playlist);
+        list.child_count = Some(3);
+        assert_eq!(card_facts(&list), "3 items");
+        assert!(!list.kind.portrait() && !list.kind.playable());
     }
 
     #[test]

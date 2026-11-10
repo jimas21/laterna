@@ -1,0 +1,45 @@
+{
+  "MediaContainer": {
+    "size": 3,
+    "totalSize": 3,
+    "offset": 0,
+    "Metadata": [
+      {
+        "ratingKey": "105",
+        "type": "movie",
+        "title": "Film Five",
+        "year": 2019,
+        "duration": 6000000,
+        "viewCount": 0,
+        "librarySectionID": 1,
+        "addedAt": 1700000105,
+        "thumb": "/library/metadata/105/thumb/170000105",
+        "art": "/library/metadata/105/art/170000105"
+      },
+      {
+        "ratingKey": "103",
+        "type": "movie",
+        "title": "Film Three",
+        "year": 2019,
+        "duration": 6000000,
+        "viewCount": 0,
+        "librarySectionID": 1,
+        "addedAt": 1700000103,
+        "thumb": "/library/metadata/103/thumb/170000103",
+        "art": "/library/metadata/103/art/170000103"
+      },
+      {
+        "ratingKey": "104",
+        "type": "movie",
+        "title": "Film Four",
+        "year": 2019,
+        "duration": 6000000,
+        "viewCount": 0,
+        "librarySectionID": 1,
+        "addedAt": 1700000104,
+        "thumb": "/library/metadata/104/thumb/170000104",
+        "art": "/library/metadata/104/art/170000104"
+      }
+    ]
+  }
+}

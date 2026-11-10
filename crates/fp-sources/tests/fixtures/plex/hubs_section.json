@@ -1,0 +1,99 @@
+{
+  "MediaContainer": {
+    "size": 3,
+    "allowSync": false,
+    "identifier": "com.plexapp.plugins.library",
+    "Hub": [
+      {
+        "hubIdentifier": "movie.inprogress.1",
+        "title": "Continue Watching",
+        "type": "movie",
+        "context": "hub.movie.inprogress",
+        "size": 1,
+        "more": false,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/sections/1/continueWatching",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "107",
+            "type": "movie",
+            "title": "Film Seven",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000107,
+            "thumb": "/library/metadata/107/thumb/170000107",
+            "art": "/library/metadata/107/art/170000107"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "movie.recentlyreleased.1",
+        "title": "Recently Released Movies",
+        "type": "movie",
+        "context": "hub.movie.recentlyreleased",
+        "size": 2,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/sections/1/released",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "108",
+            "type": "movie",
+            "title": "Film Eight",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000108,
+            "thumb": "/library/metadata/108/thumb/170000108",
+            "art": "/library/metadata/108/art/170000108"
+          },
+          {
+            "ratingKey": "109",
+            "type": "movie",
+            "title": "Film Nine",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000109,
+            "thumb": "/library/metadata/109/thumb/170000109",
+            "art": "/library/metadata/109/art/170000109"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "custom.collection.1.100",
+        "title": "Staff Picks",
+        "type": "movie",
+        "context": "hub.custom.collection",
+        "size": 1,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/library/collections/100/children",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "104",
+            "type": "movie",
+            "title": "Film Four",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000104,
+            "thumb": "/library/metadata/104/thumb/170000104",
+            "art": "/library/metadata/104/art/170000104"
+          }
+        ]
+      }
+    ]
+  }
+}

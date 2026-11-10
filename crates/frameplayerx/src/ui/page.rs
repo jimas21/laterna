@@ -947,12 +947,29 @@ pub fn carousel(
     title: &str,
     count: Option<usize>,
     n: usize,
-    mut add: impl FnMut(&mut egui::Ui, usize),
+    add: impl FnMut(&mut egui::Ui, usize),
 ) {
+    carousel_keyed(ui, title, title, count, n, None, add);
+}
+
+/// [`carousel`] that keeps its scroll position under `id`, not its title
+/// (two servers' "Recently Added Movies" are two rows), and ends in a "See
+/// all" card labelled `more` when there is one; true when that card was
+/// clicked.
+pub fn carousel_keyed(
+    ui: &mut egui::Ui,
+    id: &str,
+    title: &str,
+    count: Option<usize>,
+    n: usize,
+    more: Option<&str>,
+    mut add: impl FnMut(&mut egui::Ui, usize),
+) -> bool {
     if n == 0 {
-        return;
+        return false;
     }
     section_title(ui, title, count);
+    let mut see_all = false;
     // Room for a pointed-at card, as in `scroll`, and above it for its lift.
     egui::Frame::new()
         .outer_margin(egui::Margin {
@@ -963,7 +980,7 @@ pub fn carousel(
         })
         .show(ui, |ui| {
             egui::ScrollArea::horizontal()
-                .id_salt(title)
+                .id_salt(id)
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show_rail(ui, |ui| {
                     egui::Frame::new()
@@ -979,11 +996,57 @@ pub fn carousel(
                                 for i in 0..n {
                                     add(ui, i);
                                 }
+                                if let Some(label) = more {
+                                    see_all = see_all_card(ui, label);
+                                }
                             });
                         });
                 });
         });
     ui.add_space(18.0);
+    see_all
+}
+
+/// Width of a row's "See all" card.
+const SEE_ALL_WIDTH: f32 = 132.0;
+
+/// The card that ends a row the server has more of, as tall as the
+/// pictures beside it; true when clicked.
+fn see_all_card(ui: &mut egui::Ui, label: &str) -> bool {
+    // What the cards before it filled: their picture and text.
+    let row = ui.min_rect().height();
+    let picture = (row - CARD_TEXT).max(96.0);
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(SEE_ALL_WIDTH, row.max(96.0)), Sense::click());
+    let tile = egui::Rect::from_min_size(rect.min, Vec2::new(SEE_ALL_WIDTH, picture));
+    let hovered = resp.hovered();
+    let t = ui.ctx().animate_bool_with_time(resp.id, hovered, 0.14);
+    let painter = ui.painter();
+    let radius = egui::CornerRadius::same(12);
+    painter.rect_filled(tile, radius, theme::SURFACE_2);
+    if t > 0.01 {
+        painter.rect_stroke(
+            tile,
+            radius,
+            egui::Stroke::new(2.5_f32, Color32::from_white_alpha((t * 230.0) as u8)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    painter.text(
+        tile.center() - Vec2::new(0.0, 14.0),
+        Align2::CENTER_CENTER,
+        icons::ARROW_RIGHT,
+        theme::icon(28.0),
+        theme::TEXT,
+    );
+    painter.text(
+        tile.center() + Vec2::new(0.0, 22.0),
+        Align2::CENTER_CENTER,
+        label,
+        theme::font(Weight::SemiBold, 16.0),
+        theme::TEXT,
+    );
+    resp.clicked()
 }
 
 /// A wide picture across the page with `content` over its left side;

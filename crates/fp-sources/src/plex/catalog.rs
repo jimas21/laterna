@@ -1,10 +1,13 @@
 //! Maps Plex library and metadata responses to the shared catalog, keeping
 //! Plex's item types, query keys and pagination inside this adapter.
 
-use super::{BACKDROP, LANDSCAPE, LISTING_LIMIT, PAGE_LIMIT, POSTER, PlexSource, container};
+use super::{
+    BACKDROP, LANDSCAPE, LIBRARY_TILE, LISTING_LIMIT, PAGE_LIMIT, POSTER, PlexSource, container,
+    safe_resource,
+};
 use crate::catalog::{
     Catalog, CatalogCapabilities, CatalogFacets, CatalogFilter, CatalogHome, CatalogItem,
-    CatalogKind, CatalogPage, CatalogQuery, CatalogSort, CatalogVersion,
+    CatalogKind, CatalogPage, CatalogQuery, CatalogRow, CatalogSort, CatalogVersion, RowShape,
 };
 use crate::error::{Error, Result};
 use crate::json::{array, boolean, num, text, uint};
@@ -18,7 +21,75 @@ use std::collections::HashSet;
 /// without `/items` wraps them in a hub.
 const CONTINUE_WATCHING: &str = "/hubs/continueWatching/items";
 
+/// The section fields that can hold a library's tile picture, best first: a
+/// picture set on the library, then the collage the server makes of its
+/// contents, then its poster.
+const TILE_FIELDS: [&str; 3] = ["art", "composite", "thumb"];
+
+/// How many items each of the server's rows is asked for.
+const ROW_ITEMS: usize = 12;
+
+/// The hub types that are not video: the server's music and photo rows.
+const NON_VIDEO_HUBS: [&str; 6] = ["artist", "album", "track", "photo", "station", "podcast"];
+
+/// What tells a collection's id from a video's: its rating key names a
+/// collection, which lists elsewhere on the server.
+const COLLECTION: &str = "collection:";
+/// What tells a playlist's id from a video's, for the same reason.
+const PLAYLIST: &str = "playlist:";
+
+/// The server's own key for an item id: a collection or playlist id without
+/// the prefix that tells it from a video.
+fn bare_id(id: &str) -> &str {
+    id.strip_prefix(COLLECTION)
+        .or_else(|| id.strip_prefix(PLAYLIST))
+        .unwrap_or(id)
+}
+
+/// Whether a path a server named for a row's listing is one this app may ask
+/// for: on the server, in the parts of it that list media, and never one of
+/// the `/:/` actions.
+fn hub_path_ok(path: &str) -> bool {
+    safe_resource(path)
+        && ["/hubs/", "/library/", "/playlists/"]
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        && !path.contains("/:/")
+}
+
+/// Whether a hub is the server's Continue Watching or On Deck, which the front
+/// page already shows from its own request.
+fn is_continue_watching(hub: &Value) -> bool {
+    ["context", "hubIdentifier"].iter().any(|field| {
+        text(hub, field).is_some_and(|s| {
+            let s = s.to_ascii_lowercase();
+            s.contains("continue") || s.contains("ondeck")
+        })
+    })
+}
+
+/// Whether a picture is one of the server's stock glyphs, which stand in for a
+/// library that has no picture of its own.
+fn stock(path: &str) -> bool {
+    path.starts_with("/:/resources/")
+}
+
 impl PlexSource {
+    /// The first of a library's `fields` that holds a picture of its own, not
+    /// a stock glyph, scaled to fit `size`.
+    fn section_picture(
+        &self,
+        section: &Value,
+        fields: &[&str],
+        size: (u32, u32),
+    ) -> Option<String> {
+        fields
+            .iter()
+            .filter_map(|field| text(section, field))
+            .filter(|path| !stock(path))
+            .find_map(|path| self.image(&path, size))
+    }
+
     pub(super) fn libraries(&self) -> Result<Vec<CatalogItem>> {
         self.client()?;
         // Sections is available to shared users too; section/all is the
@@ -49,8 +120,9 @@ impl PlexSource {
                         .into(),
                     ),
                     location: self.location("section", &id, None),
-                    poster: text(section, "thumb").and_then(|p| self.image(&p, POSTER)),
-                    backdrop: text(section, "art").and_then(|p| self.image(&p, BACKDROP)),
+                    landscape: self.section_picture(section, &TILE_FIELDS, LIBRARY_TILE),
+                    poster: self.section_picture(section, &["thumb"], POSTER),
+                    backdrop: self.section_picture(section, &["art", "composite"], BACKDROP),
                     ..Default::default()
                 };
                 Some(item)
@@ -59,7 +131,7 @@ impl PlexSource {
     }
 
     pub(super) fn catalog_item(&self, v: &Value) -> Option<CatalogItem> {
-        let id = text(v, "ratingKey")?;
+        let key = text(v, "ratingKey")?;
         let kind = match text(v, "type")?.as_str() {
             "movie" if text(v, "subtype").as_deref() == Some("clip") => CatalogKind::Video,
             "movie" => CatalogKind::Movie,
@@ -68,8 +140,19 @@ impl PlexSource {
             "episode" => CatalogKind::Episode,
             "clip" | "video" => CatalogKind::Video,
             "collection" => CatalogKind::BoxSet,
+            // Music and photo playlists are not ours to show.
+            "playlist" if text(v, "playlistType").is_none_or(|t| t == "video") => {
+                CatalogKind::Playlist
+            }
             "folder" => CatalogKind::Folder,
             _ => return None,
+        };
+        // A collection and a playlist list somewhere other than a video's
+        // children, so their ids say what they are.
+        let id = match kind {
+            CatalogKind::BoxSet => format!("{COLLECTION}{key}"),
+            CatalogKind::Playlist => format!("{PLAYLIST}{key}"),
+            _ => key.clone(),
         };
         let versions: Vec<CatalogVersion> = array(v, "Media")
             .iter()
@@ -114,7 +197,7 @@ impl PlexSource {
                 })
             })
             .collect();
-        let selected = lock(&self.versions).get(&id).cloned();
+        let selected = lock(&self.versions).get(&key).cloned();
         let selected_media = self.choose_media(v, selected.as_deref()).ok();
         let format = selected_media
             .and_then(|m| array(m, "Part").first())
@@ -122,9 +205,11 @@ impl PlexSource {
             .as_deref()
             .and_then(detect_from_name)
             .or_else(|| text(v, "title").as_deref().and_then(detect_from_name));
+        // A playlist has no poster, only the collage the server makes of it.
         let thumb = text(v, "thumb")
             .or_else(|| text(v, "parentThumb"))
-            .or_else(|| text(v, "grandparentThumb"));
+            .or_else(|| text(v, "grandparentThumb"))
+            .or_else(|| text(v, "composite"));
         let art = text(v, "art").or_else(|| text(v, "grandparentArt"));
         // An episode's thumb is its still, wider than anything's poster.
         let wide = if kind == CatalogKind::Episode {
@@ -147,7 +232,7 @@ impl PlexSource {
             _ => num(v, "viewCount").unwrap_or(0.0) > 0.0,
         };
         Some(CatalogItem {
-            id: id.clone(),
+            id,
             name: text(v, "title").unwrap_or_default(),
             kind,
             overview: text(v, "summary"),
@@ -189,7 +274,7 @@ impl PlexSource {
             landscape,
             poster,
             backdrop,
-            location: self.location("item", &id, None),
+            location: self.location("item", &key, None),
             format,
             versions,
             version: selected,
@@ -307,43 +392,70 @@ impl PlexSource {
                 "this Plex catalog filter is not available".into(),
             ));
         }
-        let (path, section) = match query.parent.as_deref() {
-            Some(p) if p.starts_with("section:") => {
-                let section = p.trim_start_matches("section:");
-                (
-                    format!("/library/sections/{}/all", encode_form_value(section)),
-                    Some(section),
-                )
-            }
-            Some(p) => (
+        let parent = query.parent.as_deref();
+        let (path, section, inherited) = if let Some(hub) = query.hub.as_deref() {
+            let (path, kept) = hub_listing(hub)?;
+            (path, None, kept)
+        } else if let Some(section) = parent.and_then(|p| p.strip_prefix("section:")) {
+            (
+                format!("/library/sections/{}/all", encode_form_value(section)),
+                Some(section),
+                Vec::new(),
+            )
+        } else if let Some(key) = parent.and_then(|p| p.strip_prefix(COLLECTION)) {
+            (
+                format!("/library/collections/{}/children", encode_form_value(key)),
+                None,
+                Vec::new(),
+            )
+        } else if let Some(key) = parent.and_then(|p| p.strip_prefix(PLAYLIST)) {
+            (
+                format!("/playlists/{}/items", encode_form_value(key)),
+                None,
+                Vec::new(),
+            )
+        } else if let Some(p) = parent {
+            (
                 format!("/library/metadata/{}/children", encode_form_value(p)),
                 None,
-            ),
-            None => ("/library/all".to_string(), None),
+                Vec::new(),
+            )
+        } else {
+            ("/library/all".to_string(), None, Vec::new())
         };
         let mut url =
             url::Url::parse(&format!("http://placeholder{path}")).expect("an encoded path");
         {
             let mut p = url.query_pairs_mut();
+            for (key, value) in &inherited {
+                p.append_pair(key, value);
+            }
             p.append_pair("X-Plex-Container-Start", &query.start.to_string());
             p.append_pair(
                 "X-Plex-Container-Size",
                 &query.limit.clamp(1, PAGE_LIMIT).to_string(),
             );
+            // The server's own order sends no sort at all.
             let key = match query.sort {
-                CatalogSort::Name => "titleSort",
-                CatalogSort::Added => "addedAt",
-                CatalogSort::Released => "originallyAvailableAt",
-                CatalogSort::Rating => "audienceRating",
-                CatalogSort::Runtime => "duration",
-                CatalogSort::LastWatched => "lastViewedAt",
-                CatalogSort::Random => "random",
+                CatalogSort::Name => Some("titleSort"),
+                CatalogSort::Added => Some("addedAt"),
+                CatalogSort::Released => Some("originallyAvailableAt"),
+                CatalogSort::Rating => Some("audienceRating"),
+                CatalogSort::Runtime => Some("duration"),
+                CatalogSort::LastWatched => Some("lastViewedAt"),
+                CatalogSort::Random => Some("random"),
+                CatalogSort::Server => None,
             };
-            p.append_pair(
-                "sort",
-                &format!("{key}:{}", if query.descending { "desc" } else { "asc" }),
-            );
-            if let Some(kind) = query.types.first().and_then(|k| type_number(*k)) {
+            if let Some(key) = key {
+                p.append_pair(
+                    "sort",
+                    &format!("{key}:{}", if query.descending { "desc" } else { "asc" }),
+                );
+            }
+            // A row's listing already says what it holds.
+            if query.hub.is_none()
+                && let Some(kind) = query.types.first().and_then(|k| type_number(*k))
+            {
                 p.append_pair("type", kind);
             }
             if !query.search.trim().is_empty() {
@@ -430,33 +542,50 @@ impl Catalog for PlexSource {
             width_filter: false,
             people: false,
             tags: false,
+            library_pages: true,
         }
     }
 
     fn home(&self) -> Result<CatalogHome> {
         let libraries = self.libraries()?;
-        let resume = self
-            .json(&format!("{CONTINUE_WATCHING}?X-Plex-Container-Size=20"))
-            .map(|v| {
-                array(container(&v), "Metadata")
-                    .iter()
-                    .filter_map(|v| self.catalog_item(v))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let sections: Vec<String> = libraries
+            .iter()
+            .filter_map(|library| library.id.strip_prefix("section:"))
+            .map(str::to_string)
+            .collect();
+        let resume = match self.json(&format!("{CONTINUE_WATCHING}?X-Plex-Container-Size=20")) {
+            Ok(v) => array(container(&v), "Metadata")
+                .iter()
+                .filter_map(|v| self.catalog_item(v))
+                .collect(),
+            Err(e) => {
+                log::info!("continue watching on {}: {e}", self.name);
+                Vec::new()
+            }
+        };
+        let rows = self.server_rows(&sections).unwrap_or_else(|e| {
+            log::info!("home rows on {}: {e}", self.name);
+            Vec::new()
+        });
+        // A server that gives no rows of its own still gets the newest of each
+        // library.
         let mut latest = Vec::new();
-        for library in &libraries {
-            let page = self.items(&CatalogQuery {
-                parent: Some(library.id.clone()),
-                sort: CatalogSort::Added,
-                descending: true,
-                limit: 12,
-                ..Default::default()
-            });
-            match page {
-                Ok(page) if !page.items.is_empty() => latest.push((library.clone(), page.items)),
-                Ok(_) => {}
-                Err(e) => log::debug!("latest in {} on {}: {e}", library.name, self.name),
+        if rows.is_empty() {
+            for library in &libraries {
+                let page = self.items(&CatalogQuery {
+                    parent: Some(library.id.clone()),
+                    sort: CatalogSort::Added,
+                    descending: true,
+                    limit: ROW_ITEMS,
+                    ..Default::default()
+                });
+                match page {
+                    Ok(page) if !page.items.is_empty() => {
+                        latest.push((library.clone(), page.items));
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::info!("latest in {} on {}: {e}", library.name, self.name),
+                }
             }
         }
         Ok(CatalogHome {
@@ -464,7 +593,24 @@ impl Catalog for PlexSource {
             resume,
             next_up: Vec::new(),
             latest,
+            rows,
         })
+    }
+
+    fn library_rows(&self, library: &str) -> Result<Vec<CatalogRow>> {
+        let Some(section) = library.strip_prefix("section:") else {
+            return Ok(Vec::new());
+        };
+        let path = format!(
+            "/hubs/sections/{}?count={ROW_ITEMS}",
+            encode_form_value(section)
+        );
+        match self.json(&path) {
+            Ok(v) => Ok(self.hub_rows(&v, false)),
+            // A server too old for library hubs opens its libraries as grids.
+            Err(Error::NotFound(_)) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<(&'static str, Vec<CatalogItem>)>> {
@@ -505,10 +651,16 @@ impl Catalog for PlexSource {
             for chunk in query.ids.chunks(60) {
                 let ids = chunk
                     .iter()
-                    .map(|id| encode_form_value(id))
+                    .map(|id| encode_form_value(bare_id(id)))
                     .collect::<Vec<_>>()
                     .join(",");
-                match self.json(&format!("/library/metadata/{ids}")) {
+                // A playlist is not in the library's metadata; ask for each.
+                let found = if chunk.iter().any(|id| id.starts_with(PLAYLIST)) {
+                    Err(Error::NotFound("Plex playlist".into()))
+                } else {
+                    self.json(&format!("/library/metadata/{ids}"))
+                };
+                match found {
                     Ok(value) => {
                         let mut found: std::collections::HashMap<_, _> =
                             array(container(&value), "Metadata")
@@ -587,7 +739,14 @@ impl Catalog for PlexSource {
                 .find(|i| i.id == id)
                 .ok_or_else(|| Error::NotFound("Plex library".into()));
         }
-        self.catalog_item(&self.raw_item(id)?)
+        if let Some(key) = id.strip_prefix(PLAYLIST) {
+            let v = self.json(&format!("/playlists/{}", encode_form_value(key)))?;
+            return array(container(&v), "Metadata")
+                .first()
+                .and_then(|playlist| self.catalog_item(playlist))
+                .ok_or_else(|| Error::NotFound("Plex playlist".into()));
+        }
+        self.catalog_item(&self.raw_item(bare_id(id))?)
             .ok_or_else(|| Error::Unsupported("Plex item is not a video".into()))
     }
 
@@ -624,7 +783,7 @@ impl Catalog for PlexSource {
             &format!(
                 "/:/{}?identifier=com.plexapp.plugins.library&key={}",
                 if played { "scrobble" } else { "unscrobble" },
-                encode_form_value(id)
+                encode_form_value(bare_id(id))
             ),
             &[],
         )?;
@@ -653,6 +812,94 @@ impl Catalog for PlexSource {
 }
 
 impl PlexSource {
+    /// The rows of the server's front page, in its order: what Plex Web shows
+    /// for these libraries. Empty when the server names none.
+    fn server_rows(&self, sections: &[String]) -> Result<Vec<CatalogRow>> {
+        let mut promoted = url::form_urlencoded::Serializer::new(String::new());
+        promoted
+            .append_pair("count", &ROW_ITEMS.to_string())
+            .append_pair("excludeContinueWatching", "1");
+        let mut global = url::form_urlencoded::Serializer::new(String::new());
+        global.append_pair("count", &ROW_ITEMS.to_string());
+        if !sections.is_empty() {
+            let sections = sections.join(",");
+            promoted
+                .append_pair("contentDirectoryID", &sections)
+                .append_pair("pinnedContentDirectoryID", &sections);
+            global.append_pair("contentDirectoryID", &sections);
+        }
+        for path in [
+            format!("/hubs/promoted?{}", promoted.finish()),
+            format!("/hubs?{}", global.finish()),
+        ] {
+            match self.json(&path) {
+                Ok(v) => {
+                    let rows = self.hub_rows(&v, true);
+                    if !rows.is_empty() {
+                        return Ok(rows);
+                    }
+                }
+                Err(e @ Error::SignedOut(_)) => return Err(e),
+                Err(e) => log::info!("hubs on {}: {e}", self.name),
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// The rows a server's hubs make: its titles in its order, one card
+    /// shape each. A row keeps the items that are videos, collections or
+    /// playlists, and is left out when none are. With `home`, the hubs that
+    /// are Continue Watching are left out, as the page has them already.
+    fn hub_rows(&self, v: &Value, home: bool) -> Vec<CatalogRow> {
+        let mut rows: Vec<CatalogRow> = Vec::new();
+        for hub in array(container(v), "Hub") {
+            let kind = text(hub, "type").unwrap_or_default();
+            if NON_VIDEO_HUBS.contains(&kind.as_str()) || (home && is_continue_watching(hub)) {
+                continue;
+            }
+            let raw = array(hub, "Metadata");
+            let items: Vec<_> = raw.iter().filter_map(|v| self.catalog_item(v)).collect();
+            let title = text(hub, "title").unwrap_or_default();
+            if items.len() < raw.len() {
+                log::debug!(
+                    "{} of {} items in \"{title}\" on {} are not videos",
+                    raw.len() - items.len(),
+                    raw.len(),
+                    self.name
+                );
+            }
+            if items.is_empty() {
+                continue;
+            }
+            let key = text(hub, "key");
+            let mut id = text(hub, "hubIdentifier")
+                .or_else(|| key.clone())
+                .unwrap_or_else(|| title.clone());
+            if rows.iter().any(|row| row.id == id) {
+                id = format!("{id}#{}", rows.len());
+            }
+            let more = key
+                .filter(|key| boolean(hub, "more") == Some(true) && hub_listing(key).is_ok())
+                .map(|key| CatalogQuery {
+                    hub: Some(key),
+                    sort: CatalogSort::Server,
+                    ..Default::default()
+                });
+            let library = text(hub, "librarySectionID")
+                .or_else(|| raw.iter().find_map(|m| text(m, "librarySectionID")))
+                .map(|section| format!("section:{section}"));
+            rows.push(CatalogRow {
+                id,
+                title,
+                shape: RowShape::of(&items),
+                items,
+                more,
+                library,
+            });
+        }
+        rows
+    }
+
     fn all_children(&self, id: &str, kind: Option<CatalogKind>) -> Result<Vec<CatalogItem>> {
         let mut items = self.whole_listing(CatalogQuery {
             parent: Some(id.into()),
@@ -664,6 +911,26 @@ impl PlexSource {
         }
         Ok(items)
     }
+}
+
+/// The path and query of a row's listing as the server named it, less its
+/// paging, if it is a listing this app may ask for.
+fn hub_listing(hub: &str) -> Result<(String, Vec<(String, String)>)> {
+    let refused = || Error::invalid(hub, "Plex row listing must stay on its server");
+    if !hub_path_ok(hub) {
+        return Err(refused());
+    }
+    let url = url::Url::parse(&format!("http://placeholder{hub}")).map_err(|_| refused())?;
+    // Parsing resolves dot segments, even encoded ones, so check what is left.
+    if url.host_str() != Some("placeholder") || !hub_path_ok(url.path()) {
+        return Err(refused());
+    }
+    let kept = url
+        .query_pairs()
+        .filter(|(key, _)| !key.starts_with("X-Plex-Container-"))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    Ok((url.path().to_string(), kept))
 }
 
 fn tags(v: &Value, key: &str) -> Vec<String> {

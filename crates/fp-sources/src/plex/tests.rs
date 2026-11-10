@@ -52,7 +52,7 @@ fn rejected_saved_credentials_renew_at_handshake_or_on_a_later_request() {
         });
         let api = PlexAuthClient::with_test_endpoint(&account.base).unwrap();
         let private = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
-        let auth = serde_json::from_value::<auth::PlexCredentials>(json!({
+        let auth = serde_json::from_value::<PlexCredentials>(json!({
             "access_token":"account-old", "client_identifier":"saved-client",
             "device_key":{"id":"saved-key", "pkcs8":URL_SAFE_NO_PAD.encode(private.as_ref())},
             "expires_at":4_000_000_000_u64,
@@ -71,6 +71,7 @@ fn rejected_saved_credentials_renew_at_handshake_or_on_a_later_request() {
             max_height: None,
             local_only: false,
             allow_relay: true,
+            ..Default::default()
         };
         let mut source = PlexSource::new(&config).unwrap();
         source.auth_api = api;
@@ -116,6 +117,7 @@ fn a_listed_remote_address_has_to_be_encrypted() {
         max_height: None,
         local_only: false,
         allow_relay: false,
+        ..Default::default()
     };
     let tried =
         |c: &PlexConfig| -> Vec<String> { connections(c).into_iter().map(|c| c.uri).collect() };
@@ -144,10 +146,8 @@ fn a_listed_remote_address_has_to_be_encrypted() {
     assert_eq!(tried(&c), [plain]);
     // A linked source's list can come back empty: that doesn't make it typed.
     let mut c = config(plain, Vec::new());
-    c.auth = Some(auth::PlexCredentials::manual(
-        "account".into(),
-        "client".into(),
-    ));
+    let account = PlexCredentials::manual("account".into(), "client".into());
+    c.auth = Some(account);
     assert!(tried(&c).is_empty());
 }
 
@@ -183,6 +183,7 @@ fn a_server_that_stays_down_is_only_asked_once_in_a_while() {
         max_height: None,
         local_only: false,
         allow_relay: false,
+        ..Default::default()
     })
     .unwrap();
     let picture = "plex://source/source/machine/image/resource?path=%2Fa.jpg";
