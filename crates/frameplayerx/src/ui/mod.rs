@@ -386,6 +386,16 @@ pub enum Action {
         generation: u64,
         configs: Vec<fp_sources::PlexConfig>,
     },
+    /// Lists the servers of a linked source's account, to add and to remove.
+    PlexListServers {
+        credentials: fp_sources::plex::auth::PlexCredentials,
+    },
+    /// Removes sources together: a Plex server and each profile's source of it.
+    RemoveSources(Vec<String>),
+    /// Lists the libraries of a Plex source, to choose those it shows.
+    CatalogLibraries {
+        source: String,
+    },
     AddDevice(HapticDeviceConfig),
     RemoveDevice(usize),
     ReconnectDevices,

@@ -1,11 +1,12 @@
 //! Plex linking and connection checks run on jobs, tied to the open form.
 
+use super::tasks::PlexListing;
 use super::*;
 use fp_sources::plex::PlexSource;
 use fp_sources::plex::auth::{PlexAccount, PlexAuthClient, PlexCredentials, PlexPin, PlexResource};
 use fp_sources::{PlexConfig, SourceConfig};
 use std::collections::HashSet;
-use ui::plex::{LinkState, ServerRow};
+use ui::plex::{Libraries, LinkState, ListError, ServerRow};
 
 /// A server of the Plex list, tested: its machine identifier and the source
 /// to add, or why not.
@@ -137,6 +138,34 @@ fn name_accounts(
         }
     }
     changed
+}
+
+/// Whether plex.tv refused the account's sign-in.
+fn account_refused(error: &fp_sources::Error) -> bool {
+    use fp_sources::Error;
+    match error {
+        Error::Auth(_) | Error::SignedOut(_) => true,
+        Error::HttpStatus { status, .. } => matches!(status, 401 | 498),
+        _ => false,
+    }
+}
+
+/// The servers of an account, for the list that manages them. An account
+/// that its sources were linked to before accounts were recorded is named
+/// on the way, so they are found by it.
+fn list_servers(api: &PlexAuthClient, mut credentials: PlexCredentials) -> PlexListing {
+    if credentials.account.is_none() {
+        match api.account(&credentials) {
+            Ok(account) => credentials.account = Some(Box::new(account)),
+            Err(e) if account_refused(&e) => return Err(ListError::SignedOut),
+            Err(e) => log::info!("cannot name the linked Plex account: {e}"),
+        }
+    }
+    match api.resources(&credentials) {
+        Ok(servers) => Ok((credentials, servers)),
+        Err(e) if account_refused(&e) => Err(ListError::SignedOut),
+        Err(e) => Err(ListError::Other(ui::errors::source(&e))),
+    }
 }
 
 /// Tests one server and returns the source to add.
@@ -379,6 +408,7 @@ impl App {
         let Some(f) = self.plex_form(generation) else {
             return;
         };
+        let managing = f.plex.managing;
         let LinkState::Servers { rows, .. } = &mut f.plex.state else {
             return;
         };
@@ -413,7 +443,8 @@ impl App {
                 };
                 rows.insert(machine.clone(), row);
             }
-            closing = ui::plex::pending(&f.plex.state, &configs) == 0;
+            // Managing stays on the list, whatever was added.
+            closing = !managing && ui::plex::pending(&f.plex.state, &configs) == 0;
         }
         if closing {
             self.ui.source_form = None;
@@ -432,6 +463,128 @@ impl App {
                 None => tr!("plex-servers-added", names = names),
             });
         }
+        self.panels[MAIN].request_repaint();
+    }
+
+    /// Lists the servers of the account of the linked source being edited,
+    /// to add and to remove.
+    pub(super) fn plex_list_servers(&mut self, credentials: PlexCredentials) {
+        let generation = self.ui.next_seq();
+        let Some(f) = self
+            .ui
+            .source_form
+            .as_mut()
+            .filter(|f| f.kind == fp_sources::SourceKind::Plex && !f.plex.manual)
+        else {
+            return;
+        };
+        f.plex.generation = generation;
+        f.plex.managing = true;
+        f.plex.manage_error = None;
+        f.plex.removing = None;
+        f.plex.state = LinkState::Connecting;
+        self.jobs.spawn("plex-servers", move || {
+            let result = list_servers(&PlexAuthClient::new(), credentials);
+            Job::PlexServersListed(generation, Box::new(result))
+        });
+    }
+
+    /// The account's servers were listed: the list replaces the source's
+    /// form, or the source stays as it is and says why not. An account
+    /// plex.tv no longer accepts is signed in again in place.
+    pub(super) fn plex_servers_listed(&mut self, generation: u64, result: PlexListing) {
+        let Some(f) = self.plex_form(generation) else {
+            return;
+        };
+        if !f.plex.managing || !matches!(f.plex.state, LinkState::Connecting) {
+            return;
+        }
+        match result {
+            Ok((credentials, servers)) => {
+                // Sources linked before accounts were recorded are named
+                // now, so none of them is offered to be added a second time.
+                let unnamed = accounts_to_name(&self.services.source_configs);
+                if let Some(account) = credentials.account.as_deref()
+                    && unnamed
+                        .iter()
+                        .any(|p| p.client_identifier == credentials.client_identifier)
+                {
+                    let named = vec![(credentials.client_identifier.clone(), account.clone())];
+                    self.plex_accounts_named(named);
+                }
+                let configs = self.services.source_configs.clone();
+                if let Some(f) = self.plex_form(generation) {
+                    ui::plex::refresh_edited(f, &configs);
+                    f.plex.state = LinkState::managing(credentials, servers, &configs);
+                }
+            }
+            Err(ListError::SignedOut) => {
+                f.plex.managing = false;
+                f.plex.state = LinkState::Failed(tr!("plex-signed-out").into());
+            }
+            Err(ListError::Other(error)) => {
+                f.plex.managing = false;
+                f.plex.manage_error = Some(error);
+                f.plex.state = LinkState::Connected;
+            }
+        }
+        self.panels[MAIN].request_repaint();
+    }
+
+    /// Removes the sources of a server switched off in the list, together.
+    pub(super) fn plex_remove_servers(&mut self, ids: Vec<String>) {
+        let mut names: Vec<String> = Vec::new();
+        for id in &ids {
+            let name = self.source_name(id);
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        if self.remove_sources(&ids) {
+            self.ui
+                .toast(tr!("plex-servers-removed", names = names.join(", ")));
+        }
+    }
+
+    /// Lists the libraries of a source, to choose those it leaves out.
+    pub(super) fn catalog_libraries(&mut self, source: String) {
+        let found = self.services.opener.source(&source);
+        self.jobs.spawn("catalog-libraries", move || {
+            let result: Result<Vec<(String, String)>, String> = found
+                .as_ref()
+                .and_then(|src| src.as_catalog())
+                .ok_or_else(|| tr!("source-not-available").to_string())
+                .and_then(|catalog| catalog.all_libraries().map_err(|e| ui::errors::source(&e)))
+                .map(|libraries| {
+                    libraries
+                        .into_iter()
+                        .map(|library| {
+                            let key = library.id.strip_prefix("section:").unwrap_or(&library.id);
+                            (key.to_string(), library.name)
+                        })
+                        .collect()
+                });
+            Job::CatalogLibraries { source, result }
+        });
+    }
+
+    pub(super) fn libraries_listed(
+        &mut self,
+        source: &str,
+        result: Result<Vec<(String, String)>, String>,
+    ) {
+        let Some(f) = self
+            .ui
+            .source_form
+            .as_mut()
+            .filter(|f| f.editing.as_ref().is_some_and(|c| c.id() == source))
+        else {
+            return;
+        };
+        f.plex.libraries = match result {
+            Ok(libraries) => Libraries::Listed(libraries),
+            Err(error) => Libraries::Failed(error),
+        };
         self.panels[MAIN].request_repaint();
     }
 
@@ -601,6 +754,21 @@ mod tests {
         let unnamed = sign_in("other-token", "client-1", None);
         assert!(relink_fan_out(&mut configs, &unnamed, &servers).is_empty());
         assert_eq!(configs, before);
+    }
+
+    #[test]
+    fn only_the_accounts_refusal_signs_it_out() {
+        use fp_sources::Error;
+        let status = |status| Error::HttpStatus {
+            status,
+            url: "plex.tv".into(),
+        };
+        assert!(account_refused(&Error::Auth("plex.tv".into())));
+        assert!(account_refused(&status(401)));
+        assert!(account_refused(&status(498)));
+        // A plex.tv that is down, or an answer nobody can read, is not a sign-out.
+        assert!(!account_refused(&status(503)));
+        assert!(!account_refused(&Error::NotFound("plex.tv".into())));
     }
 
     #[test]

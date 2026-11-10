@@ -47,6 +47,25 @@ pub enum ServerRow {
     Failed(String),
 }
 
+/// The libraries of the source being edited, which it can leave out.
+#[derive(Clone, Debug, Default)]
+pub enum Libraries {
+    #[default]
+    Unasked,
+    Loading,
+    /// Each library's key on the server and its name.
+    Listed(Vec<(String, String)>),
+    Failed(String),
+}
+
+/// Why the servers of an account could not be listed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListError {
+    /// plex.tv no longer accepts the account's sign-in.
+    SignedOut,
+    Other(String),
+}
+
 impl LinkState {
     /// The list for a freshly signed-in account. Servers it owns that are
     /// not sources yet start switched on; shared ones are left to choose.
@@ -67,6 +86,30 @@ impl LinkState {
             rows: HashMap::new(),
         }
     }
+
+    /// The list for managing the servers of an account that is signed in
+    /// already: none starts switched on, so nothing is added by pressing
+    /// Add without choosing.
+    pub fn managing(
+        credentials: PlexCredentials,
+        servers: Vec<PlexResource>,
+        configs: &[SourceConfig],
+    ) -> Self {
+        let mut state = Self::servers(credentials, servers, configs);
+        if let Self::Servers { ticked, .. } = &mut state {
+            ticked.clear();
+        }
+        state
+    }
+}
+
+/// What groups the sources of the account `credentials` belong to, as
+/// [`PlexConfig::account_key`] does for a source.
+fn account_key(credentials: &PlexCredentials) -> &String {
+    credentials
+        .account
+        .as_ref()
+        .map_or(&credentials.client_identifier, |a| &a.uuid)
 }
 
 /// The name of the source that already plays `machine` for the account
@@ -77,10 +120,7 @@ pub(crate) fn linked_name(
     credentials: &PlexCredentials,
     machine: &str,
 ) -> Option<String> {
-    let key = credentials
-        .account
-        .as_ref()
-        .map_or(&credentials.client_identifier, |a| &a.uuid);
+    let key = account_key(credentials);
     for config in configs {
         if let SourceConfig::Plex(p) = config
             && p.profile.is_none()
@@ -95,6 +135,64 @@ pub(crate) fn linked_name(
 
 fn is_linked(configs: &[SourceConfig], credentials: &PlexCredentials, machine: &str) -> bool {
     linked_name(configs, credentials, machine).is_some()
+}
+
+/// The sources that play `machine` for the account `credentials` belong to:
+/// the account itself and each Plex Home profile. A source entered with a
+/// token, or of another account, is not one of them.
+fn sources_of_server(
+    configs: &[SourceConfig],
+    credentials: &PlexCredentials,
+    machine: &str,
+) -> Vec<String> {
+    let key = account_key(credentials);
+    configs
+        .iter()
+        .filter_map(|config| match config {
+            SourceConfig::Plex(p)
+                if p.machine_identifier == machine && p.account_key().as_ref() == Some(key) =>
+            {
+                Some(p.id.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sign-in of the linked source being edited.
+fn linked_credentials(f: &SourceForm) -> Option<PlexCredentials> {
+    match &f.editing {
+        Some(SourceConfig::Plex(old)) => old.auth.clone(),
+        _ => None,
+    }
+}
+
+/// The source being edited as it is saved now, sign-in and all: listing the
+/// account's servers can name the account, and signing in again renews the
+/// sign-in, after the form was made.
+pub(crate) fn refresh_edited(f: &mut SourceForm, configs: &[SourceConfig]) {
+    let Some(id) = f.editing.as_ref().map(|c| c.id().to_string()) else {
+        return;
+    };
+    let Some(SourceConfig::Plex(saved)) = configs.iter().find(|c| c.id() == id) else {
+        return;
+    };
+    f.editing = Some(SourceConfig::Plex(saved.clone()));
+    if f.plex.selected.is_some() {
+        f.plex.selected = Some(saved.clone());
+    }
+}
+
+/// Leaves the list of the account's servers for the source being edited, as
+/// it is saved now.
+fn back_to_source(f: &mut SourceForm, configs: &[SourceConfig]) {
+    refresh_edited(f, configs);
+    f.plex.managing = false;
+    f.plex.removing = None;
+    if let Some(SourceConfig::Plex(saved)) = &f.editing {
+        f.plex.selected = Some(saved.clone());
+        f.plex.state = LinkState::Connected;
+    }
 }
 
 /// How many servers "Add" would check now.
@@ -254,6 +352,18 @@ pub struct Connect {
     /// The code was claimed by a different account than the source being
     /// edited, so its servers are added as new sources.
     pub other_account: bool,
+    /// The list is the servers of the account of the source being edited,
+    /// to add and to remove.
+    pub managing: bool,
+    /// Why that list could not be made. The source stays as it is.
+    pub manage_error: Option<String>,
+    /// The machine identifier of a server asked to be removed, until that
+    /// is confirmed or called off.
+    pub removing: Option<String>,
+    /// The libraries of the source being edited.
+    pub libraries: Libraries,
+    /// The keys of the libraries the source leaves out.
+    pub hidden: BTreeSet<String>,
 }
 
 impl Default for Connect {
@@ -266,6 +376,11 @@ impl Default for Connect {
             connection: ConnectionMode::default(),
             selected: None,
             other_account: false,
+            managing: false,
+            manage_error: None,
+            removing: None,
+            libraries: Libraries::Unasked,
+            hidden: BTreeSet::new(),
         }
     }
 }
@@ -289,6 +404,9 @@ impl Connect {
         self.state = LinkState::Idle;
         self.selected = None;
         self.other_account = false;
+        self.managing = false;
+        self.manage_error = None;
+        self.removing = None;
     }
 
     fn use_token(&mut self, manual: bool) {
@@ -371,6 +489,17 @@ fn link_rows(r: &mut widgets::Rows, f: &mut SourceForm, actions: &mut Vec<Action
                     ui.label(egui::RichText::new(super::icons::CHECK_CIRCLE).color(theme::OK));
                 },
             );
+            if matches!(f.plex.state, LinkState::Connected)
+                && let Some(credentials) = linked_credentials(f)
+            {
+                let desc = Some(tr!("plex-manage-servers-desc"));
+                r.row(tr!("plex-manage-servers"), desc, |ui| {
+                    let label = tr!("plex-manage-servers");
+                    if widgets::button_sized(ui, None, label, Kind::Secondary, 36.0).clicked() {
+                        actions.push(Action::PlexListServers { credentials });
+                    }
+                });
+            }
         }
         LinkState::Connecting => {}
     }
@@ -501,6 +630,9 @@ pub fn form(
         }
         _ => {}
     }
+    if let Some(error) = &f.plex.manage_error {
+        ui.label(egui::RichText::new(error).color(theme::WARN));
+    }
     let busy = matches!(
         f.plex.state,
         LinkState::Requesting | LinkState::Waiting { .. } | LinkState::Connecting
@@ -529,6 +661,11 @@ pub fn form(
     {
         f.plex.selected = None;
     }
+    if matches!(f.plex.state, LinkState::Connected)
+        && matches!(f.editing, Some(SourceConfig::Plex(_)))
+    {
+        hide_list(ui, f, actions);
+    }
     ui.add_space(16.0);
     if let Some(mut cfg) = f.plex.selected.clone()
         && matches!(f.plex.state, LinkState::Connected)
@@ -539,6 +676,7 @@ pub fn form(
         f.plex.connection.apply(&mut cfg);
         cfg.insecure_tls = f.insecure_tls;
         cfg.parallel_downloads = f.parallel_downloads;
+        cfg.hidden_sections = f.plex.hidden.iter().cloned().collect();
         if widgets::button(
             ui,
             Some(super::icons::CHECK),
@@ -566,14 +704,25 @@ pub fn form(
 static READY: ServerRow = ServerRow::Ready;
 
 /// The account's servers, each with a switch and where it stands, and the
-/// button that adds every one switched on.
+/// button that adds every one switched on. When managing, a server that is
+/// a source already is a switch that is on: switching it off asks whether
+/// to remove it.
 fn server_list(
     ui: &mut egui::Ui,
     f: &mut SourceForm,
     configs: &[SourceConfig],
     actions: &mut Vec<Action>,
 ) {
-    widgets::section_label(ui, tr!("plex-server-select"));
+    let managing = f.plex.managing;
+    widgets::section_label(
+        ui,
+        if managing {
+            tr!("plex-manage-servers")
+        } else {
+            tr!("plex-server-select")
+        },
+    );
+    let removing = &mut f.plex.removing;
     if let LinkState::Servers {
         credentials,
         servers,
@@ -592,6 +741,13 @@ fn server_list(
                 } else {
                     tr!("plex-server-shared")
                 };
+                if managing {
+                    let sources = sources_of_server(configs, credentials, machine);
+                    if !sources.is_empty() {
+                        manage_row(r, server, owner, sources, removing, actions);
+                        continue;
+                    }
+                }
                 let row = rows.get(machine).unwrap_or(&READY);
                 let linked = is_linked(configs, credentials, machine);
                 let added = linked || matches!(row, ServerRow::Added(_));
@@ -634,6 +790,86 @@ fn server_list(
         .clicked();
     if add && let Some(action) = start_batch(f, configs, fp_core::playback::now_ms()) {
         actions.push(action);
+    }
+    if matches!(f.editing, Some(SourceConfig::Plex(_))) {
+        ui.add_space(8.0);
+        if widgets::button(ui, None, tr!("common-back"), Kind::Secondary).clicked() {
+            back_to_source(f, configs);
+        }
+    }
+}
+
+/// A server that is a source already, in the list for managing: a switch
+/// that is on; once it is switched off, the question whether to remove the
+/// server's `sources` (the account's and each profile's).
+fn manage_row(
+    r: &mut widgets::Rows,
+    server: &PlexResource,
+    owner: &str,
+    sources: Vec<String>,
+    removing: &mut Option<String>,
+    actions: &mut Vec<Action>,
+) {
+    let machine = &server.machine_identifier;
+    if removing.as_deref() != Some(machine.as_str()) {
+        let mut on = true;
+        if r.switch(&server.name, Some(owner), &mut on) {
+            *removing = Some(machine.clone());
+        }
+        return;
+    }
+    let ask = tr!("plex-server-remove-ask", server = server.name.as_str());
+    r.row(&ask, Some(tr!("plex-server-remove-desc")), |ui| {
+        let remove = widgets::button_sized(ui, None, tr!("plex-server-remove"), Kind::Danger, 36.0);
+        let keep = widgets::button_sized(ui, None, tr!("plex-server-keep"), Kind::Secondary, 36.0);
+        if remove.clicked() {
+            actions.push(Action::RemoveSources(sources));
+            *removing = None;
+        } else if keep.clicked() {
+            *removing = None;
+        }
+    });
+}
+
+/// The switches that leave libraries out of the source being edited: the
+/// libraries the server has now. Those it no longer has stay left out.
+fn hide_list(ui: &mut egui::Ui, f: &mut SourceForm, actions: &mut Vec<Action>) {
+    if matches!(f.plex.libraries, Libraries::Unasked)
+        && let Some(editing) = &f.editing
+    {
+        let source = editing.id().to_string();
+        actions.push(Action::CatalogLibraries { source });
+        f.plex.libraries = Libraries::Loading;
+    }
+    ui.add_space(12.0);
+    widgets::section_label(ui, tr!("plex-libraries"));
+    match &f.plex.libraries {
+        Libraries::Unasked | Libraries::Loading => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(tr!("common-loading"));
+            });
+        }
+        Libraries::Failed(error) => {
+            let text = tr!("plex-libraries-failed", error = error.as_str());
+            ui.label(egui::RichText::new(text).color(theme::WARN));
+        }
+        Libraries::Listed(list) => {
+            ui.label(
+                egui::RichText::new(tr!("plex-libraries-desc"))
+                    .font(theme::font(Weight::Regular, 15.0))
+                    .color(theme::TEXT_2),
+            );
+            let hidden = &mut f.plex.hidden;
+            widgets::rows(ui, |r| {
+                for (key, name) in list {
+                    let mut shown = !hidden.contains(key);
+                    if r.switch(name, None, &mut shown) {
+                        set_ticked(hidden, key, !shown);
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -1093,6 +1329,137 @@ mod tests {
         let configs = asked(start_batch(&mut form, &[], 1));
         assert_eq!(configs.len(), 2);
         assert!(configs.iter().all(|c| !c.insecure_tls));
+    }
+
+    /// A source of the account of `signed_in`, playing `machine` as a profile.
+    fn profile_source_of(id: &str, machine: &str) -> SourceConfig {
+        SourceConfig::Plex(PlexConfig {
+            id: id.into(),
+            machine_identifier: machine.into(),
+            auth: Some(signed_in("account-uuid-1")),
+            profile: Some(Box::new(PlexProfile {
+                id: 7,
+                uuid: "profile-1".into(),
+                title: "Kid".into(),
+                protected: false,
+                restricted: true,
+                token: "profile-token".into(),
+            })),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn manage_servers_ticks_this_accounts_sources_only() {
+        let other_account = SourceConfig::Plex(PlexConfig {
+            id: "other-m2".into(),
+            machine_identifier: "m2".into(),
+            auth: Some(signed_in("account-uuid-2")),
+            ..Default::default()
+        });
+        let by_token = SourceConfig::Plex(PlexConfig {
+            id: "token-m3".into(),
+            machine_identifier: "m3".into(),
+            auth: None,
+            ..Default::default()
+        });
+        let configs = [
+            source_of("m1", "Home"),
+            profile_source_of("kid-m1", "m1"),
+            other_account,
+            by_token,
+        ];
+        let credentials = signed_in("account-uuid-1");
+        // The account's own source and each profile's, in the order they were saved.
+        let removed = sources_of_server(&configs, &credentials, "m1");
+        assert_eq!(removed, ["existing-m1", "kid-m1"]);
+        // Another account's source, or one entered with a token, is not this account's.
+        assert!(sources_of_server(&configs, &credentials, "m2").is_empty());
+        assert!(sources_of_server(&configs, &credentials, "m3").is_empty());
+        assert!(sources_of_server(&configs, &credentials, "m4").is_empty());
+        // Listing starts with nothing switched on, where linking starts with
+        // the account's own servers that are not sources yet.
+        let servers = vec![own("m1"), own("m2"), own("m3")];
+        let linking = LinkState::servers(credentials.clone(), servers.clone(), &configs);
+        assert!(matches!(&linking, LinkState::Servers { ticked, .. } if ticked.len() == 2));
+        let managing = LinkState::managing(credentials, servers, &configs);
+        assert!(matches!(&managing, LinkState::Servers { ticked, .. } if ticked.is_empty()));
+    }
+
+    #[test]
+    fn sources_not_yet_named_are_found_by_their_pairing() {
+        // Linked before accounts were recorded: only the pairing is known.
+        let old = |id: &str, client: &str| {
+            SourceConfig::Plex(PlexConfig {
+                id: id.into(),
+                machine_identifier: "m1".into(),
+                auth: Some(PlexCredentials::manual("t".into(), client.into())),
+                ..Default::default()
+            })
+        };
+        let configs = [old("a", "client"), old("b", "another-pairing")];
+        let unnamed = PlexCredentials::manual("t".into(), "client".into());
+        assert_eq!(sources_of_server(&configs, &unnamed, "m1"), ["a"]);
+        // Once the account is known, the pairing no longer groups them.
+        let named = signed_in("account-uuid-1");
+        assert!(sources_of_server(&configs, &named, "m1").is_empty());
+    }
+
+    #[test]
+    fn going_back_takes_the_sources_saved_sign_in() {
+        let mut saved = PlexConfig {
+            id: "home".into(),
+            machine_identifier: "m1".into(),
+            auth: Some(PlexCredentials::manual("old-token".into(), "client".into())),
+            ..Default::default()
+        };
+        let mut form = super::super::sources::edit_form(&SourceConfig::Plex(saved.clone()));
+        form.plex.state = LinkState::servers(signed_in("account-uuid-1"), vec![own("m1")], &[]);
+        form.plex.managing = true;
+        form.plex.removing = Some("m1".into());
+        // Meanwhile the sign-in was renewed and the account named.
+        saved.auth = Some(signed_in("account-uuid-1"));
+        let now = [SourceConfig::Plex(saved.clone())];
+        back_to_source(&mut form, &now);
+        assert!(matches!(form.plex.state, LinkState::Connected));
+        assert!(!form.plex.managing && form.plex.removing.is_none());
+        assert_eq!(form.plex.selected.as_ref(), Some(&saved));
+        assert_eq!(form.editing, Some(SourceConfig::Plex(saved)));
+    }
+
+    #[test]
+    fn libraries_left_out_come_from_the_saved_source() {
+        let cfg = PlexConfig {
+            id: "home".into(),
+            hidden_sections: vec!["3".into(), "1".into()],
+            ..Default::default()
+        };
+        let mut form = super::super::sources::edit_form(&SourceConfig::Plex(cfg));
+        assert!(matches!(form.plex.libraries, Libraries::Unasked));
+        let kept: Vec<&str> = form.plex.hidden.iter().map(String::as_str).collect();
+        assert_eq!(kept, ["1", "3"]);
+        // A library switched off joins them; switched on, it leaves.
+        set_ticked(&mut form.plex.hidden, "2", true);
+        set_ticked(&mut form.plex.hidden, "3", false);
+        let kept: Vec<&str> = form.plex.hidden.iter().map(String::as_str).collect();
+        assert_eq!(kept, ["1", "2"]);
+        // A new source leaves nothing out.
+        assert!(SourceForm::default().plex.hidden.is_empty());
+    }
+
+    #[test]
+    fn only_a_linked_source_can_manage_its_servers() {
+        let linked = SourceForm {
+            editing: Some(source_of("m1", "Home")),
+            ..Default::default()
+        };
+        assert!(linked_credentials(&linked).is_some());
+        let by_token = SourceForm {
+            editing: Some(SourceConfig::Plex(PlexConfig::default())),
+            ..Default::default()
+        };
+        assert!(linked_credentials(&by_token).is_none());
+        assert!(linked_credentials(&SourceForm::default()).is_none());
     }
 
     #[test]

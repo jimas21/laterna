@@ -621,6 +621,7 @@ panel main plex-link-expired
 plex-link-preview http://127.0.0.1:$jf_port servers
 panel main plex-link-servers
 edit-source plex
+wait 1
 panel main source-edit-plex
 point main 0.6 0.6
 stick 0 -1 35

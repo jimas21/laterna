@@ -7,6 +7,14 @@ type PlexLink = Option<(
     Vec<fp_sources::plex::auth::PlexResource>,
 )>;
 
+pub(super) type PlexListing = Result<
+    (
+        fp_sources::plex::auth::PlexCredentials,
+        Vec<fp_sources::plex::auth::PlexResource>,
+    ),
+    ui::plex::ListError,
+>;
+
 pub(super) enum Job {
     Opened(u64, Box<Result<Opened, String>>),
     Listed {
@@ -74,6 +82,13 @@ pub(super) enum Job {
     /// The servers asked for in the Plex list, each tested: by machine
     /// identifier, the working source or why not.
     PlexServersChecked(u64, Vec<(String, Result<fp_sources::PlexConfig, String>)>),
+    /// The servers of a linked source's account, to manage.
+    PlexServersListed(u64, Box<PlexListing>),
+    /// The libraries of source `source`, each as its key and name.
+    CatalogLibraries {
+        source: String,
+        result: Result<Vec<(String, String)>, String>,
+    },
     /// The accounts older Plex sources belong to, by pairing identifier.
     PlexAccounts(Vec<(String, fp_sources::plex::auth::PlexAccount)>),
     /// The last run crashed: the report the user may send.
@@ -508,6 +523,10 @@ impl App {
             Job::PlexServersChecked(generation, checks) => {
                 self.plex_servers_checked(generation, checks);
             }
+            Job::PlexServersListed(generation, result) => {
+                self.plex_servers_listed(generation, *result);
+            }
+            Job::CatalogLibraries { source, result } => self.libraries_listed(&source, result),
             Job::PlexAccounts(accounts) => self.plex_accounts_named(accounts),
             Job::CrashReport(report) => {
                 self.ui.crash = Some(ui::crash::CrashPrompt::new(*report));
