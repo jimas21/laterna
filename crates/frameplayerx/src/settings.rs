@@ -45,6 +45,49 @@ pub enum SubtitleMode {
     Always,
 }
 
+/// Settings › General › Render resolution: how big the picture drawn for each
+/// eye is, against the size SteamVR recommends. Read at start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderScale {
+    /// SteamVR's own size.
+    #[default]
+    Auto,
+    Sharper,
+    Sharpest,
+}
+
+impl RenderScale {
+    /// Every choice, in the order they are offered.
+    pub const ALL: [RenderScale; 3] = [
+        RenderScale::Auto,
+        RenderScale::Sharper,
+        RenderScale::Sharpest,
+    ];
+
+    /// How many times the recommended size each side is.
+    pub fn factor(self) -> f32 {
+        match self {
+            RenderScale::Auto => 1.0,
+            RenderScale::Sharper => 1.25,
+            RenderScale::Sharpest => 1.5,
+        }
+    }
+}
+
+/// A choice this version doesn't know (from a newer one) is Auto, rather
+/// than the whole file failing to load and every setting resetting.
+impl<'de> Deserialize<'de> for RenderScale {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<RenderScale, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        Ok(match value.as_str() {
+            Some("sharper") => RenderScale::Sharper,
+            Some("sharpest") => RenderScale::Sharpest,
+            _ => RenderScale::Auto,
+        })
+    }
+}
+
 /// Settings › Interface size: the sizes offered.
 pub const UI_SCALES: std::ops::RangeInclusive<f32> = 0.8..=1.5;
 
@@ -116,6 +159,9 @@ pub struct Settings {
     pub loop_playlist: bool,
     /// The performance overlay (Settings › General › Diagnostics).
     pub perf_overlay: bool,
+    /// The size of the picture drawn for each eye (Settings › General ›
+    /// Render resolution). Takes effect when the app starts.
+    pub render_scale: RenderScale,
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,
     /// Where the library and adjust panels were moved to: yaw and pitch in
@@ -245,6 +291,7 @@ impl Default for Settings {
             autoplay: false,
             loop_playlist: false,
             perf_overlay: false,
+            render_scale: RenderScale::default(),
             controls: crate::bindings::Bindings::default(),
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),
@@ -383,6 +430,36 @@ mod tests {
         std::fs::write(&path, "garbage").unwrap();
         assert_eq!(Settings::load(&path).volume, 1.0);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn render_resolution_defaults_to_auto_and_survives_a_round_trip() {
+        let old: Settings = serde_json::from_str(r#"{"volume": 0.5}"#).unwrap();
+        assert_eq!(old.render_scale, RenderScale::Auto);
+        assert_eq!(old.render_scale.factor(), 1.0);
+        for scale in RenderScale::ALL {
+            let s = Settings {
+                render_scale: scale,
+                ..Default::default()
+            };
+            let json = serde_json::to_string(&s).unwrap();
+            let again: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(again.render_scale, scale);
+        }
+        let json = serde_json::to_string(&RenderScale::Sharpest).unwrap();
+        assert_eq!(json, r#""sharpest""#);
+        assert_eq!(RenderScale::Sharper.factor(), 1.25);
+        assert_eq!(RenderScale::Sharpest.factor(), 1.5);
+    }
+
+    #[test]
+    fn an_unknown_render_resolution_is_auto_and_keeps_the_other_settings() {
+        for unknown in [r#""ultra""#, "2", "null", "[1]", r#""""#] {
+            let text = format!(r#"{{"volume": 0.25, "render_scale": {unknown}}}"#);
+            let s: Settings = serde_json::from_str(&text).unwrap();
+            assert_eq!(s.render_scale, RenderScale::Auto, "{unknown}");
+            assert_eq!(s.volume, 0.25, "{unknown}");
+        }
     }
 
     #[test]

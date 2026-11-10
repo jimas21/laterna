@@ -4,19 +4,20 @@
 //!   cargo run -p fp-xr --example xr_smoke
 
 use fp_render::{Gpu, Renderer, VideoParams};
-use fp_xr::{SessionEvent, XrContext, XrSession};
+use fp_xr::{SessionEvent, XrContext, XrOptions, XrSession};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = Arc::new(XrContext::new("frameplayerx-xr-smoke")?);
+    let ctx = XrContext::new("frameplayerx-xr-smoke", XrOptions::default())?;
+    let ctx = Arc::new(ctx);
     println!(
         "runtime: {} | system: {} | blend modes {:?}",
         ctx.runtime, ctx.system_name, ctx.blend_modes
     );
     let gpu = Arc::new(Gpu::new(&ctx.creator(), "frameplayerx")?);
     println!("gpu: {} ({})", gpu.device_name, gpu.driver);
-    let mut session = XrSession::new(ctx.clone(), gpu.clone())?;
+    let mut session = XrSession::new(ctx.clone(), gpu.clone(), 1.0)?;
     println!(
         "eye: {:?} {:?}; bindings {:?}",
         session.extent,

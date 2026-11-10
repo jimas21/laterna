@@ -12,7 +12,7 @@ pub mod context;
 pub mod input;
 pub mod session;
 
-pub use context::XrContext;
+pub use context::{EyeSizes, XrContext, XrOptions, scaled_eye_size};
 pub use input::{BoundProfile, Hand, InputState};
 pub use session::{FrameCtx, QuadSubmit, SessionEvent, XrSession, XrStats, is_worn};
 

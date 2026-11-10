@@ -35,9 +35,9 @@ mod world;
 
 use app::{App, FrameInput, LayerDraw};
 use fp_render::timing::{self, Series};
-use fp_render::{Gpu, Renderer};
-use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrSession, XrStats};
-use settings::Settings;
+use fp_render::{Gpu, Renderer, VideoParams};
+use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrOptions, XrSession, XrStats, scaled_eye_size};
+use settings::{RenderScale, Settings};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -189,7 +189,12 @@ fn location(arg: &str) -> String {
 }
 
 fn make_app() -> Result<App, Error> {
-    let settings = Settings::load(&Settings::path());
+    make_app_with(Settings::load(&Settings::path()))
+}
+
+/// The app with `settings` already read, for a caller that needed some of
+/// them first.
+fn make_app_with(settings: Settings) -> Result<App, Error> {
     let library = fp_library::Library::open_default()?;
     Ok(App::new(settings, library))
 }
@@ -400,22 +405,41 @@ struct Switches {
     /// `FRAMEPLAYERX_REQUEST_HZ=<rate>`: ask the runtime for this display
     /// refresh rate once the session runs.
     request_hz: Option<f32>,
+    /// `FRAMEPLAYERX_RENDER_SCALE=<factor>`: the eye pictures' size against
+    /// the runtime's recommended one, instead of Settings › Render
+    /// resolution.
+    render_scale: Option<f32>,
+    /// `FRAMEPLAYERX_BARE_LOOP=<seconds>`: run only a frame loop that clears
+    /// the eyes for this long, then exit (no app, panels or quad layers).
+    bare_loop: Option<f32>,
+    /// `FRAMEPLAYERX_XR_MINIMAL=1`: create the OpenXR instance with only the
+    /// extensions it can't do without.
+    xr_minimal: bool,
+    /// `FRAMEPLAYERX_NO_DASHBOARD_CLOSE=1`: leave SteamVR's dashboard open at
+    /// launch instead of closing it.
+    no_dashboard_close: bool,
 }
 
 impl Switches {
     fn from_env() -> Switches {
-        Switches::parse(
-            std::env::var("FRAMEPLAYERX_UI_IN_EYES").ok().as_deref(),
-            std::env::var("FRAMEPLAYERX_REQUEST_HZ").ok().as_deref(),
-        )
+        Switches::parse(|name| std::env::var(name).ok())
     }
 
-    fn parse(ui_in_eyes: Option<&str>, request_hz: Option<&str>) -> Switches {
-        Switches {
-            ui_in_eyes: ui_in_eyes.is_some_and(|v| !matches!(v.trim(), "" | "0")),
-            request_hz: request_hz
+    /// Reads the switches through `get`, which gives a variable's value.
+    fn parse(get: impl Fn(&str) -> Option<String>) -> Switches {
+        let on = |name: &str| get(name).is_some_and(|v| !matches!(v.trim(), "" | "0"));
+        let number = |name: &str| {
+            get(name)
                 .and_then(|v| v.trim().parse::<f32>().ok())
-                .filter(|hz| hz.is_finite() && *hz >= 0.0),
+                .filter(|n| n.is_finite())
+        };
+        Switches {
+            ui_in_eyes: on("FRAMEPLAYERX_UI_IN_EYES"),
+            request_hz: number("FRAMEPLAYERX_REQUEST_HZ").filter(|hz| *hz >= 0.0),
+            render_scale: number("FRAMEPLAYERX_RENDER_SCALE").filter(|k| *k > 0.0),
+            bare_loop: number("FRAMEPLAYERX_BARE_LOOP").filter(|s| *s > 0.0),
+            xr_minimal: on("FRAMEPLAYERX_XR_MINIMAL"),
+            no_dashboard_close: on("FRAMEPLAYERX_NO_DASHBOARD_CLOSE"),
         }
     }
 
@@ -426,6 +450,18 @@ impl Switches {
         }
         if let Some(hz) = self.request_hz {
             on.push(format!("FRAMEPLAYERX_REQUEST_HZ={hz}"));
+        }
+        if let Some(k) = self.render_scale {
+            on.push(format!("FRAMEPLAYERX_RENDER_SCALE={k}"));
+        }
+        if let Some(secs) = self.bare_loop {
+            on.push(format!("FRAMEPLAYERX_BARE_LOOP={secs}"));
+        }
+        if self.xr_minimal {
+            on.push("FRAMEPLAYERX_XR_MINIMAL".to_string());
+        }
+        if self.no_dashboard_close {
+            on.push("FRAMEPLAYERX_NO_DASHBOARD_CLOSE".to_string());
         }
         if on.is_empty() {
             "none".into()
@@ -449,9 +485,87 @@ struct Pacing {
     /// Frames the runtime said not to render.
     skipped: u32,
     last_display_ns: Option<i64>,
+    /// Seconds since the loop started and the period (ms) of each of the
+    /// first [`STARTUP_FRAMES`] frames.
+    early: Vec<(f32, f32)>,
+    /// Seconds since the loop started at the first frame the session had
+    /// focus.
+    focused_at: Option<f32>,
+    /// The startup line has been logged.
+    startup_logged: bool,
+}
+
+/// How many frames the startup line covers (8 s at 72 Hz).
+const STARTUP_FRAMES: usize = 600;
+
+/// Runs of consecutive values that stay within `tol` of the first of their
+/// run, as that first value and how many there are.
+fn runs(values: &[f32], tol: f32) -> Vec<(f32, u32)> {
+    let mut out: Vec<(f32, u32)> = Vec::new();
+    for &v in values {
+        if let Some((first, count)) = out.last_mut()
+            && (v - *first).abs() <= tol
+        {
+            *count += 1;
+            continue;
+        }
+        out.push((v, 1));
+    }
+    out
+}
+
+/// The index of the first period over 1.5 times the shortest one: a frame
+/// the runtime held to a slower rate than the display's. None when the
+/// periods never change, including when they are slow from the first frame.
+fn first_throttled(periods: &[f32]) -> Option<usize> {
+    let least = periods.iter().copied().fold(f32::INFINITY, f32::min);
+    periods.iter().position(|&p| p > least * 1.5)
+}
+
+/// The startup line for `frames` (seconds since the loop started, period in
+/// ms): the runs of periods, and when the first throttled frame came.
+fn startup_summary(frames: &[(f32, f32)], focused_at: Option<f32>) -> String {
+    let periods: Vec<f32> = frames.iter().map(|f| f.1).collect();
+    let shown = runs(&periods, 1.0)
+        .iter()
+        .map(|(ms, count)| format!("{ms:.1}x{count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let throttle = match (first_throttled(&periods), focused_at) {
+        (None, _) => "no throttled frame".to_string(),
+        (Some(n), Some(focus)) => {
+            let after = frames[n].0 - focus;
+            format!("first throttled frame {n} at {after:.1} s after FOCUSED")
+        }
+        (Some(n), None) => {
+            let at = frames[n].0;
+            format!("first throttled frame {n} at {at:.1} s, before FOCUSED")
+        }
+    };
+    let count = frames.len();
+    format!("pacing startup: {count} frames, period runs [{shown}]; {throttle}")
 }
 
 impl Pacing {
+    /// Notes a frame for the startup line, which comes back once the first
+    /// [`STARTUP_FRAMES`] are in (or from [`Pacing::log`] if fewer are by the
+    /// first 10 s summary). `secs` is the time since the loop started.
+    fn startup(&mut self, secs: f32, period_ns: i64, focused: bool) -> Option<String> {
+        if self.startup_logged {
+            return None;
+        }
+        if focused && self.focused_at.is_none() {
+            self.focused_at = Some(secs);
+        }
+        self.early.push((secs, period_ns as f32 / 1e6));
+        (self.early.len() >= STARTUP_FRAMES).then(|| self.take_startup_line())
+    }
+
+    fn take_startup_line(&mut self) -> String {
+        self.startup_logged = true;
+        startup_summary(&self.early, self.focused_at)
+    }
+
     fn frame(&mut self, period_ns: i64, display_ns: i64, should_render: bool) {
         self.period.push(period_ns as f32 / 1e6);
         if let Some(last) = self.last_display_ns.replace(display_ns) {
@@ -463,6 +577,10 @@ impl Pacing {
     /// Logs and resets this and the blocking-call timings: `calls` from the
     /// session and `fence` from the renderer.
     fn log(&mut self, calls: &mut XrStats, fence: &mut Series) {
+        if !self.startup_logged && !self.early.is_empty() {
+            let line = self.take_startup_line();
+            log::info!("{line}");
+        }
         let iteration = self.iteration.take();
         let frames = iteration.map_or(0, |s| s.count);
         let iter = timing::show(iteration);
@@ -482,6 +600,64 @@ impl Pacing {
     }
 }
 
+/// A frame loop that only clears the eyes, for `secs` seconds and then until
+/// the session has ended: no app, panels, quad layers or input. Its pacing
+/// log shows whether the runtime grants the display's full rate to an app
+/// that does nothing, which tells the app's own work from the rest.
+fn bare_loop(session: &mut XrSession, renderer: &mut Renderer, secs: f32) -> Result<(), Error> {
+    let start = Instant::now();
+    let mut pacing = Pacing::default();
+    let mut logged = Instant::now();
+    // When the first frame ran, and when the session was asked to end.
+    let mut began = None;
+    let mut asked_to_exit: Option<Instant> = None;
+    loop {
+        match session.poll()? {
+            SessionEvent::Exit => break,
+            SessionEvent::None => {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            SessionEvent::Running => {}
+        }
+        let elapsed = start.elapsed().as_secs_f32();
+        let ran = began.get_or_insert_with(Instant::now).elapsed();
+        let iteration = Instant::now();
+        let frame = session.begin_frame()?;
+        let period = frame.state.predicted_display_period.as_nanos();
+        pacing.frame(
+            period,
+            frame.state.predicted_display_time.as_nanos(),
+            frame.state.should_render,
+        );
+        if let Some(line) = pacing.startup(elapsed, period, session.focused()) {
+            log::info!("{line}");
+        }
+        if let (Some(targets), Some(eyes)) = (frame.targets, frame.eyes) {
+            renderer.begin_frame()?;
+            renderer.set_video(None)?;
+            renderer.draw(&targets, &eyes, &VideoParams::default(), &[])?;
+            renderer.end_frame()?;
+        }
+        session.end_frame(frame, &[])?;
+        pacing.iteration.push_since(iteration);
+        if logged.elapsed() > Duration::from_secs(10) {
+            pacing.log(&mut session.stats, &mut renderer.fence_wait);
+            logged = Instant::now();
+        }
+        if ran.as_secs_f32() > secs && asked_to_exit.is_none() {
+            asked_to_exit = Some(Instant::now());
+            session.request_exit();
+        }
+        if asked_to_exit.is_some_and(|t| t.elapsed() > Duration::from_secs(5)) {
+            log::warn!("the runtime didn't end the session; leaving");
+            break;
+        }
+    }
+    pacing.log(&mut session.stats, &mut renderer.fence_wait);
+    Ok(())
+}
+
 fn run_xr(args: &Args) -> Result<(), Error> {
     // After a restart SteamVR may still be closing the previous session:
     // keep trying for a while instead of quitting.
@@ -495,10 +671,18 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         .map(|d| d.join("frameplayerx.sh"))
         .ok()
         .filter(|l| l.is_file());
+    let switches = Switches::from_env();
+    // Read once, here: the render scale is needed before the session exists.
+    let settings = Settings::load(&Settings::path());
+    let render_scale = settings.render_scale;
+    let scale = switches.render_scale.unwrap_or(render_scale.factor());
+    let opts = XrOptions {
+        minimal_extensions: switches.xr_minimal,
+    };
     let mut tries = 0;
     let ctx = loop {
         tries += 1;
-        match XrContext::new("FramePlayerX") {
+        match XrContext::new("FramePlayerX", opts) {
             Ok(c) => break Arc::new(c),
             Err(e) if tries < attempts => {
                 log::info!("OpenXR not ready yet ({e}); retrying");
@@ -512,23 +696,40 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     log::info!("OpenXR runtime {} on {}", ctx.runtime, ctx.system_name);
     let gpu = Arc::new(Gpu::new(&ctx.creator(), "FramePlayerX")?);
     log::info!("GPU {} ({})", gpu.device_name, gpu.driver);
-    let mut session = XrSession::new(ctx.clone(), gpu.clone())?;
+    let mut session = XrSession::new(ctx.clone(), gpu.clone(), scale)?;
     log::info!(
         "eye buffers {:?} {:?}; controller bindings {:?}",
         session.extent,
         session.format,
         session.bindings()
     );
-    let switches = Switches::from_env();
     log::info!("A/B switches: {}", switches.describe());
     match (session.refresh_rate(), session.refresh_rates()) {
         (Some(now), Some(all)) => log::info!("display refresh rate {now} Hz; supported {all:?}"),
         _ => log::info!("display refresh rates: not available"),
     }
     let mut renderer = Renderer::new(gpu.clone(), session.format)?;
+    if let Some(secs) = switches.bare_loop {
+        log::info!("bare frame loop for {secs} s: no app, panels or layers");
+        bare_loop(&mut session, &mut renderer, secs)?;
+        exit_watchdog(EXIT_WITHIN);
+        renderer.wait_idle();
+        drop(renderer);
+        drop(session);
+        drop(gpu);
+        drop(ctx);
+        log::info!("bye");
+        return Ok(());
+    }
     fp_media::set_hevc_10bit_hardware(renderer.shows_q10c());
     fp_media::set_shared_frames(renderer.reads_decoder_buffers());
-    let mut app = make_app()?;
+    let mut app = make_app_with(settings)?;
+    if let Ok(sizes) = ctx.eye_sizes() {
+        app.set_render_info(ui::RenderInfo {
+            started: render_scale,
+            eye_px: RenderScale::ALL.map(|s| scaled_eye_size(&sizes, s.factor())),
+        });
+    }
     app.set_about(vec![
         ("OpenXR runtime".into(), ctx.runtime.clone()),
         ("Headset".into(), ctx.system_name.clone()),
@@ -617,7 +818,9 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                 Err(e) => log::warn!("requested display refresh rate {hz} Hz: {e}"),
             }
         }
-        session.close_dashboard_at_launch();
+        if !switches.no_dashboard_close {
+            session.close_dashboard_at_launch();
+        }
         let iteration = Instant::now();
         let frame = session.begin_frame()?;
         pacing.frame(
@@ -625,6 +828,13 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             frame.state.predicted_display_time.as_nanos(),
             frame.state.should_render,
         );
+        if let Some(line) = pacing.startup(
+            start.elapsed().as_secs_f32(),
+            frame.state.predicted_display_period.as_nanos(),
+            session.focused(),
+        ) {
+            log::info!("{line}");
+        }
         let recentred = session.recentred_by(frame.state.predicted_display_time);
         let work = Instant::now();
         let input = session.input(frame.state.predicted_display_time);
@@ -778,30 +988,120 @@ fn run_xr(args: &Args) -> Result<(), Error> {
 mod tests {
     use super::*;
 
+    /// A stand-in for the process environment holding `vars`.
+    fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| {
+            let (_, value) = vars.iter().find(|(k, _)| *k == name)?;
+            Some(value.to_string())
+        }
+    }
+
+    /// The switches with only `name` set, to `value`.
+    fn with(name: &'static str, value: &str) -> Switches {
+        Switches::parse(|n| (n == name).then(|| value.to_string()))
+    }
+
     #[test]
     fn switches_default_to_off() {
-        let s = Switches::parse(None, None);
+        let s = Switches::parse(env(&[]));
         assert_eq!(s, Switches::default());
         assert_eq!(s.describe(), "none");
     }
 
     #[test]
     fn switches_parse_the_environment_values() {
-        let s = Switches::parse(Some("1"), Some(" 90 "));
+        let vars = [
+            ("FRAMEPLAYERX_UI_IN_EYES", "1"),
+            ("FRAMEPLAYERX_REQUEST_HZ", " 90 "),
+            ("FRAMEPLAYERX_RENDER_SCALE", "1.5"),
+            ("FRAMEPLAYERX_BARE_LOOP", "40"),
+            ("FRAMEPLAYERX_XR_MINIMAL", "1"),
+            ("FRAMEPLAYERX_NO_DASHBOARD_CLOSE", "yes"),
+        ];
+        let s = Switches::parse(env(&vars));
         assert!(s.ui_in_eyes);
         assert_eq!(s.request_hz, Some(90.0));
-        let want = "FRAMEPLAYERX_UI_IN_EYES, FRAMEPLAYERX_REQUEST_HZ=90";
-        assert_eq!(s.describe(), want);
+        assert_eq!(s.render_scale, Some(1.5));
+        assert_eq!(s.bare_loop, Some(40.0));
+        assert!(s.xr_minimal);
+        assert!(s.no_dashboard_close);
+        let want = [
+            "FRAMEPLAYERX_UI_IN_EYES",
+            "FRAMEPLAYERX_REQUEST_HZ=90",
+            "FRAMEPLAYERX_RENDER_SCALE=1.5",
+            "FRAMEPLAYERX_BARE_LOOP=40",
+            "FRAMEPLAYERX_XR_MINIMAL",
+            "FRAMEPLAYERX_NO_DASHBOARD_CLOSE",
+        ];
+        assert_eq!(s.describe(), want.join(", "));
     }
 
     #[test]
     fn switches_ignore_off_and_bad_values() {
         for off in ["", "0", " 0 "] {
-            assert!(!Switches::parse(Some(off), None).ui_in_eyes);
+            assert!(!with("FRAMEPLAYERX_UI_IN_EYES", off).ui_in_eyes);
+            assert!(!with("FRAMEPLAYERX_XR_MINIMAL", off).xr_minimal);
+            assert!(!with("FRAMEPLAYERX_NO_DASHBOARD_CLOSE", off).no_dashboard_close);
         }
         for bad in ["", "fast", "-72", "NaN", "inf"] {
-            assert_eq!(Switches::parse(None, Some(bad)).request_hz, None);
+            assert_eq!(with("FRAMEPLAYERX_REQUEST_HZ", bad).request_hz, None);
         }
+        assert_eq!(with("FRAMEPLAYERX_REQUEST_HZ", "0").request_hz, Some(0.0));
+        for bad in ["", "fast", "0", "-1.5", "NaN", "inf"] {
+            assert_eq!(with("FRAMEPLAYERX_RENDER_SCALE", bad).render_scale, None);
+            assert_eq!(with("FRAMEPLAYERX_BARE_LOOP", bad).bare_loop, None);
+        }
+    }
+
+    #[test]
+    fn runs_group_values_that_stay_close() {
+        assert!(runs(&[], 0.5).is_empty());
+        let one: [(f32, u32); 1] = [(13.9, 3)];
+        assert_eq!(runs(&[13.9, 13.9, 13.8], 0.5), one);
+        let alternating: [(f32, u32); 3] = [(13.9, 1), (27.8, 1), (13.9, 1)];
+        assert_eq!(runs(&[13.9, 27.8, 13.9], 0.5), alternating);
+        // Each value is judged against the first of its run, not the last.
+        let split: [(f32, u32); 2] = [(10.0, 2), (10.9, 1)];
+        assert_eq!(runs(&[10.0, 10.4, 10.9], 0.5), split);
+    }
+
+    #[test]
+    fn the_first_throttled_frame_is_the_first_slow_one() {
+        assert_eq!(first_throttled(&[]), None);
+        assert_eq!(first_throttled(&[13.9, 13.9, 13.9]), None);
+        assert_eq!(first_throttled(&[13.9, 13.9, 27.8, 13.9]), Some(2));
+        // Slow from the first frame: nothing to compare against.
+        assert_eq!(first_throttled(&[27.8, 27.8]), None);
+    }
+
+    #[test]
+    fn the_startup_line_names_the_runs_and_the_first_throttled_frame() {
+        let frames: Vec<(f32, f32)> = (0..600)
+            .map(|i| (i as f32 * 0.01, if i < 42 { 13.9 } else { 27.8 }))
+            .collect();
+        assert_eq!(
+            startup_summary(&frames, Some(0.2)),
+            "pacing startup: 600 frames, period runs [13.9x42, 27.8x558]; \
+             first throttled frame 42 at 0.2 s after FOCUSED"
+        );
+        let before = startup_summary(&frames, None);
+        assert!(before.ends_with("first throttled frame 42 at 0.4 s, before FOCUSED"));
+        let steady = startup_summary(&frames[..42], Some(0.0));
+        assert!(
+            steady.ends_with("[13.9x42]; no throttled frame"),
+            "{steady}"
+        );
+    }
+
+    #[test]
+    fn the_startup_line_comes_once_the_first_frames_are_in() {
+        let mut p = Pacing::default();
+        for i in 0..STARTUP_FRAMES - 1 {
+            assert_eq!(p.startup(i as f32 * 0.014, 13_900_000, i > 3), None);
+        }
+        let line = p.startup(10.0, 13_900_000, true).expect("the last frame");
+        assert!(line.contains("600 frames"), "{line}");
+        assert_eq!(p.startup(10.1, 13_900_000, true), None, "only once");
     }
 
     #[test]

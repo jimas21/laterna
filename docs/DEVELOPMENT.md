@@ -473,6 +473,12 @@ Steam can't pass environment variables to an app, so the launcher reads
 |---|---|---|
 | `FRAMEPLAYERX_REFRESH_RATE` | | A refresh rate in Hz to set in SteamVR's per-app settings for FramePlayerX, unless you chose one there. Unset or `0` sets nothing, so SteamVR's default applies |
 | `FRAMEPLAYERX_RESOLUTION` | | Pixels per eye, set the same way. Unset or `0` sets nothing |
+| `FRAMEPLAYERX_RENDER_SCALE` | | The eye pictures' size as a multiple of the size the runtime recommends (0.5 to 2, a multiple of 8 pixels a side, within the runtime's maximum), instead of Settings › General › Render resolution. The log's `eye buffers` line says what was chosen |
+| `FRAMEPLAYERX_UI_IN_EYES` | | `1` draws the UI into the eye pictures instead of as compositor quad layers, for comparing the two |
+| `FRAMEPLAYERX_REQUEST_HZ` | | Asks the runtime for this display refresh rate once the session runs (`XR_FB_display_refresh_rate`) and logs the answer |
+| `FRAMEPLAYERX_XR_MINIMAL` | | `1` creates the OpenXR instance with only `XR_KHR_vulkan_enable2` and the Frame controller profile: no hand or eye tracking, refresh rate, visibility mask or layer extensions. For finding out whether one of them changes how SteamVR paces the app. The log lists the extensions enabled |
+| `FRAMEPLAYERX_BARE_LOOP` | | Seconds to run a frame loop that only clears the eyes, then exit: no app, panels, quad layers or input. Its pacing log shows what the runtime gives an app that does nothing |
+| `FRAMEPLAYERX_NO_DASHBOARD_CLOSE` | | `1` leaves SteamVR's dashboard open at launch instead of closing it |
 | `FRAMEPLAYERX_DEBUG_INPUT` | | `1` logs each controller's input when it changes |
 | `FRAMEPLAYERX_V4L2` | | `0` turns off the native V4L2 decoder |
 | `FRAMEPLAYERX_V4L2_DEVICE` | | The V4L2 device to decode with, instead of the one found |

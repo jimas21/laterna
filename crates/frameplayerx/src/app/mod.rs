@@ -378,6 +378,11 @@ impl App {
         self.ui.about = about;
     }
 
+    /// The eye picture sizes Settings › General › Render resolution shows.
+    pub fn set_render_info(&mut self, info: ui::RenderInfo) {
+        self.ui.render = Some(info);
+    }
+
     /// Opens a location (path or URL) as if picked in the UI.
     pub fn open(&mut self, req: OpenRequest) {
         self.apply(Action::Open(req));
