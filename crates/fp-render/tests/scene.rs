@@ -6,7 +6,7 @@ use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_render::capture::OffscreenEyes;
 use fp_render::math::{Fov, projection, view};
-use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Renderer, VideoParams};
+use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Quality, Renderer, VideoParams};
 use glam::{Mat4, Quat, Vec3};
 use std::sync::Arc;
 
@@ -393,21 +393,18 @@ fn flat_screen_sits_in_front_and_background_surrounds_it() {
     e.destroy(&r);
 }
 
-#[test]
-fn a_flat_screens_edge_is_antialiased() {
-    let Some((mut r, mut e)) = setup() else {
-        return;
-    };
+/// Renders a green screen turned a little, so its edges cross pixels at every
+/// fraction, and counts the left eye's full-green and blended pixels.
+fn green_screen_edge(r: &mut Renderer, e: &mut OffscreenEyes) -> (u32, u32) {
     let green = frame(160, 90, |_, _| [0, 255, 0]);
     let mut p = params(
         Projection::Flat,
         StereoLayout::Mono,
         ViewSettings::default(),
     );
-    // Turned a little, so the screen's edges cross pixels at every fraction.
     p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0)) * Mat4::from_rotation_y(0.3);
     p.background = [0.0, 0.0, 0.0, 1.0];
-    let [l, _] = render(&mut r, &mut e, Some(&green), &p, &[]);
+    let [l, _] = render(r, e, Some(&green), &p, &[]);
     let (mut full, mut partial) = (0, 0);
     for y in 0..SIZE {
         for x in 0..SIZE {
@@ -419,12 +416,36 @@ fn a_flat_screens_edge_is_antialiased() {
         }
     }
     assert!(centre(&l)[1] > 220, "the screen's centre is full green");
+    (full, partial)
+}
+
+#[test]
+fn a_flat_screens_edge_is_antialiased() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let (full, partial) = green_screen_edge(&mut r, &mut e);
     assert!(full > 1000, "screen interior: {full} full pixels");
     // A hard edge has none of these: every pixel is picture or background.
     assert!(
         partial > 20,
         "edge pixels blended with the background: {partial}"
     );
+    e.destroy(&r);
+}
+
+#[test]
+fn without_edge_antialiasing_a_flat_screens_edge_is_hard() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    r.set_quality(Quality {
+        edge_aa: false,
+        ..Quality::default()
+    });
+    let (full, partial) = green_screen_edge(&mut r, &mut e);
+    assert!(full > 1000, "screen interior: {full} full pixels");
+    assert_eq!(partial, 0, "every pixel is picture or background");
     e.destroy(&r);
 }
 
@@ -1040,6 +1061,247 @@ fn stereo_alignment_stays_vertical_when_recentred_sideways() {
     assert!(
         (is_red(l) && is_blue(rr)) || (is_blue(l) && is_red(rr)),
         "{l:?} {rr:?}"
+    );
+    e.destroy(&r);
+}
+
+// Dither and sharpen. These need no test-card module: the ramp and the checker
+// below are all they use.
+
+/// A `w` x `h` picture of greys rising one level per column from `lo`, as a
+/// 10-bit frame: the software Vulkan device filters 8-bit planes with 8-bit
+/// arithmetic, so only a 10-bit plane magnifies to a gradient that is smooth
+/// before it is quantised, as it is on a headset's GPU.
+fn ramp(w: u32, h: u32, lo: u8) -> Arc<fp_media::VideoFrame> {
+    let mut rgba = Vec::new();
+    for _ in 0..h {
+        for x in 0..w {
+            let level = lo + x as u8;
+            rgba.extend_from_slice(&[level, level, level, 255]);
+        }
+    }
+    let f = fp_media::VideoFrame::from_rgba_as(w, h, &rgba, PixelLayout::P010, true);
+    Arc::new(f.expect("frame"))
+}
+
+/// A black and white checker of `cell`-texel squares.
+fn checker(w: u32, h: u32, cell: u32) -> Arc<fp_media::VideoFrame> {
+    frame(w, h, |u, v| {
+        let (x, y) = ((u * w as f32) as u32, (v * h as f32) as u32);
+        if (x / cell + y / cell).is_multiple_of(2) {
+            [255; 3]
+        } else {
+            [0; 3]
+        }
+    })
+}
+
+/// A square screen that fills the 90 degree view (4 m wide, 2 m away), so a
+/// small picture on it is magnified.
+fn filling_screen(sharpen: f32, brightness: f32) -> VideoParams {
+    let settings = ViewSettings {
+        screen_width: 4.0,
+        sharpen,
+        brightness,
+        ..ViewSettings::default()
+    };
+    let mut p = params(Projection::Flat, StereoLayout::Mono, settings);
+    p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -2.0));
+    p.background = [0.0, 0.0, 0.0, 1.0];
+    p
+}
+
+/// The green value of every pixel at least 8 from the image's edge.
+fn interior(img: &[u8]) -> Vec<u8> {
+    let mut v = Vec::new();
+    for y in 8..SIZE - 8 {
+        for x in 8..SIZE - 8 {
+            v.push(px(img, x, y)[1]);
+        }
+    }
+    v
+}
+
+fn mean(v: &[u8]) -> f32 {
+    v.iter().map(|&x| x as f32).sum::<f32>() / v.len() as f32
+}
+
+fn extent(v: &[u8]) -> (u8, u8) {
+    (*v.iter().min().unwrap(), *v.iter().max().unwrap())
+}
+
+/// Each interior column's mean over the interior rows: where the picture
+/// does not vary with y, unbiased noise averages out of it.
+fn column_means(img: &[u8]) -> Vec<f32> {
+    let mut means = Vec::new();
+    for x in 8..SIZE - 8 {
+        let mut sum = 0.0;
+        for y in 8..SIZE - 8 {
+            sum += px(img, x, y)[1] as f32;
+        }
+        means.push(sum / (SIZE - 16) as f32);
+    }
+    means
+}
+
+/// How far a profile is from smooth: the sum of its second differences,
+/// which a staircase of whole levels makes large.
+fn roughness(profile: &[f32]) -> f32 {
+    let mut sum = 0.0;
+    for w in profile.windows(3) {
+        sum += (w[0] - 2.0 * w[1] + w[2]).abs();
+    }
+    sum
+}
+
+#[test]
+fn a_dark_ramp_is_dithered_not_banded() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // One level per texel, magnified eight times: smooth between texels, so
+    // only the 8-bit target makes steps of it.
+    let f = ramp(16, 16, 16);
+    let p = filling_screen(0.0, 0.0);
+    r.set_quality(Quality {
+        dither: false,
+        ..Quality::default()
+    });
+    let [plain, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+    r.set_quality(Quality::default());
+    let [dithered, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+
+    let (plain_cols, dithered_cols) = (column_means(&plain), column_means(&dithered));
+    let (bands, smooth) = (roughness(&plain_cols), roughness(&dithered_cols));
+    assert!(bands > 10.0, "the undithered ramp has steps: {bands}");
+    assert!(
+        smooth * 2.0 < bands,
+        "dither smooths the steps out: {smooth} against {bands}\nplain {:?}\ndithered {:?}",
+        &plain_cols[..24],
+        &dithered_cols[..24]
+    );
+    // Noise of half a code: no pixel moves more than a level, and the mean
+    // stays where it was.
+    let (a, b) = (interior(&plain), interior(&dithered));
+    let mut worst = 0;
+    for (x, y) in a.iter().zip(&b) {
+        worst = worst.max(x.abs_diff(*y));
+    }
+    assert!(worst <= 1, "dither moved a pixel by {worst}");
+    assert!((mean(&a) - mean(&b)).abs() < 1.0);
+    e.destroy(&r);
+}
+
+#[test]
+fn dither_resolves_steps_smaller_than_a_code() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let grey = frame(16, 16, |_, _| [100; 3]);
+    // The picture brightens by a quarter of a code per step.
+    let steps: Vec<f32> = (0..5).map(|i| i as f32 * 0.25 / 255.0).collect();
+    let (mut plain, mut dithered) = (Vec::new(), Vec::new());
+    for dither in [false, true] {
+        r.set_quality(Quality {
+            dither,
+            ..Quality::default()
+        });
+        for &brightness in &steps {
+            let p = filling_screen(0.0, brightness);
+            let [img, _] = render(&mut r, &mut e, Some(&grey), &p, &[]);
+            let v = interior(&img);
+            if dither {
+                dithered.push(mean(&v));
+            } else {
+                // Undithered, a flat field is one value.
+                let (lo, hi) = extent(&v);
+                assert_eq!(lo, hi, "flat field at brightness {brightness}");
+                plain.push(mean(&v));
+            }
+        }
+    }
+    // A whole code at most, so some steps change nothing...
+    assert!(
+        plain.windows(2).any(|w| w[0] == w[1]),
+        "undithered means {plain:?}"
+    );
+    // ...but with dither each one shows, by about a quarter of a code.
+    for w in dithered.windows(2) {
+        assert!(w[1] - w[0] > 0.1, "dithered means {dithered:?}");
+    }
+    let total = dithered[4] - dithered[0];
+    assert!((0.7..1.5).contains(&total), "means {dithered:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn sharpen_is_off_where_the_picture_is_minified() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // 512 texels across about 96 pixels: over five texels to a pixel.
+    let f = checker(512, 288, 1);
+    let mut p = params(
+        Projection::Flat,
+        StereoLayout::Mono,
+        ViewSettings::default(),
+    );
+    p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0));
+    p.background = [0.0, 0.0, 0.0, 1.0];
+    let [plain, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+    p.settings.sharpen = 1.0;
+    let [sharp, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+    // Inside the screen (about rows 37 to 91, columns 16 to 112).
+    let mut worst = 0;
+    for y in 44..84 {
+        for x in 24..104 {
+            worst = worst.max(px(&plain, x, y)[1].abs_diff(px(&sharp, x, y)[1]));
+        }
+    }
+    assert_eq!(worst, 0, "minified pixel changed by {worst}");
+    e.destroy(&r);
+}
+
+/// The green values along the middle row, away from the image's edges.
+fn middle_row(img: &[u8]) -> Vec<u8> {
+    (8..SIZE - 8).map(|x| px(img, x, SIZE / 2)[1]).collect()
+}
+
+/// How many values of `row` lie between 10% and 90% of `lo` to `hi`.
+fn edge_width(row: &[u8], lo: u8, hi: u8) -> usize {
+    let span = (hi - lo) as f32;
+    let (from, to) = (lo as f32 + 0.1 * span, hi as f32 - 0.1 * span);
+    let mut n = 0;
+    for &v in row {
+        if (v as f32) > from && (v as f32) < to {
+            n += 1;
+        }
+    }
+    n
+}
+
+#[test]
+fn sharpen_sharpens_a_magnified_edge_without_halo() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // A dark | light step, each texel eight pixels wide: soft until sharpened.
+    let (dark, light) = ([20; 3], [230; 3]);
+    let f = frame(16, 16, |u, _| if u < 0.5 { dark } else { light });
+    let mut p = filling_screen(0.0, 0.0);
+    let [plain, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+    p.settings.sharpen = 1.0;
+    let [sharp, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+    let (plain, sharp) = (middle_row(&plain), middle_row(&sharp));
+    let (lo, hi) = extent(&plain);
+    let (w0, w1) = (edge_width(&plain, lo, hi), edge_width(&sharp, lo, hi));
+    assert!(w0 >= 4, "the soft edge spans {w0} pixels");
+    assert!(w1 < w0, "sharpen narrows the edge: {w0} -> {w1}");
+    // Within the plateaus' range, give or take the dither: no overshoot.
+    let (slo, shi) = extent(&sharp);
+    assert!(
+        shi <= hi + 2 && slo + 2 >= lo,
+        "halo: {slo}..{shi} against {lo}..{hi}"
     );
     e.destroy(&r);
 }

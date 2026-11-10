@@ -484,6 +484,7 @@ Steam can't pass environment variables to an app, so the launcher reads
 | `FRAMEPLAYERX_V4L2_DEVICE` | | The V4L2 device to decode with, instead of the one found |
 | `FRAMEPLAYERX_ZERO_COPY` | | `0` copies hardware-decoded frames out of the decoder's buffers instead of reading them there, as before; for comparing the two |
 | `FRAMEPLAYERX_TP10_EYES` | | `0` converts SDR 10-bit frames read in place into P010 planes instead of sampling them in the eye passes, as before; for comparing the two |
+| `FRAMEPLAYERX_QUALITY` | | Picture-quality features to turn off, comma-separated: `nodither` (noise against banding in dark gradients), `nosupersample` (four taps where a flat picture is minified), `noedgeaa` (antialiased screen edges). All are on by default; for comparing a look with and without on one build. The start-up log's `A/B switches` line names what is off |
 
 ### Steam Frame notes
 

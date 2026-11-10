@@ -51,6 +51,7 @@ struct Params {
     // for spherical video; w: radius of the sphere it is drawn on when offset
     viewer: vec4<f32>,
     // x: clockwise quarter turns that show the frame upright
+    // y: quality bits (QUALITY_*)
     display: vec4<u32>,
     // HDR, as PQ codes: x the scene's peak, y the screen's white
     hdr: vec4<f32>,
@@ -88,13 +89,18 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 const PI: f32 = 3.14159265358979;
 const INVALID: vec2<f32> = vec2<f32>(-1.0, -1.0);
 
-// Analytic antialiasing of the picture's edge (flat or curved screen, and the
-// fisheye image circle): the edge pixels blend towards the background by the
-// fraction of the pixel the picture covers. Off gives the old hard edge.
-const EDGE_AA: bool = true;
-// Four-tap rotated-grid supersampling of a flat screen's picture where it is
-// minified (more than one video texel per eye pixel). Off gives one tap.
-const SUPERSAMPLE: bool = true;
+// Quality features, switched by bits of `params.display.y` (Quality in
+// params.rs; uniform, so derivative uniformity is unchanged):
+//   1 dither (dither.wgsl), 2 supersample, 4 edge AA.
+// Edge AA: analytic antialiasing of the picture's edge (flat or curved screen,
+// and the fisheye image circle): edge pixels blend towards the background by
+// the fraction of the pixel the picture covers; off gives a hard edge.
+// Supersample: four-tap rotated-grid supersampling of a flat screen's picture
+// where it is minified (more than one video texel per eye pixel); off gives
+// one tap.
+const QUALITY_DITHER: u32 = 1u;
+const QUALITY_SUPERSAMPLE: u32 = 2u;
+const QUALITY_EDGE_AA: u32 = 4u;
 
 fn rot_y(a: f32) -> mat3x3<f32> {
     let c = cos(a); let s = sin(a);
@@ -435,7 +441,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // A pixel centred on the edge is half covered.
     var cov = 1.0;
     if (kind == 0u || kind == 2u) {
-        if (EDGE_AA) {
+        if ((params.display.y & QUALITY_EDGE_AA) != 0u) {
             let fw = max(abs(duv_dx) + abs(duv_dy), vec2<f32>(1e-6));
             let e = clamp(min(uv, vec2<f32>(1.0) - uv) / fw + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
             cov = e.x * e.y;
@@ -456,10 +462,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let uvc = clamp_to_eye(uv);
     let tuv = stored_uv(to_eye_rect(uvc, eye));
     var rgb = sample_yuv(tuv);
+    // How many video texels one eye pixel spans here: 1 is one to one, more is
+    // minified. Supersampling and sharpening both key off it.
+    let fp = texel_footprint(duv_dx, duv_dy);
     // Fades in from one tap to four as the picture gets minified, so a
     // tilted or curved screen shows no line where the mode would flip.
-    if (SUPERSAMPLE && kind == 0u) {
-        let ss = smoothstep(0.9, 1.3, texel_footprint(duv_dx, duv_dy));
+    if ((params.display.y & QUALITY_SUPERSAMPLE) != 0u && kind == 0u) {
+        let ss = smoothstep(0.9, 1.3, fp);
         if (ss > 0.0) {
             rgb = mix(rgb, sample_yuv_aa(uvc, duv_dx, duv_dy, eye), ss);
         }
@@ -489,13 +498,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         alpha *= clamp((sample_yuv(stored_uv(m)).r - 0.08) / 0.84, 0.0, 1.0);
     }
 
-    // Sharpen: unsharp mask on luma.
-    if (params.extra.x > 0.0) {
+    // Sharpen: unsharp mask on luma. It fades out between 0.8 and 1.25 texels
+    // per pixel (on a minified picture it would amplify aliasing and shimmer)
+    // and never goes past the range of the texels around (no halos).
+    let k = params.extra.x * (1.0 - smoothstep(0.8, 1.25, fp));
+    if (k > 0.0) {
         let dx = vec2<f32>(params.tex_size.z, 0.0);
         let dy = vec2<f32>(0.0, params.tex_size.w);
         let yc = luma_at(tuv);
-        let blur = (luma_at(tuv + dx) + luma_at(tuv - dx) + luma_at(tuv + dy) + luma_at(tuv - dy)) * 0.25;
-        rgb += vec3<f32>((yc - blur) * params.extra.x * 2.0);
+        let y0 = luma_at(tuv + dx);
+        let y1 = luma_at(tuv - dx);
+        let y2 = luma_at(tuv + dy);
+        let y3 = luma_at(tuv - dy);
+        let blur = (y0 + y1 + y2 + y3) * 0.25;
+        let lo = min(min(yc, y0), min(min(y1, y2), y3));
+        let hi = max(max(yc, y0), max(max(y1, y2), y3));
+        let d = clamp((yc - blur) * k * 2.0, lo - yc, hi - yc);
+        // Luma onto the colour's own scale (the matrix's Y column).
+        rgb += vec3<f32>(d * params.yuv_r.x);
     }
 
     // HDR: to BT.709 nits, into its gamut, then the tone curve, which also
@@ -521,7 +541,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let luma = dot(g, vec3<f32>(0.2126, 0.7152, 0.0722));
     g = mix(vec3<f32>(luma), g, params.picture.z);
     g = pow(max(g, vec3<f32>(0.0)), vec3<f32>(1.0 / max(params.picture.w, 0.05)));
-    let col = srgb_to_linear(clamp(g, vec3<f32>(0.0), vec3<f32>(1.0)));
+    var col = srgb_to_linear(clamp(g, vec3<f32>(0.0), vec3<f32>(1.0)));
+    // Dither last, in the target's code space (dither.wgsl).
+    if ((params.display.y & QUALITY_DITHER) != 0u) {
+        col = dither_linear(col, in.pos.xy);
+    }
     // Over the (premultiplied) background: keyed-out pixels show it.
     // Premultiplied, like bg_color and the pipeline (blending is off), so a
     // partly covered edge pixel is a plain mix towards the background.

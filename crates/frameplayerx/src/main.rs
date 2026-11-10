@@ -35,7 +35,7 @@ mod world;
 
 use app::{App, FrameInput, LayerDraw};
 use fp_render::timing::{self, Series};
-use fp_render::{Gpu, Renderer, VideoParams};
+use fp_render::{Gpu, Quality, Renderer, VideoParams};
 use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrOptions, XrSession, XrStats, scaled_eye_size};
 use settings::{RenderScale, Settings};
 use std::os::unix::process::CommandExt;
@@ -418,6 +418,9 @@ struct Switches {
     /// `FRAMEPLAYERX_NO_DASHBOARD_CLOSE=1`: leave SteamVR's dashboard open at
     /// launch instead of closing it.
     no_dashboard_close: bool,
+    /// `FRAMEPLAYERX_QUALITY=nodither,nosupersample,noedgeaa`: turn picture
+    /// quality features off, to compare a look with and without on one build.
+    quality: Quality,
 }
 
 impl Switches {
@@ -440,6 +443,7 @@ impl Switches {
             bare_loop: number("FRAMEPLAYERX_BARE_LOOP").filter(|s| *s > 0.0),
             xr_minimal: on("FRAMEPLAYERX_XR_MINIMAL"),
             no_dashboard_close: on("FRAMEPLAYERX_NO_DASHBOARD_CLOSE"),
+            quality: Quality::without(get("FRAMEPLAYERX_QUALITY").as_deref().unwrap_or("")),
         }
     }
 
@@ -462,6 +466,10 @@ impl Switches {
         }
         if self.no_dashboard_close {
             on.push("FRAMEPLAYERX_NO_DASHBOARD_CLOSE".to_string());
+        }
+        if self.quality != Quality::default() {
+            let off = self.quality.off_list();
+            on.push(format!("FRAMEPLAYERX_QUALITY={off}"));
         }
         if on.is_empty() {
             "none".into()
@@ -709,6 +717,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         _ => log::info!("display refresh rates: not available"),
     }
     let mut renderer = Renderer::new(gpu.clone(), session.format)?;
+    renderer.set_quality(switches.quality);
     if let Some(secs) = switches.bare_loop {
         log::info!("bare frame loop for {secs} s: no app, panels or layers");
         bare_loop(&mut session, &mut renderer, secs)?;
@@ -1011,6 +1020,7 @@ mod tests {
         let s = Switches::parse(env(&[]));
         assert_eq!(s, Switches::default());
         assert_eq!(s.describe(), "none");
+        assert_eq!(s.quality, Quality::default());
     }
 
     #[test]
@@ -1022,6 +1032,7 @@ mod tests {
             ("FRAMEPLAYERX_BARE_LOOP", "40"),
             ("FRAMEPLAYERX_XR_MINIMAL", "1"),
             ("FRAMEPLAYERX_NO_DASHBOARD_CLOSE", "yes"),
+            ("FRAMEPLAYERX_QUALITY", "nodither, noedgeaa"),
         ];
         let s = Switches::parse(env(&vars));
         assert!(s.ui_in_eyes);
@@ -1030,6 +1041,7 @@ mod tests {
         assert_eq!(s.bare_loop, Some(40.0));
         assert!(s.xr_minimal);
         assert!(s.no_dashboard_close);
+        assert!(!s.quality.dither && !s.quality.edge_aa && s.quality.supersample);
         let want = [
             "FRAMEPLAYERX_UI_IN_EYES",
             "FRAMEPLAYERX_REQUEST_HZ=90",
@@ -1037,6 +1049,7 @@ mod tests {
             "FRAMEPLAYERX_BARE_LOOP=40",
             "FRAMEPLAYERX_XR_MINIMAL",
             "FRAMEPLAYERX_NO_DASHBOARD_CLOSE",
+            "FRAMEPLAYERX_QUALITY=nodither,noedgeaa",
         ];
         assert_eq!(s.describe(), want.join(", "));
     }
@@ -1050,6 +1063,9 @@ mod tests {
         }
         for bad in ["", "fast", "-72", "NaN", "inf"] {
             assert_eq!(with("FRAMEPLAYERX_REQUEST_HZ", bad).request_hz, None);
+        }
+        for bad in ["", "fast", "dither", "nodithers"] {
+            assert_eq!(with("FRAMEPLAYERX_QUALITY", bad).quality, Quality::default());
         }
         assert_eq!(with("FRAMEPLAYERX_REQUEST_HZ", "0").request_hz, Some(0.0));
         for bad in ["", "fast", "0", "-1.5", "NaN", "inf"] {
