@@ -601,6 +601,13 @@ pub fn scan(root: &Path) -> HashMap<Place, Arc<Replacement>> {
     found.into_iter().map(|(p, (_, r))| (p, r)).collect()
 }
 
+/// The packs that ship inside the app: `places/` beside the binary. The
+/// Cinema comes this way; packs in [`places_dir`] replace them.
+pub fn bundled_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("places"))
+}
+
 /// The folder the packs are looked for in.
 pub fn places_dir() -> PathBuf {
     match std::env::var_os(PLACES_DIR_ENV).filter(|v| !v.is_empty()) {
@@ -630,7 +637,9 @@ pub fn replacement(place: Place) -> Option<Arc<Replacement>> {
     drop(failed);
     let catalog = CATALOG.get_or_init(|| {
         let root = places_dir();
-        let found = scan(&root);
+        // Bundled first; a pack the user installed for the same place wins.
+        let mut found = bundled_dir().map(|d| scan(&d)).unwrap_or_default();
+        found.extend(scan(&root));
         for (place, r) in &found {
             log::info!(
                 "place pack {} (version {}) replaces {}",

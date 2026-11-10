@@ -49,6 +49,12 @@ done
 cp packaging/frameplayerx.sh packaging/README.txt LICENSE NOTICE "$stage/"
 cp packaging/licenses/* "$stage/licenses/"
 cp assets/steam/*.png "$stage/assets/steam/"
+# Place packs bundled with the app (the Cinema), when the build has them:
+# LATERNA_PACKS_DIR holds one folder per pack (see docs/ENVIRONMENTS.md).
+if [ -n "${LATERNA_PACKS_DIR:-}" ] && [ -d "$LATERNA_PACKS_DIR" ]; then
+  mkdir -p "$stage/places"
+  cp -r "$LATERNA_PACKS_DIR"/. "$stage/places/"
+fi
 echo "$version" > "$stage/VERSION"
 # The Rust crates compiled into the binary, then the licence, copyright and
 # notice files each crate ships, which their licences ask to go with the
