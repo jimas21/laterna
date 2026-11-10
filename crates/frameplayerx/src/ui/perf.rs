@@ -42,6 +42,9 @@ pub struct Video {
     pub stuttered: bool,
     /// "HW · HEVC 10-bit".
     pub decoder: String,
+    /// Damaged pictures, frames and packets the decoder met since it opened
+    /// (see `playback::damage_total`); shown with the decoder when not 0.
+    pub damage: u64,
     /// Seconds read ahead of the picture, and how far it's aiming.
     pub buffer: (f32, f32),
     /// The file has been read to its end, so the buffer can only fall.
@@ -154,7 +157,12 @@ fn video_rows(v: &Video, rows: &mut Vec<(&'static str, String, bool)>) {
     };
     let tally = tr!("perf-stutter", dropped = v.dropped, stalls = v.stalls);
     rows.push((tr!("perf-video"), format!("{state} · {tally}"), v.stuttered));
-    rows.push((tr!("adjust-decoder"), v.decoder.clone(), false));
+    let mut decoder = v.decoder.clone();
+    if v.damage > 0 {
+        decoder += " · ";
+        decoder += &tr!("perf-damage", count = v.damage);
+    }
+    rows.push((tr!("adjust-decoder"), decoder, v.damage > 0));
 
     let (ahead, target) = v.buffer;
     let (ahead_text, target_text) = (format!("{ahead:.1}"), format!("{target:.0}"));
@@ -260,6 +268,7 @@ mod tests {
             stalls: 1,
             stuttered: false,
             decoder: "HW · HEVC 10-bit".into(),
+            damage: 0,
             buffer: (9.54, 15.0),
             read_to_end: false,
             network: Some(Network {
@@ -343,6 +352,22 @@ mod tests {
         assert!(value(&r, "Video").1.starts_with("– of 24.0 fps"));
         assert_eq!(value(&r, "Network").1, "–");
         assert_eq!(value(&r, "Opened").1, "–");
+    }
+
+    #[test]
+    fn decode_damage_shows_with_the_decoder_only_when_there_is_some() {
+        let r = rows(&overlay_with(Some(video())));
+        assert_eq!(value(&r, "Decoder").1, "HW · HEVC 10-bit");
+        assert!(!value(&r, "Decoder").2);
+        let mut v = video();
+        v.damage = 1;
+        let r = rows(&overlay_with(Some(v.clone())));
+        assert_eq!(value(&r, "Decoder").1, "HW · HEVC 10-bit · 1 decode error");
+        assert!(value(&r, "Decoder").2);
+        v.damage = 7;
+        let r = rows(&overlay_with(Some(v)));
+        assert_eq!(value(&r, "Decoder").1, "HW · HEVC 10-bit · 7 decode errors");
+        assert!(r.len() as u32 <= MOST_ROWS);
     }
 
     #[test]

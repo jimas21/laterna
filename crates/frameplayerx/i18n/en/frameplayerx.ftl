@@ -1216,6 +1216,11 @@ perf-stutter = { $dropped } dropped · { $stalls ->
     [one] { $stalls } stall
    *[other] { $stalls } stalls
 }
+# Pictures, frames or packets the decoder met damaged, shown beside the decoder.
+perf-damage = { $count ->
+    [one] { $count } decode error
+   *[other] { $count } decode errors
+}
 perf-buffer = Buffer
 # Seconds of video read ahead, of how many it's aiming for.
 perf-buffer-value = { $ahead } of { $target } s

@@ -40,6 +40,9 @@ pub struct Panel {
     /// 0 hidden → 1 shown, following `visible` over a short fade.
     fade: f32,
     events: Vec<Event>,
+    /// Where egui's pointer was last put by a queued event, so a hover that
+    /// has not moved is not queued again (see [`Panel::hover_at`]).
+    pointer_at: Option<Pos2>,
     hovered: bool,
     last_paint: Option<Instant>,
     /// Repaint at least this often while visible (live content).
@@ -71,6 +74,7 @@ impl Panel {
             opacity: 1.0,
             fade: 0.0,
             events: Vec::new(),
+            pointer_at: None,
             hovered: false,
             last_paint: None,
             refresh: None,
@@ -180,8 +184,33 @@ impl Panel {
     }
 
     pub fn push(&mut self, e: Event) {
+        // Whatever moves or removes egui's pointer changes where it is, and
+        // the next hover must be queued whether or not the ray has moved.
+        match &e {
+            Event::PointerMoved(pos) => self.pointer_at = Some(*pos),
+            Event::PointerButton { .. } | Event::PointerGone => self.pointer_at = None,
+            _ => {}
+        }
         self.events.push(e);
         self.repaint_requested = true;
+    }
+
+    /// Queues the hover of a ray at `pos` (egui points), unless the pointer
+    /// is already there to within a quarter of a pixel of the panel's
+    /// texture. A ray resting on a panel (a hand's own tremor aside) would
+    /// otherwise queue a move every frame, and each one made the panel
+    /// repaint, build its mips again and copy into its quad layer.
+    pub fn hover_at(&mut self, pos: Pos2) {
+        let ppp = if self.grows {
+            self.ppp
+        } else {
+            self.ppp * self.scale
+        };
+        let within = POINTER_STILL_PX / ppp.max(f32::EPSILON);
+        if self.pointer_at.is_some_and(|at| at.distance(pos) <= within) {
+            return;
+        }
+        self.push(Event::PointerMoved(pos));
     }
 
     pub fn request_repaint(&mut self) {
@@ -460,6 +489,9 @@ pub struct Aim {
 /// pulled trigger tips a controller further than that. This is about two
 /// degrees of the ray (the main panel is about 18 points a degree).
 const CLICK_REACH: f32 = 40.0;
+/// How far a ray's hover must move on a panel's texture to be queued again,
+/// in its pixels.
+const POINTER_STILL_PX: f32 = 0.25;
 
 #[derive(Default)]
 pub struct Pointer {
@@ -610,7 +642,7 @@ impl Pointer {
             if crate::ui::widgets::list_took_press(&p.ctx) {
                 p.push(Event::PointerMoved(pos + egui::Vec2::splat(1e4)));
             }
-            p.push(Event::PointerMoved(pos));
+            p.hover_at(pos);
             let stick = hands[self.active].stick;
             if stick.y.abs() > 0.2 && !p.display_only && p.handles.is_empty() {
                 p.push(Event::MouseWheel {
@@ -1584,9 +1616,10 @@ mod tests {
         assert_eq!(ptr.pressed(), None);
         assert!(presses(&p).is_empty(), "the panel never sees a press");
         assert!(ptr.trigger_down(1));
-        // The hover still reaches the panel for its highlight, but not the
-        // stick as a scroll.
+        // The hover still reaches the panel for its highlight (as the ray
+        // moves), but not the stick as a scroll.
         hands[1].stick = Vec2::new(0.0, 1.0);
+        hands[1].aim = at(652.0, 200.0);
         p.events.clear();
         ptr.route(&mut [&mut p], &hands, 0.016);
         assert!(ptr.hovered().is_some());
@@ -1599,6 +1632,51 @@ mod tests {
         ptr.route(&mut [&mut p], &hands, 0.016);
         assert!(!ptr.trigger_down(1));
         assert!(presses(&p).is_empty());
+    }
+
+    fn moves(p: &Panel) -> usize {
+        queued(p, |e| matches!(e, Event::PointerMoved(_)))
+    }
+
+    #[test]
+    fn a_ray_at_rest_queues_its_hover_once() {
+        let mut p = panel_in_front();
+        let mut ptr = Pointer::default();
+        let mut hands = [Hand::default(), Hand::default()];
+        hands[1].aim = at(300.0, 150.0);
+        for _ in 0..3 {
+            ptr.route(&mut [&mut p], &hands, 0.011);
+        }
+        assert_eq!(moves(&p), 1, "the same position twice is one event");
+        // Under a quarter of a pixel (a point is a pixel on this panel).
+        hands[1].aim = at(300.1, 150.1);
+        ptr.route(&mut [&mut p], &hands, 0.011);
+        assert_eq!(moves(&p), 1);
+        // A real move is queued, and then rests too.
+        hands[1].aim = at(303.0, 150.0);
+        ptr.route(&mut [&mut p], &hands, 0.011);
+        ptr.route(&mut [&mut p], &hands, 0.011);
+        assert_eq!(moves(&p), 2);
+    }
+
+    #[test]
+    fn a_hover_is_queued_again_after_a_press_or_leaving() {
+        let mut p = panel_in_front();
+        let mut ptr = Pointer::default();
+        let mut hands = [Hand::default(), Hand::default()];
+        hands[1].aim = at(200.0, 200.0);
+        ptr.route(&mut [&mut p], &hands, 0.011);
+        assert_eq!(moves(&p), 1);
+        // A press puts egui's pointer where it was pressed, and a let-go off
+        // the panel puts it off: the next hover must say where it is.
+        hands[1].trigger = 1.0;
+        ptr.route(&mut [&mut p], &hands, 0.011);
+        assert_eq!(moves(&p), 1);
+        ptr.route(&mut [&mut p], &hands, 0.011);
+        assert_eq!(moves(&p), 2, "after the press");
+        p.push(Event::PointerGone);
+        ptr.route(&mut [&mut p], &hands, 0.011);
+        assert_eq!(moves(&p), 3, "after the pointer left");
     }
 
     #[test]

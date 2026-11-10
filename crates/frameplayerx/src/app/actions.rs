@@ -107,7 +107,7 @@ impl App {
             }
             Action::SaveView => {
                 if let Some(p) = &mut self.playback {
-                    match p.save_settings(&self.services.library) {
+                    match p.save_settings(&self.services.library, &self.services.writer) {
                         Ok(true) => self.ui.toast(tr!("toast-adjustments-saved")),
                         Ok(false) => {}
                         Err(e) => self
@@ -134,7 +134,7 @@ impl App {
                         .iter()
                         .find(|t| !t.subtitle && t.index == Some(i))
                         .map(|t| t.id.clone());
-                    p.save_tracks(&self.services.library);
+                    p.save_tracks(&self.services.library, &self.services.writer);
                 }
             }
             Action::SelectSourceAudio(id) => self.play_source_track(Some(id), None),
@@ -166,7 +166,7 @@ impl App {
                             matches!(pick, crate::subtitles::Pick::Off).then(|| "0".into())
                         });
                     }
-                    p.save_tracks(&self.services.library);
+                    p.save_tracks(&self.services.library, &self.services.writer);
                 }
             }
             Action::SelectQuality(q) => self.play_quality(q),
@@ -418,7 +418,7 @@ impl App {
             let Some(p) = &mut self.playback else {
                 return;
             };
-            p.save_progress(&self.services.library, true);
+            p.save_progress(&self.services.library, &self.services.writer, true);
             if p.player.can_seek() {
                 p.player.seek(0.0, false);
                 p.player.play();
@@ -437,7 +437,7 @@ impl App {
     /// Closes the video, and drops one still opening.
     pub(super) fn close_playback(&mut self) {
         if let Some(p) = self.playback.take() {
-            p.close(&self.services.library);
+            p.close(&self.services.library, &self.services.writer);
         }
         if self.ui.opening.take().is_some() {
             self.open_seq += 1;

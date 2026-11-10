@@ -124,6 +124,14 @@ pub struct Stats {
     pub frames_dropped: u64,
     /// Times the clock was held because decoding fell behind.
     pub stalls: u64,
+    /// Pictures the hardware decoder flagged as broken (`V4L2_BUF_FLAG_ERROR`)
+    /// and were left out. Counted, not acted on.
+    pub pictures_flagged: u64,
+    /// Packets software decoding skipped as invalid data.
+    pub packets_invalid: u64,
+    /// Frames software decoding marked corrupt or concealed (FFmpeg's
+    /// `AV_FRAME_FLAG_CORRUPT` or `decode_error_flags`).
+    pub frames_corrupt: u64,
     pub video_queue: usize,
     pub packets_queued: usize,
     pub bytes_queued: usize,
@@ -1026,6 +1034,7 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
     let mut conv = FrameConverter::default();
     let default_duration = 1.0 / sh.video_fps.max(1.0);
     let mut hardware = dec.hardware;
+    let mut errors = crate::decode::ErrorCounts::default();
     while !sh.quit.load(Ordering::Acquire) {
         let Some((pkt_serial, pkt)) = sh.vpkts.pop(Duration::from_millis(20)) else {
             continue;
@@ -1075,6 +1084,15 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
                     st.hardware = dec.hardware;
                     st.hardware_error = dec.hardware_error.clone();
                     st.hardware_holders = dec.hardware_holders.clone();
+                }
+                // Damage met so far, for the log and the overlay.
+                let met = dec.error_counts();
+                if met != errors {
+                    errors = met;
+                    let mut st = sh.stats();
+                    st.pictures_flagged = met.pictures_flagged;
+                    st.packets_invalid = met.packets_invalid;
+                    st.frames_corrupt = met.frames_corrupt;
                 }
                 match received {
                     Ok(Some(true)) => {
@@ -1500,6 +1518,15 @@ mod tests {
         let local = cfg().for_source(&*crate::ts_fixture::h264_aac_ts(0.0));
         assert_eq!(local.read_ahead_target(0.0), 4.0);
         assert_eq!(local.read_ahead_target(600.0), 4.0);
+    }
+
+    #[test]
+    fn stats_start_with_no_damage_counted() {
+        let st = Stats::default();
+        assert_eq!(
+            (st.pictures_flagged, st.packets_invalid, st.frames_corrupt),
+            (0, 0, 0)
+        );
     }
 
     #[test]

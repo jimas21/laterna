@@ -1,6 +1,11 @@
 //! Background work and its results: opening videos, scans, updates, drives.
 
 use super::*;
+use crate::writer::Done;
+
+/// How long opening a video waits for the saves made just before it (see
+/// [`crate::writer::Barrier`]).
+const WRITES_WITHIN: Duration = Duration::from_secs(2);
 
 type PlexLink = Option<(
     fp_sources::plex::auth::PlexCredentials,
@@ -359,10 +364,38 @@ impl App {
     /// Takes in finished background work and the metadata worker's progress.
     pub(super) fn poll_jobs(&mut self) {
         self.services.poll_source_updates();
+        self.poll_writes();
         for job in self.jobs.poll() {
             self.on_job(job);
         }
         self.poll_worker();
+    }
+
+    /// Takes in how the writer thread's saves went.
+    fn poll_writes(&mut self) {
+        for done in self.services.writer.poll() {
+            let Done { key, result } = done;
+            if let Err(e) = &result
+                && key != Key::Settings
+            {
+                log::warn!("saving {}: {e}", key.what());
+            }
+            match key {
+                Key::Settings => self.settings_written(&result),
+                Key::Sources => self.services.sources_written(&result),
+                Key::Chroma(id) => {
+                    if let Some(p) = self.playback.as_mut().filter(|p| p.record_id == Some(id)) {
+                        p.key_written(&result);
+                    }
+                }
+                // The lists were drawn before the last of a video's progress
+                // was written (closing it saved it, off this thread).
+                Key::Progress(_) if result.is_ok() && self.playback.is_none() => {
+                    self.ui.invalidate();
+                }
+                Key::Progress(_) | Key::Tracks(_) => {}
+            }
+        }
     }
 
     fn on_job(&mut self, job: Job) {
@@ -539,7 +572,8 @@ impl App {
     fn opened(&mut self, seq: u64, r: Result<Opened, String>) {
         if seq != self.open_seq {
             if let Ok(o) = r {
-                o.playback.close(&self.services.library);
+                o.playback
+                    .close(&self.services.library, &self.services.writer);
             }
             return;
         }
@@ -547,11 +581,12 @@ impl App {
         match r {
             // Its source was locked while it opened.
             Ok(o) if self.locked_source_of(&o.playback.request).is_some() => {
-                o.playback.close(&self.services.library);
+                o.playback
+                    .close(&self.services.library, &self.services.writer);
             }
             Ok(o) => {
                 if let Some(old) = self.playback.take() {
-                    old.close(&self.services.library);
+                    old.close(&self.services.library, &self.services.writer);
                 }
                 if let Some(h) = self.services.haptics() {
                     h.load(o.scripts);
@@ -822,7 +857,7 @@ impl App {
             p.picked.subtitles =
                 playback::picked_source_subtitles(subtitle.as_deref(), &p.source_tracks);
         }
-        p.save_tracks(&self.services.library);
+        p.save_tracks(&self.services.library, &self.services.writer);
         let mut req = p.request.clone();
         req.start_at = Some(p.player.position());
         req.paused = p.player.is_paused();
@@ -852,7 +887,7 @@ impl App {
         // back to software and stuttered ("Hardware decoder busy"). It
         // closes on a thread of its own; the open job waits for it.
         if let Some(p) = self.playback.take() {
-            p.close(&self.services.library);
+            p.close(&self.services.library, &self.services.writer);
             if let Some(h) = self.services.haptics() {
                 h.clear();
             }
@@ -865,10 +900,14 @@ impl App {
         let opener = self.services.opener.clone();
         let settings = self.settings.clone();
         let reports = self.services.watch.clone();
+        // What was saved just now (the video closed above, the tracks
+        // picked) is what opening it reads.
+        let saved = self.services.writer.barrier();
         self.ui.opening = Some(req.shown_title());
         self.ui.open_error = None;
         self.services.set_worker_busy(true);
         self.jobs.spawn("open", move || {
+            saved.wait(WRITES_WITHIN);
             let opened = playback::open(req, &opener, &lib, &settings, &reports);
             Job::Opened(seq, Box::new(opened))
         });
