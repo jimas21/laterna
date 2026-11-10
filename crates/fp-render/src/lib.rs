@@ -20,6 +20,8 @@
 //!   that shows one does not stall on it.
 //! - [`testcard`]: a generated test card and test patterns, with their mip
 //!   chains.
+//! - `pyramid`: a half-size mip chain of each video frame, built for the scene
+//!   shader to filter with where a flat picture is minified.
 //! - [`hdr`]: HDR on the SDR screen: tone curve, gamut compression and the
 //!   scene peak, which `peak` measures from the frames.
 
@@ -34,6 +36,7 @@ pub mod params;
 mod peak;
 mod pipeline;
 mod place_builder;
+mod pyramid;
 mod q10c;
 pub mod renderer;
 mod shared;

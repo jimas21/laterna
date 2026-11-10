@@ -444,7 +444,7 @@ A skip slower than 2 s counts as a failure, so a slow route ends in `FAIL`; the 
 
 ### Measuring GPU time
 
-Every 10 s the log has a `frame GPU ms` line beside `frame CPU ms`: the GPU's time per frame (median, 95th percentile, longest) and the median of each part of a frame (`video`: an upload, a 10-bit conversion and HDR measuring; `eyes`: both eye passes; `panels`: painting the menus; `layers`: copying them into the compositor's layers), from timestamps the renderer writes between the parts. The compositor's own work isn't in it. The same work takes longer at a lower GPU clock, so the line ends with the clock. In `--preview`, the `gpu` script command prints the same line for the frames since the last one, and the run ends with one for the rest; `--size 2160` renders the eyes at the headset's size.
+Every 10 s the log has a `frame GPU ms` line beside `frame CPU ms`: the GPU's time per frame (median, 95th percentile, longest) and the median of each part of a frame (`video`: an upload, a 10-bit conversion and HDR measuring; `eyes`: both eye passes, without the pyramid; `pyramid`: building the video pyramid (see [The video pyramid](#the-video-pyramid)), only for the frames that built one; `panels`: painting the menus; `layers`: copying them into the compositor's layers), from timestamps the renderer writes between the parts. The compositor's own work isn't in it. The same work takes longer at a lower GPU clock, so the line ends with the clock. In `--preview`, the `gpu` script command prints the same line for the frames since the last one, and the run ends with one for the rest; `--size 2160` renders the eyes at the headset's size.
 
 ```bash
 printf 'open clip_8k.mp4\nwait-playing 30\nwait 2\ngpu\nwait 10\ngpu\n' > /tmp/gpu.fps
@@ -485,6 +485,45 @@ pixels.
   one), the card panning 2 px a frame at 24 fps (cadence), and a dark ramp in
   10-bit (banding). Nothing is copied anywhere; the clips are never committed.
 
+### The video pyramid
+
+A flat picture seen small or far has several video texels under each eye
+pixel, and a few taps per pixel shimmer on fine detail (white text) when the
+head moves. Past about 1.3 texels per pixel the scene shader therefore reads a
+*pyramid* instead: the stored frame at half size and every smaller size down to
+one texel, in the raw Y'CbCr codes, sampled trilinear and anisotropic. Its
+share rises from 0 to 1 between 1.0 and 1.6 texels per pixel, so nothing
+switches on a line; where the picture is magnified (under 1.0) the picture is
+exactly what it was.
+
+- It covers frames copied into the renderer's planes, hardware 8-bit frames
+  read in place (NV12 in the decoder's buffer) and 10-bit HDR frames
+  converted to P010. 10-bit SDR frames read in place keep the four taps until
+  they get a pyramid of their own. 180/360 and fisheye pictures have none.
+- The first level is made by a small pass over the frame the eyes are about
+  to read (one bilinear tap per 2x2 luma texels), the rest by a chain of blits.
+  A frame is built once however many refreshes show it (24p at 72 Hz builds on
+  one in three), not when the picture is paused, and not while the screen is
+  big enough that its texels are bigger than the eye's pixels.
+- The pyramid is a texture of its own (`A2B10G10R10`, else `R16G16B16A16`
+  float, else `R8G8B8A8`), about 11 MB for 4K. The decoder's buffers are read as before; nothing
+  is copied out of them, so zero copy is kept.
+- Its GPU time is the `pyramid` part of the `frame GPU ms` line, for the frames
+  that built one (target: at most 1.0 ms for 4K). If it keeps going over
+  1.25 ms the renderer logs `video pyramid: left out for <w>x<h> pictures` and stops building
+  it for that video size.
+- `FRAMEPLAYERX_QUALITY=nopyramid` turns it off, to compare. The log's first
+  build line is `video pyramid: <format>, <w>x<h>, <n> levels`.
+- Anisotropy needs the `samplerAnisotropy` device feature, which the renderer
+  now asks for when the device has it (`Gpu::max_anisotropy`, up to 8 taps are
+  used); without it the pyramid is still trilinear.
+
+To check it on the headset, open the 4K card (`FRAMEPLAYERX_TESTCARD=2160`: the
+copied path) and the 1080p H.264 card clip (NV12 in place), and compare with
+`FRAMEPLAYERX_QUALITY=nopyramid`: the zone plate should show no false rings
+and the line wedges should stay calm under slow head turns. In `--preview`
+use `--size 1440` and the `gpu` script command to read the `pyramid` part.
+
 ## On the headset
 
 ```bash
@@ -519,7 +558,7 @@ Steam can't pass environment variables to an app, so the launcher reads
 | `FRAMEPLAYERX_V4L2_DEVICE` | | The V4L2 device to decode with, instead of the one found |
 | `FRAMEPLAYERX_ZERO_COPY` | | `0` copies hardware-decoded frames out of the decoder's buffers instead of reading them there, as before; for comparing the two |
 | `FRAMEPLAYERX_TP10_EYES` | | `0` converts SDR 10-bit frames read in place into P010 planes instead of sampling them in the eye passes, as before; for comparing the two |
-| `FRAMEPLAYERX_QUALITY` | | Picture-quality features to turn off, comma-separated: `nodither` (noise against banding in dark gradients), `nosupersample` (four taps where a flat picture is minified), `noedgeaa` (antialiased screen edges). All are on by default; for comparing a look with and without on one build. The start-up log's `A/B switches` line names what is off |
+| `FRAMEPLAYERX_QUALITY` | | Picture-quality features to turn off, comma-separated: `nodither` (noise against banding in dark gradients), `nosupersample` (four taps where a flat picture is minified), `noedgeaa` (antialiased screen edges), `nopyramid` (the [video pyramid](#the-video-pyramid) where a flat picture is minified). All are on by default; for comparing a look with and without on one build. The start-up log's `A/B switches` line names what is off |
 | `FRAMEPLAYERX_TESTCARD` | | `1080` or `2160` opens the generated test card of that height instead of the library (when no file is named); see [The test card](#the-test-card) |
 | `FRAMEPLAYERX_TESTCARD_LAYER` | | `plain` or `mips` also shows the card as a compositor layer beside it, with one mip level or the whole chain, to compare how the two are filtered |
 | `FRAMEPLAYERX_PLACES` | | `0` (or `off`, `false`, `no`) never shows a place (a room or a sky) around the picture, whatever Settings says; the desktop preview honours it too. It only stops the place from being asked for. It does not undo the change to the eye pass (the depth buffer and the blended picture) that makes places possible, so it is not a way back to how the eyes were drawn before |

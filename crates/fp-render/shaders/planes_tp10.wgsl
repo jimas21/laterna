@@ -61,3 +61,9 @@ fn fetch_yuv(uv: vec2<f32>) -> vec3<f32> {
 fn luma_at(uv: vec2<f32>) -> f32 {
     return luma_tp10(uv) * params.yuv_offset.w;
 }
+
+// No video pyramid for a picture read in place yet: scene.wgsl asks for it
+// only when `display.z` says one was built, which a TP10 frame never does.
+fn pyramid_raw(p: vec2<f32>, gx: vec2<f32>, gy: vec2<f32>) -> vec3<f32> {
+    return vec3<f32>(0.0);
+}

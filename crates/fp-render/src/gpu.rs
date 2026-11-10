@@ -95,6 +95,10 @@ pub struct Gpu {
     /// The queue family owning memory the video decoder writes: foreign
     /// when the driver has `VK_EXT_queue_family_foreign`, else external.
     pub(crate) decoder_family: u32,
+    /// The most a sampler may filter anisotropically (`max_sampler_anisotropy`),
+    /// where the device has `samplerAnisotropy` and it was enabled; with
+    /// `None` samplers must not ask for it.
+    pub max_anisotropy: Option<f32>,
 }
 
 /// Device extensions [`crate::q10c`] needs.
@@ -168,6 +172,12 @@ pub(crate) fn pick_depth_format(supported: impl Fn(vk::Format) -> bool) -> vk::F
         .unwrap_or(vk::Format::D16_UNORM)
 }
 
+/// The anisotropy limit to use: the device's, when it has the feature and a
+/// limit above 1 (a limit of 1 filters nothing extra).
+fn anisotropy_limit(supported: bool, max: f32) -> Option<f32> {
+    (supported && max > 1.0).then_some(max)
+}
+
 impl Gpu {
     pub fn new(creator: &dyn Creator, app_name: &str) -> Result<Gpu> {
         // SAFETY: loads the system Vulkan loader.
@@ -231,15 +241,24 @@ impl Gpu {
         let mut f12 = vk::PhysicalDeviceVulkan12Features::default().buffer_device_address(true);
         let mut fdb =
             vk::PhysicalDeviceDescriptorBufferFeaturesEXT::default().descriptor_buffer(true);
-        let features =
-            vk::PhysicalDeviceFeatures::default().shader_storage_image_extended_formats(true);
+        // SAFETY: valid physical device.
+        let supported = unsafe { instance.get_physical_device_features(pdev) };
+        let max_anisotropy = anisotropy_limit(
+            supported.sampler_anisotropy == vk::TRUE,
+            props.limits.max_sampler_anisotropy,
+        );
+        // Always passed: the video's anisotropic sampler needs
+        // `samplerAnisotropy`, the Q10C converter the extended storage formats.
+        let features = vk::PhysicalDeviceFeatures::default()
+            .sampler_anisotropy(max_anisotropy.is_some())
+            .shader_storage_image_extended_formats(q10c_features);
         let mut dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&qci)
+            .enabled_features(&features)
             .push_next(&mut f13);
         if q10c_features {
             dci = dci
                 .enabled_extension_names(&q10c_exts)
-                .enabled_features(&features)
                 .push_next(&mut f12)
                 .push_next(&mut fdb);
         }
@@ -280,6 +299,7 @@ impl Gpu {
             } else {
                 vk::QUEUE_FAMILY_EXTERNAL
             },
+            max_anisotropy,
         })
     }
 
@@ -346,6 +366,14 @@ impl Drop for Gpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anisotropy_needs_the_feature_and_a_limit_above_one() {
+        assert_eq!(anisotropy_limit(true, 16.0), Some(16.0));
+        assert_eq!(anisotropy_limit(false, 16.0), None);
+        assert_eq!(anisotropy_limit(true, 1.0), None);
+        assert_eq!(anisotropy_limit(true, 0.0), None);
+    }
 
     #[test]
     fn pick_depth_format_prefers_32_bit_float() {

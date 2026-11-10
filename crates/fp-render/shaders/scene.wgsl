@@ -54,6 +54,7 @@ struct Params {
     viewer: vec4<f32>,
     // x: clockwise quarter turns that show the frame upright
     // y: quality bits (QUALITY_*)
+    // z: levels of the video pyramid built for this frame (0: none; VQ5)
     display: vec4<u32>,
     // HDR, as PQ codes: x the scene's peak, y the screen's white
     hdr: vec4<f32>,
@@ -100,9 +101,13 @@ const INVALID: vec2<f32> = vec2<f32>(-1.0, -1.0);
 // Supersample: four-tap rotated-grid supersampling of a flat screen's picture
 // where it is minified (more than one video texel per eye pixel); off gives
 // one tap.
+// Pyramid (VQ5): where the picture is minified past what four taps hold, the
+// frame's half-size mip chain (built per video frame, `display.z` levels) is
+// sampled instead, trilinear and anisotropic.
 const QUALITY_DITHER: u32 = 1u;
 const QUALITY_SUPERSAMPLE: u32 = 2u;
 const QUALITY_EDGE_AA: u32 = 4u;
+const QUALITY_PYRAMID: u32 = 8u;
 
 fn rot_y(a: f32) -> mat3x3<f32> {
     let c = cos(a); let s = sin(a);
@@ -291,12 +296,38 @@ fn eye_texels() -> vec2<f32> {
 }
 
 // A point of the screen clamped into the picture. For a stereo frame it stays
-// one luma texel (half a 4:2:0 chroma texel) inside the eye's own half, so
-// the linear filter never blends in the other eye's border.
-fn clamp_to_eye(p: vec2<f32>) -> vec2<f32> {
+// `texels` luma texels (at least one, which is half a 4:2:0 chroma texel)
+// inside the eye's own half, so the linear filter never blends in the other
+// eye's border. The pyramid asks for its footprint's worth (VQ5).
+fn clamp_to_eye_by(p: vec2<f32>, texels: f32) -> vec2<f32> {
     var m = vec2<f32>(0.0);
-    if (params.mode.y != 0u) { m = min(vec2<f32>(1.0) / eye_texels(), vec2<f32>(0.25)); }
+    if (params.mode.y != 0u) { m = min(vec2<f32>(max(texels, 1.0)) / eye_texels(), vec2<f32>(0.25)); }
     return clamp(p, m, vec2<f32>(1.0) - m);
+}
+
+fn clamp_to_eye(p: vec2<f32>) -> vec2<f32> {
+    return clamp_to_eye_by(p, 1.0);
+}
+
+// The linear parts of to_eye_rect and stored_uv, for a step across the
+// screen (the derivatives the pyramid's filtering takes): an eye's half of a
+// stereo frame is half as wide or tall, and a turned frame swaps and flips
+// its axes, without the offsets.
+fn eye_rect_dir(d: vec2<f32>) -> vec2<f32> {
+    switch params.mode.y {
+        case 1u: { return vec2<f32>(d.x * 0.5, d.y); }
+        case 2u: { return vec2<f32>(d.x, d.y * 0.5); }
+        default: { return d; }
+    }
+}
+
+fn stored_dir(d: vec2<f32>) -> vec2<f32> {
+    switch params.display.x {
+        case 1u: { return vec2<f32>(d.y, -d.x); }
+        case 2u: { return -d; }
+        case 3u: { return vec2<f32>(-d.y, d.x); }
+        default: { return d; }
+    }
 }
 
 // One tap at a point of the screen (0..1), clamped into the eye's picture.
@@ -467,13 +498,31 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // How many video texels one eye pixel spans here: 1 is one to one, more is
     // minified. Supersampling and sharpening both key off it.
     let fp = texel_footprint(duv_dx, duv_dy);
+    // VQ5: the share of the pyramid in the picture, 0 to 1 over 1.0 to 1.6
+    // texels per pixel (0 where there is no pyramid for this frame).
+    var pyr_t = 0.0;
+    if (kind == 0u && (params.display.y & QUALITY_PYRAMID) != 0u && params.display.z > 0u) {
+        pyr_t = smoothstep(1.0, 1.6, fp);
+    }
     // Fades in from one tap to four as the picture gets minified, so a
     // tilted or curved screen shows no line where the mode would flip.
+    // Where the pyramid takes over entirely the four taps aren't needed.
     if ((params.display.y & QUALITY_SUPERSAMPLE) != 0u && kind == 0u) {
         let ss = smoothstep(0.9, 1.3, fp);
-        if (ss > 0.0) {
+        if (ss > 0.0 && pyr_t < 1.0) {
             rgb = mix(rgb, sample_yuv_aa(uvc, duv_dx, duv_dy, eye), ss);
         }
+    }
+    if (pyr_t > 0.0) {
+        // The pyramid is of the stored frame and takes the footprint as
+        // gradients: the screen's steps mapped into stored coordinates. The
+        // point stays a footprint's width inside a stereo half, so the
+        // filter reaches only the eye's own picture.
+        let p = stored_uv(to_eye_rect(clamp_to_eye_by(uv, fp), eye));
+        let gx = stored_dir(eye_rect_dir(duv_dx));
+        let gy = stored_dir(eye_rect_dir(duv_dy));
+        let codes = pyramid_raw(p, gx, gy) - params.yuv_offset.xyz;
+        rgb = mix(rgb, yuv_to_rgb(codes), pyr_t);
     }
 
     // Chroma key (as OBS does it): pixels whose chroma is near the key

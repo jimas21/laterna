@@ -52,6 +52,11 @@ pub struct Quality {
     pub supersample: bool,
     /// Half a code of noise (`dither.wgsl`) against banding in dark gradients.
     pub dither: bool,
+    /// The video pyramid: a half-size mip chain of each frame, sampled
+    /// trilinear and anisotropic where a flat picture is minified more than
+    /// the four taps hold. Built per video frame, so it costs GPU time
+    /// (logged as the `pyramid` part), and it is left out where it can't fit.
+    pub pyramid: bool,
 }
 
 impl Default for Quality {
@@ -60,6 +65,7 @@ impl Default for Quality {
             edge_aa: true,
             supersample: true,
             dither: true,
+            pyramid: true,
         }
     }
 }
@@ -77,12 +83,15 @@ impl Quality {
         if self.edge_aa {
             bits |= 4;
         }
+        if self.pyramid {
+            bits |= 8;
+        }
         bits
     }
 
     /// The default with the features named in `list` turned off: `nodither`,
-    /// `nosupersample` and `noedgeaa`, separated by commas or spaces, in any
-    /// case. Other words are ignored.
+    /// `nosupersample`, `noedgeaa` and `nopyramid`, separated by commas or
+    /// spaces, in any case. Other words are ignored.
     pub fn without(list: &str) -> Quality {
         let mut q = Quality::default();
         for word in list.split([',', ' ']) {
@@ -90,6 +99,7 @@ impl Quality {
                 "nodither" => q.dither = false,
                 "nosupersample" => q.supersample = false,
                 "noedgeaa" => q.edge_aa = false,
+                "nopyramid" => q.pyramid = false,
                 _ => {}
             }
         }
@@ -108,6 +118,9 @@ impl Quality {
         }
         if !self.edge_aa {
             off.push("noedgeaa");
+        }
+        if !self.pyramid {
+            off.push("nopyramid");
         }
         off.join(",")
     }
@@ -479,17 +492,20 @@ mod tests {
     #[test]
     fn quality_is_all_on_by_default_and_one_bit_each() {
         let all = Quality::default();
-        assert!(all.edge_aa && all.supersample && all.dither);
-        assert_eq!(all.bits(), 0b111);
+        assert!(all.edge_aa && all.supersample && all.dither && all.pyramid);
+        assert_eq!(all.bits(), 0b1111);
         let mut q = all;
         q.dither = false;
-        assert_eq!(q.bits(), 0b110);
+        assert_eq!(q.bits(), 0b1110);
         let mut q = all;
         q.supersample = false;
-        assert_eq!(q.bits(), 0b101);
+        assert_eq!(q.bits(), 0b1101);
         let mut q = all;
         q.edge_aa = false;
-        assert_eq!(q.bits(), 0b011);
+        assert_eq!(q.bits(), 0b1011);
+        let mut q = all;
+        q.pyramid = false;
+        assert_eq!(q.bits(), 0b0111);
         // The parameters carry the same default.
         let p = build(&VideoParams::default(), None, [Mat4::IDENTITY; 2]);
         assert_eq!(p.display[1], all.bits());
@@ -503,6 +519,10 @@ mod tests {
         assert!(!q.dither && !q.supersample && q.edge_aa);
         assert_eq!(q.off_list(), "nodither,nosupersample");
         assert_eq!(Quality::without("noedgeaa").off_list(), "noedgeaa");
+        let q = Quality::without("NoPyramid nodither");
+        assert!(!q.pyramid && !q.dither && q.supersample && q.edge_aa);
+        assert_eq!(q.off_list(), "nodither,nopyramid");
+        assert_eq!(Quality::without(&q.off_list()), q);
         assert_eq!(Quality::default().off_list(), "");
         assert_eq!(Quality::without(&q.off_list()), q);
     }

@@ -425,7 +425,7 @@ struct Switches {
     /// `FRAMEPLAYERX_NO_DASHBOARD_CLOSE=1`: leave SteamVR's dashboard open at
     /// launch instead of closing it.
     no_dashboard_close: bool,
-    /// `FRAMEPLAYERX_QUALITY=nodither,nosupersample,noedgeaa`: turn picture
+    /// `FRAMEPLAYERX_QUALITY=nodither,nosupersample,noedgeaa,nopyramid`: turn picture
     /// quality features off, to compare a look with and without on one build.
     quality: Quality,
     /// `FRAMEPLAYERX_TESTCARD=1080|2160`: open the generated test card
