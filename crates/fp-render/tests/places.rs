@@ -1113,6 +1113,32 @@ fn wall_pack_v2(name: &str, house: [u8; 3], dark: [u8; 3]) -> std::path::PathBuf
     dir
 }
 
+/// A pack kept as ASTC blocks that the device then refuses (lavapipe, which
+/// has no ASTC, refuses them all) is not the end of places: it goes up
+/// decoded and draws the same.
+#[test]
+fn an_astc_pack_the_device_refuses_goes_up_decoded_instead() {
+    use fp_render::env::pack;
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    if pack::astc_on_gpu() {
+        // A device that takes ASTC has nothing to refuse.
+        e.destroy(&r);
+        return;
+    }
+    let (house, dark) = ([180, 90, 30], [12, 24, 36]);
+    let dir = wall_pack_v2("refused", house, dark);
+    let kept = pack::load_with(&dir, true).expect("loads as blocks");
+    assert!(kept.baked.is_astc());
+    r.set_place_data(Place::Cinema, kept.into_place_data());
+    let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    assert!(near(up, house, 4), "lights up: {up:?}");
+    let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
+    assert!(near(down, dark, 4), "lights down: {down:?}");
+    e.destroy(&r);
+}
+
 #[test]
 fn a_format_2_baked_place_draws_whichever_way_its_textures_reach_the_gpu() {
     use fp_render::env::pack::{self, TexturePath};

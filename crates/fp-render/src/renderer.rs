@@ -69,6 +69,53 @@ impl GlowKey {
     }
 }
 
+/// Loads `data` as `place`. A pack that does not upload is not the end of
+/// places: if its textures are ASTC the device is taken not to sample them
+/// (from then on packs are decoded as they load) and the pack goes up
+/// decoded to RGBA8; if that fails too, or it was not ASTC, the pack is
+/// dropped and the built-in room goes up in its place. The error is the
+/// built-in room's, when even that fails.
+fn load_or_fall_back(
+    env: &mut EnvPass,
+    gpu: &Gpu,
+    place: Place,
+    data: PlaceData,
+    garbage: &mut Vec<Buffer>,
+) -> Result<()> {
+    // A pack's textures live in `baked`, behind an Arc: this copy is cheap.
+    let backup = data.baked.is_some().then(|| data.clone());
+    let Err(e) = env.load(gpu, place, data, garbage) else {
+        return Ok(());
+    };
+    let Some(backup) = backup else {
+        return Err(e);
+    };
+    log::warn!("the {} pack did not upload: {e}", place.id());
+    if let Some(baked) = backup.baked.as_deref().filter(|b| b.is_astc()) {
+        crate::env::pack::set_astc_on_gpu(false);
+        match baked.decoded() {
+            Ok(Some(decoded)) => {
+                let retry = PlaceData {
+                    baked: Some(Arc::new(decoded)),
+                    ..backup
+                };
+                match env.load(gpu, place, retry, garbage) {
+                    Ok(()) => {
+                        log::warn!("the {} pack went up decoded instead", place.id());
+                        return Ok(());
+                    }
+                    Err(e) => log::warn!("the decoded {} pack did not upload: {e}", place.id()),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => log::warn!("the {} pack could not be decoded: {e}", place.id()),
+        }
+    }
+    log::warn!("showing the built-in {}", place.id());
+    crate::env::pack::mark_failed(place);
+    env.load(gpu, place, place.build_builtin(), garbage)
+}
+
 /// The nits the glow key counts the HDR peak in.
 const GLOW_PEAK_STEP: f32 = 50.0;
 
@@ -2164,7 +2211,7 @@ impl Renderer {
             };
             if let Some(data) = data {
                 let garbage = &mut self.slots[slot_idx].garbage_buffers;
-                if let Err(e) = env.load(&self.gpu, frame.place, data, garbage) {
+                if let Err(e) = load_or_fall_back(env, &self.gpu, frame.place, data, garbage) {
                     log::warn!("places aren't shown: {e}");
                     self.env_failed = true;
                     return false;
@@ -2335,7 +2382,7 @@ impl Renderer {
             return;
         };
         let garbage = &mut self.slots[self.current].garbage_buffers;
-        if let Err(e) = env.load(&self.gpu, place, data, garbage) {
+        if let Err(e) = load_or_fall_back(env, &self.gpu, place, data, garbage) {
             log::warn!("places aren't shown: {e}");
             self.env_failed = true;
         }

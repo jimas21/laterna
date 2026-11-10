@@ -395,6 +395,71 @@ impl fmt::Debug for Baked {
     }
 }
 
+impl Baked {
+    /// Whether either texture set is ASTC blocks rather than RGBA8.
+    pub fn is_astc(&self) -> bool {
+        [&self.colors, &self.basis]
+            .iter()
+            .any(|t| matches!(t.encoding, Encoding::Astc { .. }))
+    }
+
+    /// The same pack with its ASTC textures decoded to RGBA8 (on all the
+    /// cores there are), for a device that turned out not to take the
+    /// blocks. `None` when nothing in it is ASTC.
+    pub fn decoded(&self) -> Result<Option<Baked>, PackError> {
+        if !self.is_astc() {
+            return Ok(None);
+        }
+        let sets = [&self.colors, &self.basis];
+        let jobs: Vec<(usize, usize)> = sets
+            .iter()
+            .enumerate()
+            .flat_map(|(s, t)| (0..t.layers.len()).map(move |l| (s, l)))
+            .collect();
+        let results = par_map(&jobs, |&(s, l)| {
+            let t = sets[s];
+            let Encoding::Astc { block } = t.encoding else {
+                return Ok(t.layers[l].clone());
+            };
+            t.layers[l]
+                .iter()
+                .enumerate()
+                .map(|(n, data)| {
+                    let edge = (t.size >> n).max(1);
+                    ktx2::decode_astc(data, edge, edge, block)
+                        .map(|(texels, _)| texels)
+                        .map_err(|e| PackError(format!("texture level {n}: {e}")))
+                })
+                .collect()
+        });
+        let mut layers = results.into_iter();
+        let mut array = |t: &TextureArray| -> Result<TextureArray, PackError> {
+            let mut out = Vec::with_capacity(t.layers.len());
+            for _ in 0..t.layers.len() {
+                out.push(
+                    layers
+                        .next()
+                        .unwrap_or_else(|| bad("a texture was not decoded"))?,
+                );
+            }
+            Ok(TextureArray {
+                size: t.size,
+                encoding: Encoding::Rgba8,
+                layers: out,
+            })
+        };
+        let colors = array(&self.colors)?;
+        let basis = array(&self.basis)?;
+        Ok(Some(Baked {
+            vertices: self.vertices.clone(),
+            indices: self.indices.clone(),
+            colors,
+            basis,
+            basis_gain: self.basis_gain,
+        }))
+    }
+}
+
 /// How a pack's textures got to the form the GPU takes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TexturePath {
@@ -1640,6 +1705,24 @@ mod tests {
                 assert_eq!(texels, decoded.baked.colors.layers[l][m]);
             }
         }
+    }
+
+    #[test]
+    fn a_kept_pack_decodes_in_memory_to_what_loading_it_decoded_gives() {
+        let dir = fixture2("f2later");
+        let kept = load_with(&dir, true).expect("kept");
+        assert!(kept.baked.is_astc());
+        let later = kept.baked.decoded().expect("decodes").expect("it was ASTC");
+        let direct = load_with(&dir, false).expect("decoded").baked;
+        assert!(!later.is_astc());
+        assert_eq!(later.colors.encoding, Encoding::Rgba8);
+        assert_eq!(later.colors.size, direct.colors.size);
+        assert_eq!(later.colors.layers, direct.colors.layers);
+        assert_eq!(later.basis.layers, direct.basis.layers);
+        assert_eq!(later.vertices, direct.vertices);
+        assert_eq!(later.indices, direct.indices);
+        // Nothing left to decode.
+        assert!(later.decoded().expect("fine").is_none());
     }
 
     #[test]
