@@ -84,14 +84,14 @@ fn code_link_uses_traditional_tokens_and_preserves_its_client_identity() {
     );
     assert!(registration.get("jwk").is_none());
     let client = &credentials.client_identifier;
-    assert!(client.starts_with("installation-id-"));
+    assert_eq!(client, "installation-id", "used as given");
     assert!(
         requests
             .iter()
             .all(|r| r.header("x-plex-client-identifier") == Some(client.as_str()))
     );
     assert!(requests.iter().all(|r| {
-        r.header("x-plex-product") == Some("FramePlayerX")
+        r.header("x-plex-product") == Some("Laterna")
             && r.header("accept") == Some("application/json")
             && r.header("x-plex-token").is_none()
     }));
@@ -105,13 +105,132 @@ fn code_link_uses_traditional_tokens_and_preserves_its_client_identity() {
     assert!(!format!("{credentials:?}").contains("linked-account-token"));
     let restored: PlexCredentials = serde_json::from_value(serialized).unwrap();
     assert_eq!(restored, credentials);
-    api.initiate("installation-id").unwrap();
+    // The caller decides whether links share an identity: another link
+    // that chooses another identifier is sent under that one.
+    api.initiate("second-link-7").unwrap();
     let requests = server.requests();
+    assert_eq!(
+        requests[3].header("x-plex-client-identifier"),
+        Some("second-link-7")
+    );
     assert_ne!(
         requests[0].header("x-plex-client-identifier"),
-        requests[3].header("x-plex-client-identifier"),
-        "a second source link must not replace another source's credentials"
+        requests[3].header("x-plex-client-identifier")
     );
+}
+
+#[test]
+fn an_invalid_client_identifier_is_refused_before_any_request() {
+    let server = TestServer::start(|_| {
+        resp(
+            200,
+            json!({"id":42,"code":"aB12","expiresIn":600}).to_string(),
+            &[("Content-Type", "application/json")],
+        )
+    });
+    let api = PlexAuthClient::with_test_endpoint(&server.url("/api/v2")).unwrap();
+    for bad in ["", "has space", "slash/inside", "accent\u{e9}"] {
+        assert!(api.initiate(bad).is_err(), "refuse {bad:?}");
+    }
+    assert!(api.initiate(&"a".repeat(129)).is_err());
+    assert!(server.requests().is_empty());
+    let longest = "a".repeat(128);
+    api.initiate(&longest).unwrap();
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].header("x-plex-client-identifier"),
+        Some(longest.as_str())
+    );
+}
+
+#[test]
+fn the_linked_account_is_named_without_keeping_its_email() {
+    let server = TestServer::start(|request| {
+        if request.path() != "/api/v2/user" {
+            return resp(404, "missing", &[]);
+        }
+        if request.header("x-plex-token") != Some("linked-account-token") {
+            return resp(401, "unauthorized", &[]);
+        }
+        let body = json!({
+            "id": 5, "uuid": "made-up-account-uuid", "title": "Account Owner",
+            "username": "owner-login", "email": "owner@example.test",
+            "authToken": "leaked-user-token", "home": true, "homeAdmin": true,
+        });
+        resp(
+            200,
+            body.to_string(),
+            &[("Content-Type", "application/json")],
+        )
+    });
+    let api = PlexAuthClient::with_test_endpoint(&server.url("/api/v2")).unwrap();
+    let mut credentials = PlexCredentials::manual("linked-account-token".into(), "dev-1".into());
+    let account = api.account(&credentials).unwrap();
+    assert_eq!(account.id, 5);
+    assert_eq!(account.uuid, "made-up-account-uuid");
+    assert_eq!(account.title, "Account Owner");
+    assert!(account.home);
+    credentials.account = Some(Box::new(account.clone()));
+
+    let saved = serde_json::to_string(&credentials).unwrap();
+    let restored: PlexCredentials = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored, credentials);
+    for kept in [&saved, &serde_json::to_string(&account).unwrap()] {
+        assert!(!kept.contains("owner@example.test"), "{kept}");
+        assert!(!kept.contains("leaked-user-token"), "{kept}");
+        assert!(!kept.contains("owner-login"), "{kept}");
+    }
+    let shown = format!("{credentials:?} {account:?}");
+    for private in [
+        "Account Owner",
+        "made-up-account-uuid",
+        "linked-account-token",
+        "owner@example.test",
+    ] {
+        assert!(!shown.contains(private), "{private} in {shown}");
+    }
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, "/api/v2/user");
+    assert_eq!(
+        requests[0].header("x-plex-client-identifier"),
+        Some("dev-1")
+    );
+}
+
+#[test]
+fn an_account_without_a_title_uses_its_sign_in_name_and_a_bad_reply_names_nothing() {
+    let server = TestServer::start(|request| {
+        if request.header("x-plex-token") == Some("dead-token") {
+            return resp(401, "unauthorized", &[]);
+        }
+        let body = json!({"id": "6", "uuid": "another-uuid", "username": "second"});
+        resp(
+            200,
+            body.to_string(),
+            &[("Content-Type", "application/json")],
+        )
+    });
+    let api = PlexAuthClient::with_test_endpoint(&server.url("/api/v2")).unwrap();
+    let account = api
+        .account(&PlexCredentials::manual("token".into(), "device-2".into()))
+        .unwrap();
+    assert_eq!((account.id, account.title.as_str()), (6, "second"));
+    assert!(!account.home);
+    let dead = PlexCredentials::manual("dead-token".into(), "device-2".into());
+    let error = api.account(&dead).unwrap_err().to_string();
+    assert!(!error.contains("dead-token"), "{error}");
+
+    let nameless = TestServer::start(|_| {
+        resp(
+            200,
+            json!({"id": 1}).to_string(),
+            &[("Content-Type", "application/json")],
+        )
+    });
+    let api = PlexAuthClient::with_test_endpoint(&nameless.url("/api/v2")).unwrap();
+    assert!(api.account(&dead).is_err(), "no uuid, no account");
 }
 
 #[test]
@@ -151,7 +270,7 @@ fn saved_device_credentials_still_refresh_with_the_registered_signing_identity()
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|r| {
         r.header("x-plex-client-identifier") == Some("saved-client")
-            && r.header("x-plex-product") == Some("FramePlayerX")
+            && r.header("x-plex-product") == Some("Laterna")
             && r.header("x-plex-token").is_none()
     }));
     let refresh = requests

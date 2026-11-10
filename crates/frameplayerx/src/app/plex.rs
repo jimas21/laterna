@@ -2,7 +2,41 @@
 
 use super::*;
 use fp_sources::plex::auth::{PlexAuthClient, PlexCredentials, PlexPin, PlexResource};
+use ring::rand::{SecureRandom, SystemRandom};
 use ui::plex::LinkState;
+
+/// A fresh client identifier for one link: this installation's id plus a
+/// random suffix, so linking a second source never replaces the first one's
+/// credentials at plex.tv. One identifier for the whole installation is only
+/// safe once a new token for an account is written to every source of that
+/// account, so the identifier is chosen here, in one place, for that change.
+fn link_client_identifier(device: &str) -> fp_sources::Result<String> {
+    let mut random = [0_u8; 16];
+    if SystemRandom::new().fill(&mut random).is_err() {
+        let reason = "cannot make a Plex client id";
+        return Err(fp_sources::Error::Config(reason.into()));
+    }
+    let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("{device}-{suffix}"))
+}
+
+/// One poll of a pending link. Once the code is claimed it also names the
+/// account (plex.tv `/user`) and lists its servers. Naming the account is
+/// a convenience: linking goes on without it.
+fn poll_link(
+    api: &PlexAuthClient,
+    pin: &PlexPin,
+) -> fp_sources::Result<Option<(PlexCredentials, Vec<PlexResource>)>> {
+    let Some(mut credentials) = api.poll(pin)? else {
+        return Ok(None);
+    };
+    match api.account(&credentials) {
+        Ok(account) => credentials.account = Some(Box::new(account)),
+        Err(e) => log::info!("cannot name the linked Plex account: {e}"),
+    }
+    let servers = api.resources(&credentials)?;
+    Ok(Some((credentials, servers)))
+}
 
 impl App {
     pub(super) fn plex_link_start(&mut self) {
@@ -20,12 +54,12 @@ impl App {
         // history, queue or cached artwork under an existing source id.
         f.editing = None;
         f.plex.state = LinkState::Requesting;
-        let client = self.services.device_identifier().to_string();
+        let device = self.services.device_identifier().to_string();
         self.jobs.spawn("plex-link", move || {
             Job::PlexInitiated(
                 generation,
-                PlexAuthClient::new()
-                    .initiate(&client)
+                link_client_identifier(&device)
+                    .and_then(|client| PlexAuthClient::new().initiate(&client))
                     .map_err(|e| ui::errors::source(&e)),
             )
         });
@@ -41,14 +75,7 @@ impl App {
         }
         self.jobs.spawn("plex-poll", move || {
             let api = PlexAuthClient::new();
-            let result = api
-                .poll(&pin)
-                .and_then(|credentials| {
-                    credentials
-                        .map(|c| api.resources(&c).map(|servers| (c, servers)))
-                        .transpose()
-                })
-                .map_err(|e| ui::errors::source(&e));
+            let result = poll_link(&api, &pin).map_err(|e| ui::errors::source(&e));
             Job::PlexPolled(generation, Box::new(result))
         });
     }
@@ -161,5 +188,22 @@ impl App {
             Err(e) => f.plex.state = LinkState::Failed(e),
         }
         self.panels[MAIN].request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_link_gets_its_own_valid_client_identifier() {
+        let one = link_client_identifier("frameplayerx-abc").unwrap();
+        let two = link_client_identifier("frameplayerx-abc").unwrap();
+        assert_ne!(one, two);
+        for id in [&one, &two] {
+            assert!(id.starts_with("frameplayerx-abc-"));
+            assert!(id.len() <= 128);
+            assert!(id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        }
     }
 }

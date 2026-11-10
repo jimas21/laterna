@@ -9,7 +9,7 @@ use crate::timeutil::parse_iso8601;
 use crate::urlutil::redact;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::digest::{SHA256, digest};
 use ring::signature::Ed25519KeyPair;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,6 +22,12 @@ const LINK_API: &str = "https://plex.tv/api/v2";
 pub const LINK_URL: &str = "https://plex.tv/link";
 const JSON_LIMIT: u64 = 8 << 20;
 const TOKEN_LIFETIME: u64 = 7 * 24 * 60 * 60;
+/// How this app names itself to Plex (its device list shows this).
+pub(crate) const PRODUCT: &str = "Laterna";
+/// The kind of device the app runs on, as Plex's device list shows it.
+pub(crate) const DEVICE: &str = "Steam Frame";
+/// The longest client identifier [`PlexAuthClient::initiate`] accepts.
+const CLIENT_IDENTIFIER_MAX: usize = 128;
 
 /// A registered signing key. PKCS#8 contains the private key and must only
 /// be saved with the source's other private credentials.
@@ -71,6 +77,70 @@ impl PlexDeviceKey {
     }
 }
 
+/// The plex.tv account that linked, from `GET /api/v2/user`. It groups the
+/// sources of one account. The reply's e-mail and token are never kept.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlexAccount {
+    pub id: u64,
+    pub uuid: String,
+    /// Shown in pickers; never logged.
+    pub title: String,
+    /// The account belongs to a Plex Home.
+    #[serde(default)]
+    pub home: bool,
+}
+
+impl fmt::Debug for PlexAccount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlexAccount")
+            .field("id", &self.id)
+            .field("home", &self.home)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A Plex Home profile a source plays as.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlexProfile {
+    pub id: u64,
+    pub uuid: String,
+    /// Shown in pickers; never logged.
+    pub title: String,
+    /// Switching to it asks for a Plex PIN.
+    #[serde(default)]
+    pub protected: bool,
+    #[serde(default)]
+    pub restricted: bool,
+    /// The profile's plex.tv token (from switching); lists its servers
+    /// again. Never logged.
+    pub token: String,
+}
+
+impl fmt::Debug for PlexProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlexProfile")
+            .field("id", &self.id)
+            .field("protected", &self.protected)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The id a linked source gets: stable per account, server and profile, so
+/// linking again reaches the same watched marks, resume points and cached
+/// pictures. It holds a digest, never the account's or profile's uuid.
+pub fn linked_source_id(account_uuid: &str, machine: &str, profile_uuid: Option<&str>) -> String {
+    let mut data = Vec::new();
+    for part in [account_uuid, machine, profile_uuid.unwrap_or("")] {
+        data.extend_from_slice(part.as_bytes());
+        data.push(0);
+    }
+    data.pop();
+    let hash = digest(&SHA256, &data);
+    let head = &hash.as_ref()[..8];
+    let hex: String = head.iter().map(|b| format!("{b:02x}")).collect();
+    format!("plex-{hex}")
+}
+
 /// Account credential used for discovery and refresh. A resource may
 /// supply a different token for the chosen owned/shared server.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +152,11 @@ pub struct PlexCredentials {
     /// Unix seconds; only a refresh scheduling hint, not authorization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<u64>,
+    /// The account these credentials belong to; unknown for links made
+    /// before it was recorded, or when plex.tv would not name it. Boxed to
+    /// keep [`crate::PlexConfig`], the largest source setting, small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<Box<PlexAccount>>,
 }
 
 impl fmt::Debug for PlexCredentials {
@@ -89,6 +164,7 @@ impl fmt::Debug for PlexCredentials {
         f.debug_struct("PlexCredentials")
             .field("client_identifier", &self.client_identifier)
             .field("expires_at", &self.expires_at)
+            .field("account", &self.account.as_ref().map(|a| a.id))
             .finish_non_exhaustive()
     }
 }
@@ -100,6 +176,7 @@ impl PlexCredentials {
             client_identifier,
             device_key: None,
             expires_at: None,
+            account: None,
         }
     }
 
@@ -235,9 +312,9 @@ impl PlexAuthClient {
     fn client(base: &str, client: &str, token: Option<&str>) -> HttpClient {
         let mut headers = vec![
             ("Accept".into(), "application/json".into()),
-            ("X-Plex-Product".into(), "FramePlayerX".into()),
+            ("X-Plex-Product".into(), PRODUCT.into()),
             ("X-Plex-Version".into(), env!("CARGO_PKG_VERSION").into()),
-            ("X-Plex-Device".into(), "Steam Frame".into()),
+            ("X-Plex-Device".into(), DEVICE.into()),
             ("X-Plex-Client-Identifier".into(), client.into()),
         ];
         if let Some(token) = token {
@@ -276,23 +353,16 @@ impl PlexAuthClient {
         serde_json::from_slice(&reply.body).map_err(Error::from)
     }
 
-    /// Requests a four-character code to enter at [`LINK_URL`], using a
-    /// source-qualified identity derived from this installation. Traditional
-    /// tokens also work with servers that reject the newer JWT tokens.
-    pub fn initiate(&self, installation: &str) -> Result<PlexPin> {
-        if installation.is_empty()
-            || !installation
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
+    /// Requests a four-character code to enter at [`LINK_URL`]. The pairing
+    /// and the credentials it yields use `client_identifier` exactly as
+    /// given (1 to 128 letters, digits and dashes): the caller chooses
+    /// whether links share an identity. Traditional tokens also work with
+    /// servers that reject the newer JWT tokens.
+    pub fn initiate(&self, client_identifier: &str) -> Result<PlexPin> {
+        if !valid_client_identifier(client_identifier) {
             return Err(Error::Config("invalid Plex client identifier".into()));
         }
-        let mut random = [0_u8; 16];
-        SystemRandom::new()
-            .fill(&mut random)
-            .map_err(|_| Error::Config("cannot create a Plex client identifier".into()))?;
-        let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        let client_identifier = format!("{installation}-{suffix}");
+        let client_identifier = client_identifier.to_owned();
         let response = Self::json(
             &self.link_base,
             "POST",
@@ -339,6 +409,7 @@ impl PlexAuthClient {
                 access_token,
                 client_identifier: pin.client_identifier.clone(),
                 device_key: None,
+                account: None,
             }),
         )
     }
@@ -373,6 +444,34 @@ impl PlexAuthClient {
             expires_at: Some(token_expiry(&access_token).unwrap_or_else(|| now() + TOKEN_LIFETIME)),
             access_token,
             ..credentials.clone()
+        })
+    }
+
+    /// The account these credentials belong to (`GET /user`). The reply
+    /// also carries an e-mail address and a token; neither is kept.
+    pub fn account(&self, credentials: &PlexCredentials) -> Result<PlexAccount> {
+        let response = Self::json(
+            &self.link_base,
+            "GET",
+            "/user",
+            &credentials.client_identifier,
+            Some(&credentials.access_token),
+            None,
+        )?;
+        let id = response
+            .get("id")
+            .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()))
+            .ok_or_else(|| Error::parse("Plex account", "missing user id"))?;
+        let uuid = string(&response, "uuid")
+            .ok_or_else(|| Error::parse("Plex account", "missing user uuid"))?;
+        let title = string(&response, "title")
+            .or_else(|| string(&response, "username"))
+            .unwrap_or_default();
+        Ok(PlexAccount {
+            id,
+            uuid,
+            title,
+            home: boolean(&response, "home"),
         })
     }
 
@@ -446,6 +545,11 @@ impl PlexAuthClient {
             })
             .collect())
     }
+}
+
+fn valid_client_identifier(id: &str) -> bool {
+    (1..=CLIENT_IDENTIFIER_MAX).contains(&id.len())
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 fn string(value: &Value, field: &str) -> Option<String> {

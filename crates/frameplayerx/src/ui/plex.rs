@@ -426,6 +426,7 @@ fn manual_config(f: &SourceForm, id: String) -> PlexConfig {
             max_height: None,
             local_only: true,
             allow_relay: false,
+            ..Default::default()
         },
     };
     cfg.url = fp_sources::urlutil::with_http_scheme(f.address.trim());
@@ -479,6 +480,7 @@ fn server_config(
         max_height: None,
         local_only: true,
         allow_relay: false,
+        ..Default::default()
     };
     f.plex.connection.apply(&mut config);
     Some(config)
