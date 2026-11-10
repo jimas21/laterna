@@ -1,7 +1,9 @@
 //! Maps Plex library and metadata responses to the shared catalog, keeping
 //! Plex's item types, query keys and pagination inside this adapter.
 
-use super::{BACKDROP, LANDSCAPE, LISTING_LIMIT, PAGE_LIMIT, POSTER, PlexSource, container};
+use super::{
+    BACKDROP, LANDSCAPE, LIBRARY_TILE, LISTING_LIMIT, PAGE_LIMIT, POSTER, PlexSource, container,
+};
 use crate::catalog::{
     Catalog, CatalogCapabilities, CatalogFacets, CatalogFilter, CatalogHome, CatalogItem,
     CatalogKind, CatalogPage, CatalogQuery, CatalogSort, CatalogVersion,
@@ -18,7 +20,33 @@ use std::collections::HashSet;
 /// without `/items` wraps them in a hub.
 const CONTINUE_WATCHING: &str = "/hubs/continueWatching/items";
 
+/// The section fields that can hold a library's tile picture, best first: a
+/// picture set on the library, then the collage the server makes of its
+/// contents, then its poster.
+const TILE_FIELDS: [&str; 3] = ["art", "composite", "thumb"];
+
+/// Whether a picture is one of the server's stock glyphs, which stand in for a
+/// library that has no picture of its own.
+fn stock(path: &str) -> bool {
+    path.starts_with("/:/resources/")
+}
+
 impl PlexSource {
+    /// The first of a library's `fields` that holds a picture of its own, not
+    /// a stock glyph, scaled to fit `size`.
+    fn section_picture(
+        &self,
+        section: &Value,
+        fields: &[&str],
+        size: (u32, u32),
+    ) -> Option<String> {
+        fields
+            .iter()
+            .filter_map(|field| text(section, field))
+            .filter(|path| !stock(path))
+            .find_map(|path| self.image(&path, size))
+    }
+
     pub(super) fn libraries(&self) -> Result<Vec<CatalogItem>> {
         self.client()?;
         // Sections is available to shared users too; section/all is the
@@ -49,8 +77,9 @@ impl PlexSource {
                         .into(),
                     ),
                     location: self.location("section", &id, None),
-                    poster: text(section, "thumb").and_then(|p| self.image(&p, POSTER)),
-                    backdrop: text(section, "art").and_then(|p| self.image(&p, BACKDROP)),
+                    landscape: self.section_picture(section, &TILE_FIELDS, LIBRARY_TILE),
+                    poster: self.section_picture(section, &["thumb"], POSTER),
+                    backdrop: self.section_picture(section, &["art", "composite"], BACKDROP),
                     ..Default::default()
                 };
                 Some(item)
