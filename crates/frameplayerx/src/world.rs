@@ -108,6 +108,27 @@ impl Panel {
         self.repaint_requested = true;
     }
 
+    /// Gives the panel a texture of `px` pixels laid out at `ppp` pixels per
+    /// point, so a panel can be painted finer or coarser without its layout in
+    /// points changing. Its picture is empty until it is painted again. What
+    /// egui painted into it before (its fonts, picture subtitles) is kept.
+    pub fn resize(
+        &mut self,
+        renderer: &mut Renderer,
+        px: [u32; 2],
+        ppp: f32,
+    ) -> fp_render::Result<()> {
+        if let Some(id) = self.id {
+            renderer.resize_panel(id, px[0], px[1])?;
+        }
+        self.px = px;
+        self.ppp = ppp;
+        let zoom = if self.grows { ppp } else { ppp * self.scale };
+        self.ctx.set_pixels_per_point(zoom);
+        self.repaint_requested = true;
+        Ok(())
+    }
+
     /// Ray hit: distance along the ray and position in egui points.
     pub fn hit(&self, origin: Vec3, dir: Vec3) -> Option<(f32, Pos2)> {
         let inv = self.pose.inverse();

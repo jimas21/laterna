@@ -2163,28 +2163,30 @@ pub fn subtitles(
             .filter(|t| !t.trim().is_empty())
             .collect();
         textures.clear();
+        // Each picture's size in points as shown.
+        let mut shown = Vec::new();
+        let (ppp, available) = (ctx.pixels_per_point(), ui.available_width());
         for c in cues {
             for (i, b) in c.bitmaps.iter().enumerate() {
                 if b.width == 0 || b.height == 0 || b.rgba.len() < (b.width * b.height * 4) as usize
                 {
                     continue;
                 }
-                let img = egui::ColorImage::from_rgba_unmultiplied(
-                    [b.width as usize, b.height as usize],
-                    &b.rgba,
-                );
+                let size = Vec2::new(b.width as f32 * pixel_aspect, b.height as f32);
+                let size = size * (available / size.x).min(1.0);
+                let dims = [b.width as usize, b.height as usize];
+                let img = bitmap_image(&b.rgba, dims, size * ppp);
                 textures.push(ctx.load_texture(
                     format!("sub{i}"),
                     img,
                     egui::TextureOptions::LINEAR,
                 ));
+                shown.push(size);
             }
         }
         ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
-            for t in textures.iter() {
-                let size = t.size_vec2() * Vec2::new(pixel_aspect, 1.0);
-                let scale = (ui.available_width() / size.x).min(1.0);
-                ui.image((t.id(), size * scale));
+            for (t, size) in textures.iter().zip(&shown) {
+                ui.image((t.id(), *size));
             }
             if text.is_empty() {
                 return;
@@ -2222,6 +2224,28 @@ pub fn subtitles(
     });
 }
 
+/// A picture subtitle (`size` pixels of straight-alpha RGBA) as an image for a
+/// panel that shows it `shown` pixels across and tall. The panel is painted
+/// about as fine as the eyes show it, and a picture bigger than that would be
+/// minified by one bilinear tap, which drops its thin strokes and shimmers:
+/// it is averaged down to the size it is shown at instead.
+fn bitmap_image(rgba: &[u8], size: [usize; 2], shown: Vec2) -> egui::ColorImage {
+    let to = [
+        shown.x.round().max(1.0) as usize,
+        shown.y.round().max(1.0) as usize,
+    ];
+    // A little smaller is left to the sampler.
+    if to[0] as f32 >= size[0] as f32 * 0.85 && to[1] as f32 >= size[1] as f32 * 0.85 {
+        return egui::ColorImage::from_rgba_unmultiplied(size, rgba);
+    }
+    let to = [to[0].min(size[0]), to[1].min(size[1])];
+    let small = crate::subtitles::shrink_rgba(rgba, size, to);
+    if small.len() < to[0] * to[1] * 4 {
+        return egui::ColorImage::from_rgba_unmultiplied(size, rgba);
+    }
+    egui::ColorImage::from_rgba_unmultiplied(to, &small)
+}
+
 /// A 3D video's picture subtitles: each eye's parts on its half of the
 /// panel, squeezed to half width as in a side-by-side frame, since each eye
 /// is shown its half stretched across the panel. They keep their places in
@@ -2257,16 +2281,14 @@ fn stereo_pictures(
             return;
         };
         for (i, (eye, p)) in parts.iter().enumerate() {
-            let img = egui::ColorImage::from_rgba_unmultiplied(
-                [p.width as usize, p.height as usize],
-                &p.rgba,
-            );
+            let size = Vec2::new(p.width as f32 * sx * g / 2.0, p.height as f32 * sy * g);
+            let dims = [p.width as usize, p.height as usize];
+            let img = bitmap_image(&p.rgba, dims, size * ctx.pixels_per_point());
             let tex = ctx.load_texture(format!("sub{i}"), img, egui::TextureOptions::LINEAR);
             let min = egui::pos2(
                 panel.left() + (*eye as f32 * panel.width() + left + p.x as f32 * sx * g) / 2.0,
                 panel.bottom() - lowest + p.y as f32 * sy * g,
             );
-            let size = Vec2::new(p.width as f32 * sx * g / 2.0, p.height as f32 * sy * g);
             ui.painter().image(
                 tex.id(),
                 egui::Rect::from_min_size(min, size),

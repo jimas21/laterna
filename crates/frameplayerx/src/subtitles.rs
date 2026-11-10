@@ -403,10 +403,94 @@ impl StereoSubs {
     }
 }
 
+/// `rgba` (`from` pixels, straight alpha) averaged down to `to` pixels, each
+/// output pixel the area-weighted mean of the pixels it covers, colours
+/// weighted by their alpha so a clear edge doesn't darken or fringe the glyphs.
+/// An axis is never made larger than it was.
+pub fn shrink_rgba(rgba: &[u8], from: [usize; 2], to: [usize; 2]) -> Vec<u8> {
+    let [w, h] = from;
+    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
+        return Vec::new();
+    }
+    let to = [to[0].clamp(1, w), to[1].clamp(1, h)];
+    // For each output pixel along an axis, the input pixels it covers and by
+    // how much.
+    let spans = |n: usize, t: usize| -> Vec<Vec<(usize, f32)>> {
+        let step = n as f32 / t as f32;
+        (0..t)
+            .map(|i| {
+                let (a, b) = (i as f32 * step, (i + 1) as f32 * step);
+                (a.floor() as usize..(b.ceil() as usize).min(n))
+                    .map(|s| (s, (b.min(s as f32 + 1.0) - a.max(s as f32)).max(0.0)))
+                    .collect()
+            })
+            .collect()
+    };
+    let (xs, ys) = (spans(w, to[0]), spans(h, to[1]));
+    let mut out = Vec::with_capacity(to[0] * to[1] * 4);
+    for rows in &ys {
+        for cols in &xs {
+            let (mut colour, mut alpha, mut area) = ([0.0f32; 3], 0.0f32, 0.0f32);
+            for &(y, wy) in rows {
+                for &(x, wx) in cols {
+                    let at = (y * w + x) * 4;
+                    let k = wx * wy;
+                    let a = rgba[at + 3] as f32 * k;
+                    for (c, v) in colour.iter_mut().zip(&rgba[at..at + 3]) {
+                        *c += *v as f32 * a;
+                    }
+                    alpha += a;
+                    area += k;
+                }
+            }
+            if alpha <= 0.0 || area <= 0.0 {
+                out.extend_from_slice(&[0; 4]);
+                continue;
+            }
+            for c in colour {
+                out.push((c / alpha).round().clamp(0.0, 255.0) as u8);
+            }
+            out.push((alpha / area).round().clamp(0.0, 255.0) as u8);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use fp_media::StreamKind;
+
+    #[test]
+    fn shrinking_a_picture_averages_what_it_covers() {
+        // A white pixel beside a clear one: half as opaque, still white.
+        let rgba = [255, 255, 255, 255, 0, 0, 0, 0];
+        assert_eq!(shrink_rgba(&rgba, [2, 1], [1, 1]), [255, 255, 255, 128]);
+        // Clear pixels' colours don't count, so a glyph's edge isn't dark.
+        let rgba = [200, 100, 50, 255, 9, 9, 9, 0];
+        let out = shrink_rgba(&rgba, [2, 1], [1, 1]);
+        assert_eq!(out[..3], [200, 100, 50]);
+        // Three pixels into two weigh the middle one in halves.
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255];
+        let out = shrink_rgba(&rgba, [3, 1], [2, 1]);
+        assert_eq!(out, [170, 85, 0, 255, 0, 85, 170, 255]);
+        // Nothing to shrink, nothing to shrink to, and a short buffer.
+        assert_eq!(shrink_rgba(&rgba, [3, 1], [3, 1]), rgba);
+        assert_eq!(shrink_rgba(&rgba, [3, 1], [9, 9]), rgba);
+        assert_eq!(shrink_rgba(&rgba, [3, 1], [0, 0]).len(), 4);
+        assert!(shrink_rgba(&rgba[..4], [3, 1], [1, 1]).is_empty());
+    }
+
+    #[test]
+    fn shrinking_keeps_a_thin_line_visible() {
+        // A one pixel opaque column in 8: a quarter shows at a quarter size.
+        let mut rgba = vec![0u8; 8 * 4];
+        rgba[3 * 4..4 * 4].copy_from_slice(&[255, 255, 255, 255]);
+        let out = shrink_rgba(&rgba, [8, 1], [2, 1]);
+        assert_eq!(out.len(), 8);
+        assert_eq!(out[3], 64, "a quarter of the left pixel is covered");
+        assert_eq!(out[7], 0);
+    }
 
     fn stream(index: usize, kind: StreamKind, language: Option<&str>) -> StreamInfo {
         StreamInfo {
