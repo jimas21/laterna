@@ -388,6 +388,10 @@ impl App {
                 seq,
                 result,
             } => {
+                // The next time this server opens, its page is there at once.
+                if let Ok(ui::catalog::Loaded::Home(home)) = &*result {
+                    self.ui.catalog_cache.put(&source, home);
+                }
                 if let Some(j) = self.ui.catalog_page(&source) {
                     j.loaded(seq, *result);
                 }

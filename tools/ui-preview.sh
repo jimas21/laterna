@@ -632,10 +632,16 @@ panel main plex-home
 point main 0.133 0.37
 click
 wait 1
+panel main plex-library-recommended
+library-tab library
+wait 1
 panel main plex-grid
 filters
 wait 1
 panel main plex-filters
+library-tab collections
+wait 1
+panel main plex-collections
 open-source plex
 wait 2
 point main 0.6 0.6

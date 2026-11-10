@@ -14,6 +14,7 @@ use fp_sources::{
     Catalog, CatalogCapabilities, CatalogFacets, CatalogFilter, CatalogHome, CatalogItem,
     CatalogKind, CatalogPage, CatalogQuery, CatalogRow, CatalogSort, RowShape,
 };
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// Typing rests this long before a search goes to the server.
@@ -26,6 +27,12 @@ const RESOLUTIONS: [(u32, &str); 4] = [(1280, "HD"), (3840, "4K"), (5760, "6K"),
 const SEARCH_LIMIT: usize = 50;
 /// Height of the banners of series and details pages.
 const BANNER: f32 = 320.0;
+/// A page that loaded this recently is not asked for again when the
+/// browser is shown.
+const FRESH: Duration = Duration::from_secs(30);
+/// How long a server's front page stays good for showing at once when the
+/// server is opened again.
+const HOME_LIFE: Duration = Duration::from_secs(6 * 3600);
 
 /// The pages open on a server, the one shown last.
 pub struct CatalogView {
@@ -39,6 +46,8 @@ pub struct Page {
     pub(super) request_seq: Option<u64>,
     pub loading: bool,
     pub error: Option<String>,
+    /// When the server last answered this page.
+    pub loaded_at: Option<Instant>,
     pub body: Body,
 }
 
@@ -62,6 +71,9 @@ pub enum Body {
     },
     /// A library, collection or folder, a page at a time.
     Grid(Box<Grid>),
+    /// A library of a server that has pages for them: tabs for its own
+    /// rows, its titles and its collections.
+    Library(Box<LibraryPage>),
     Series {
         series: Box<CatalogItem>,
         seasons: Vec<CatalogItem>,
@@ -71,6 +83,20 @@ pub enum Body {
     },
     /// A film, episode or video.
     Item { item: Box<CatalogItem> },
+}
+
+impl Body {
+    /// The listing the page shows, if it shows one.
+    fn grid_mut(&mut self) -> Option<&mut Grid> {
+        match self {
+            Body::Grid(g) => Some(g.as_mut()),
+            Body::Library(l) => {
+                let tab = l.tab;
+                l.grid_of(tab)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A library, collection or folder, a page at a time.
@@ -93,6 +119,134 @@ pub struct Grid {
     /// The listing began in the server's own order (a collection, a
     /// playlist or a row's "See all"), which stays one of its sorts.
     pub server_order: bool,
+}
+
+/// The tabs of a library's page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LibraryTab {
+    /// The library's own rows (Plex's Recommended).
+    #[default]
+    Recommended,
+    /// Its titles as a grid.
+    Library,
+    Collections,
+}
+
+impl LibraryTab {
+    const ALL: [LibraryTab; 3] = [
+        LibraryTab::Recommended,
+        LibraryTab::Library,
+        LibraryTab::Collections,
+    ];
+
+    /// Where the tab keeps its flags in a [`LibraryPage`].
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// A library of a server that has pages for them. A tab asks the server
+/// when it is first shown, never before.
+pub struct LibraryPage {
+    pub library: CatalogItem,
+    pub tab: LibraryTab,
+    /// The library's own rows; `None` until they come.
+    pub rows: Option<Vec<CatalogRow>>,
+    pub grid: Grid,
+    pub collections: Grid,
+    /// Per tab: whether the server was asked for it, and whether it
+    /// answered.
+    asked: [bool; 3],
+    got: [bool; 3],
+    /// The tab the request in flight is for.
+    target: LibraryTab,
+}
+
+impl LibraryPage {
+    /// A library page that has asked for its rows and for nothing else.
+    fn new(library: CatalogItem) -> LibraryPage {
+        let titles = CatalogQuery {
+            limit: PAGE,
+            ..CatalogQuery::children(&library)
+        };
+        let collections = CatalogQuery {
+            parent: Some(library.id.clone()),
+            types: vec![CatalogKind::BoxSet],
+            limit: PAGE,
+            ..CatalogQuery::default()
+        };
+        LibraryPage {
+            grid: Grid::new(library.name.clone(), titles),
+            collections: Grid::new(library.name.clone(), collections),
+            library,
+            tab: LibraryTab::Recommended,
+            rows: None,
+            asked: [true, false, false],
+            got: [false; 3],
+            target: LibraryTab::Recommended,
+        }
+    }
+
+    /// The tabs shown. A server with no rows for the library has no
+    /// Recommended.
+    fn tabs(&self) -> Vec<(LibraryTab, &'static str)> {
+        let mut tabs = Vec::new();
+        if self.rows.as_ref().is_none_or(|rows| !rows.is_empty()) {
+            tabs.push((LibraryTab::Recommended, tr!("catalog-recommended")));
+        }
+        tabs.push((LibraryTab::Library, tr!("catalog-library")));
+        tabs.push((LibraryTab::Collections, tr!("catalog-collections")));
+        tabs
+    }
+
+    /// The listing of a tab, if it is one.
+    fn grid_of(&mut self, tab: LibraryTab) -> Option<&mut Grid> {
+        match tab {
+            LibraryTab::Recommended => None,
+            LibraryTab::Library => Some(&mut self.grid),
+            LibraryTab::Collections => Some(&mut self.collections),
+        }
+    }
+
+    /// What brings a tab up to date.
+    fn load_for(&self, tab: LibraryTab) -> Load {
+        match tab {
+            LibraryTab::Recommended => Load::LibraryRows(self.library.id.clone()),
+            LibraryTab::Library => self.grid.reload_load(),
+            LibraryTab::Collections => self.collections.reload_load(),
+        }
+    }
+
+    /// What to ask for now: the tab shown, when it was not asked for yet
+    /// and nothing else is loading.
+    fn next_load(&self, loading: bool) -> Option<Load> {
+        if loading || self.asked[self.tab.index()] {
+            return None;
+        }
+        Some(self.load_for(self.tab))
+    }
+
+    /// Shows a tab the user chose. One that failed to load is asked for
+    /// again.
+    fn show(&mut self, tab: LibraryTab) {
+        self.tab = tab;
+        if !self.got[tab.index()] {
+            self.asked[tab.index()] = false;
+        }
+        if let Some(g) = self.grid_of(tab) {
+            g.to_top = true;
+        }
+    }
+
+    /// Every item the page holds.
+    fn items_mut(&mut self) -> impl Iterator<Item = &mut CatalogItem> {
+        self.rows
+            .iter_mut()
+            .flatten()
+            .flat_map(|r| r.items.iter_mut())
+            .chain(self.grid.items.iter_mut())
+            .chain(self.collections.items.iter_mut())
+    }
 }
 
 /// A grid's genres, years, studios and tags, asked for when its Filters
@@ -195,6 +349,43 @@ impl Grid {
         self.query.clone()
     }
 
+    /// What shows this listing again as it is now: the same shuffle, or
+    /// the pages shown so far.
+    fn reload_load(&self) -> Load {
+        let shown = self.items.len().max(PAGE);
+        Load::Grid(match &self.order {
+            Some(o) => CatalogQuery {
+                start: 0,
+                ids: o.iter().take(shown).cloned().collect(),
+                ..self.query.clone()
+            },
+            None => CatalogQuery {
+                start: 0,
+                limit: shown,
+                ..self.query.clone()
+            },
+        })
+    }
+
+    /// Takes a page of answers in: a first page replaces the items, a
+    /// later one adds to them.
+    fn took(&mut self, page: CatalogPage, append: bool, order: Option<Vec<String>>, by_id: bool) {
+        if append {
+            self.items.extend(page.items);
+        } else {
+            self.items = page.items;
+        }
+        if order.is_some() {
+            self.order = order;
+        } else if !by_id && !append {
+            self.order = None;
+        }
+        self.total = match &self.order {
+            Some(o) => o.len(),
+            None => page.total.max(self.items.len()),
+        };
+    }
+
     /// Choosing another action this frame must leave an unsent facets
     /// request eligible for the next frame.
     fn unasked_facets(&self) -> Option<CatalogQuery> {
@@ -242,10 +433,35 @@ fn width_label(w: u32) -> &'static str {
         .map_or("", |(_, label)| label)
 }
 
+/// The front pages of the servers last seen, so a server opens at once
+/// and the answer replaces them.
+#[derive(Default)]
+pub struct HomeCache(HashMap<String, (Instant, CatalogHome)>);
+
+impl HomeCache {
+    /// Keeps `home` as the front page of `source`.
+    pub fn put(&mut self, source: &str, home: &CatalogHome) {
+        let entry = (Instant::now(), home.clone());
+        self.0.insert(source.to_string(), entry);
+    }
+
+    /// The front page last seen of `source`, unless it is long out of date.
+    pub fn get(&self, source: &str) -> Option<CatalogHome> {
+        self.get_at(source, Instant::now())
+    }
+
+    fn get_at(&self, source: &str, now: Instant) -> Option<CatalogHome> {
+        let (at, home) = self.0.get(source)?;
+        (now.saturating_duration_since(*at) < HOME_LIFE).then(|| home.clone())
+    }
+}
+
 /// What to ask a server for.
 #[derive(Clone, Debug)]
 pub enum Load {
     Home,
+    /// The rows a library opens on.
+    LibraryRows(String),
     /// The titles matching the text.
     Search(String),
     /// A page of a listing; past the first it adds to what is shown. A
@@ -268,6 +484,19 @@ pub enum Load {
     },
 }
 
+impl Load {
+    /// The tab of a library page this is for.
+    fn tab(&self) -> LibraryTab {
+        match self {
+            Load::LibraryRows(_) => LibraryTab::Recommended,
+            Load::Grid(q) | Load::Facets(q) if q.types == [CatalogKind::BoxSet] => {
+                LibraryTab::Collections
+            }
+            _ => LibraryTab::Library,
+        }
+    }
+}
+
 /// A mark the server keeps per item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mark {
@@ -278,6 +507,7 @@ pub enum Mark {
 /// A server's answer to a [`Load`].
 pub enum Loaded {
     Home(CatalogHome),
+    LibraryRows(Vec<CatalogRow>),
     Search {
         text: String,
         results: Vec<(&'static str, Vec<CatalogItem>)>,
@@ -307,6 +537,7 @@ pub enum Loaded {
 pub fn run(src: &dyn Catalog, load: &Load) -> fp_sources::Result<Loaded> {
     Ok(match load {
         Load::Home => Loaded::Home(src.home()?),
+        Load::LibraryRows(library) => Loaded::LibraryRows(src.library_rows(library)?),
         Load::Search(text) => Loaded::Search {
             text: text.clone(),
             results: src.search(text, SEARCH_LIMIT)?,
@@ -381,16 +612,18 @@ pub fn run(src: &dyn Catalog, load: &Load) -> fp_sources::Result<Loaded> {
 }
 
 impl CatalogView {
-    /// The server's front page, loading under `seq`.
-    pub fn new(seq: u64) -> CatalogView {
+    /// The server's front page, loading under `seq`; `cached` is shown
+    /// meanwhile.
+    pub fn new(seq: u64, cached: Option<CatalogHome>) -> CatalogView {
         CatalogView {
             pages: vec![Page {
                 seq,
                 request_seq: None,
                 loading: true,
                 error: None,
+                loaded_at: None,
                 body: Body::Home {
-                    home: None,
+                    home: cached,
                     search: String::new(),
                     typed: None,
                 },
@@ -403,10 +636,14 @@ impl CatalogView {
     pub fn begin_request(&mut self, seq: u64, request_seq: u64, load: &Load) -> Option<u64> {
         let page = self.pages.iter_mut().find(|page| page.seq == seq)?;
         if matches!(load, Load::Facets(_)) {
-            if let Body::Grid(grid) = &mut page.body {
+            if let Some(grid) = page.body.grid_mut() {
                 grid.facets = Facets::Asked;
             }
             return Some(page.seq);
+        }
+        if let Body::Library(l) = &mut page.body {
+            l.target = load.tab();
+            l.asked[l.target.index()] = true;
         }
         page.request_seq = Some(request_seq);
         page.loading = true;
@@ -433,14 +670,57 @@ impl CatalogView {
             Ok(l) => l,
             Err(e) => {
                 p.error = Some(e);
+                // A library whose rows failed shows its titles instead.
+                if let Body::Library(l) = &mut p.body
+                    && l.target == LibraryTab::Recommended
+                    && l.tab == LibraryTab::Recommended
+                    && l.rows.is_none()
+                {
+                    l.tab = LibraryTab::Library;
+                }
                 return;
             }
         };
         if !facets {
             p.error = None;
+            p.loaded_at = Some(Instant::now());
         }
         match (&mut p.body, loaded) {
             (Body::Home { home, .. }, Loaded::Home(h)) => *home = Some(h),
+            (Body::Library(l), Loaded::LibraryRows(rows)) => {
+                l.asked[LibraryTab::Recommended.index()] = true;
+                l.got[LibraryTab::Recommended.index()] = true;
+                // Nothing recommended: the titles are the page.
+                if rows.is_empty() && l.tab == LibraryTab::Recommended {
+                    l.tab = LibraryTab::Library;
+                }
+                l.rows = Some(rows);
+            }
+            (
+                Body::Library(l),
+                Loaded::Grid {
+                    page,
+                    append,
+                    order,
+                    by_id,
+                },
+            ) => {
+                let tab = l.target;
+                l.asked[tab.index()] = true;
+                l.got[tab.index()] = true;
+                if let Some(g) = l.grid_of(tab) {
+                    g.took(page, append, order, by_id);
+                }
+            }
+            (Body::Library(l), Loaded::Facets(f)) => {
+                let tab = l.tab;
+                if let Some(g) = l.grid_of(tab) {
+                    g.facets = match f {
+                        Ok(f) => Facets::Got(f),
+                        Err(e) => Facets::Failed(e),
+                    };
+                }
+            }
             (Body::Search { asked, results, .. }, Loaded::Search { text, results: r }) => {
                 *asked = text;
                 *results = r;
@@ -453,22 +733,7 @@ impl CatalogView {
                     order,
                     by_id,
                 },
-            ) => {
-                if append {
-                    g.items.extend(page.items);
-                } else {
-                    g.items = page.items;
-                }
-                if order.is_some() {
-                    g.order = order;
-                } else if !by_id && !append {
-                    g.order = None;
-                }
-                g.total = match &g.order {
-                    Some(o) => o.len(),
-                    None => page.total.max(g.items.len()),
-                };
-            }
+            ) => g.took(page, append, order, by_id),
             (Body::Grid(g), Loaded::Facets(f)) => {
                 g.facets = match f {
                     Ok(f) => Facets::Got(f),
@@ -511,29 +776,37 @@ impl CatalogView {
             request_seq: None,
             loading: true,
             error: None,
+            loaded_at: None,
             body,
         });
+    }
+
+    /// Whether the page shown was answered so lately that asking again
+    /// would only repeat it.
+    pub fn loaded_recently(&self) -> bool {
+        self.loaded_recently_at(Instant::now())
+    }
+
+    fn loaded_recently_at(&self, now: Instant) -> bool {
+        let at = self.pages.last().and_then(|p| p.loaded_at);
+        at.is_some_and(|at| now.saturating_duration_since(at) < FRESH)
     }
 
     pub fn reload(&mut self) -> Option<(u64, Load)> {
         let p = self.pages.last_mut()?;
         p.loading = true;
-        let load = match &p.body {
+        let load = match &mut p.body {
             Body::Home { .. } => Load::Home,
             Body::Search { asked, .. } => Load::Search(asked.clone()),
-            Body::Grid(g) => Load::Grid(match &g.order {
-                // The same shuffle, brought up to date.
-                Some(o) => CatalogQuery {
-                    start: 0,
-                    ids: o.iter().take(g.items.len().max(PAGE)).cloned().collect(),
-                    ..g.query.clone()
-                },
-                None => CatalogQuery {
-                    start: 0,
-                    limit: g.items.len().max(PAGE),
-                    ..g.query.clone()
-                },
-            }),
+            // The same shuffle, brought up to date.
+            Body::Grid(g) => g.reload_load(),
+            Body::Library(l) => {
+                // The tabs not shown ask again when they are.
+                for tab in LibraryTab::ALL {
+                    l.asked[tab.index()] &= tab == l.tab || !l.got[tab.index()];
+                }
+                l.load_for(l.tab)
+            }
             Body::Series { series, season, .. } => Load::Series {
                 id: series.id.clone(),
                 season: season.clone(),
@@ -545,14 +818,40 @@ impl CatalogView {
         Some((p.seq, load))
     }
 
+    /// Shows a tab of the library page shown (`recommended`, `library` or
+    /// `collections`); false when no such tab is there to show.
+    pub fn show_tab(&mut self, tab: &str) -> bool {
+        let tab = match tab {
+            "recommended" => LibraryTab::Recommended,
+            "library" => LibraryTab::Library,
+            "collections" => LibraryTab::Collections,
+            _ => return false,
+        };
+        match self.pages.last_mut().map(|p| &mut p.body) {
+            Some(Body::Library(l)) => {
+                l.show(tab);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the page shown has its Filters drawer open.
     pub fn filters_open(&self) -> bool {
-        matches!(self.pages.last().map(|p| &p.body), Some(Body::Grid(g)) if g.filters_open)
+        match self.pages.last().map(|p| &p.body) {
+            Some(Body::Grid(g)) => g.filters_open,
+            Some(Body::Library(l)) => match l.tab {
+                LibraryTab::Recommended => false,
+                LibraryTab::Library => l.grid.filters_open,
+                LibraryTab::Collections => l.collections.filters_open,
+            },
+            _ => false,
+        }
     }
 
     /// Opens or closes the Filters drawer of the page shown, a grid.
     pub fn show_filters(&mut self, open: bool) {
-        if let Some(Body::Grid(g)) = self.pages.last_mut().map(|p| &mut p.body) {
+        if let Some(g) = self.pages.last_mut().and_then(|p| p.body.grid_mut()) {
             g.filters_open = open;
         }
     }
@@ -590,6 +889,7 @@ impl CatalogView {
                     .flat_map(|(_, items)| items.iter_mut())
                     .for_each(set),
                 Body::Grid(g) => g.items.iter_mut().for_each(set),
+                Body::Library(l) => l.items_mut().for_each(set),
                 Body::Series {
                     series,
                     episodes,
@@ -678,10 +978,10 @@ pub fn page(
     };
     page::status(ui, p.loading && !has_content(&p.body), p.error.as_deref());
     let loading = p.loading;
-    let top = match &mut p.body {
-        Body::Grid(g) => std::mem::take(&mut g.to_top),
-        _ => false,
-    };
+    let top = p
+        .body
+        .grid_mut()
+        .is_some_and(|g| std::mem::take(&mut g.to_top));
     let mut go: Option<Go> = None;
     page::scroll_from(ui, top, |ui| {
         go = match &mut p.body {
@@ -709,6 +1009,7 @@ pub fn page(
                 results,
             } => search_results(ui, v, search, typed, asked, results, loading),
             Body::Grid(g) => grid(ui, v, g, loading, caps),
+            Body::Library(l) => library_page(ui, v, l, loading, caps),
             Body::Series {
                 series,
                 seasons,
@@ -729,13 +1030,13 @@ pub fn page(
         };
     });
     if let Some(go) = go {
-        follow(v, source, j, go);
+        follow(v, source, j, caps, go);
     }
     back
 }
 
 /// Carries out what the page asked for.
-fn follow(v: &mut View, source: &str, j: &mut CatalogView, go: Go) {
+fn follow(v: &mut View, source: &str, j: &mut CatalogView, caps: CatalogCapabilities, go: Go) {
     let ask = |v: &mut View, seq: u64, load: Load| {
         v.actions.push(Action::Catalog {
             source: source.to_string(),
@@ -819,7 +1120,7 @@ fn follow(v: &mut View, source: &str, j: &mut CatalogView, go: Go) {
         }
         Go::Open(item) => {
             let seq = v.state.next_seq();
-            let (load, body) = page_for(item);
+            let (load, body) = page_for(item, caps);
             ask(v, seq, load);
             j.open(seq, body);
         }
@@ -855,9 +1156,15 @@ fn see_all_page(title: String, query: CatalogQuery) -> (Load, Body) {
 }
 
 /// What opening a library, collection, folder, series or season loads,
-/// and the page that shows it.
-fn page_for(item: CatalogItem) -> (Load, Body) {
+/// and the page that shows it. A server with library pages opens a
+/// library on its rows; any other shows its titles.
+fn page_for(item: CatalogItem, caps: CatalogCapabilities) -> (Load, Body) {
     match item.kind {
+        CatalogKind::Library if caps.library_pages => {
+            let page = LibraryPage::new(item);
+            let load = page.load_for(LibraryTab::Recommended);
+            (load, Body::Library(Box::new(page)))
+        }
         CatalogKind::Series | CatalogKind::Season => {
             let (id, season) = if item.kind == CatalogKind::Season {
                 (
@@ -907,6 +1214,7 @@ fn trail(pages: &[Page]) -> String {
             Body::Home { .. } => None,
             Body::Search { asked, .. } => Some(tr!("jf-trail-search", text = asked.as_str())),
             Body::Grid(g) => Some(g.title.clone()),
+            Body::Library(l) => Some(l.library.name.clone()),
             Body::Series { series, .. } => Some(series.name.clone()),
             Body::Item { item } => Some(item.name.clone()),
         })
@@ -923,6 +1231,11 @@ fn has_content(body: &Body) -> bool {
         Body::Home { home, .. } => home.is_some(),
         Body::Search { results, .. } => !results.is_empty(),
         Body::Grid(g) => !g.items.is_empty(),
+        Body::Library(l) => match l.tab {
+            LibraryTab::Recommended => l.rows.is_some(),
+            LibraryTab::Library => !l.grid.items.is_empty(),
+            LibraryTab::Collections => !l.collections.items.is_empty(),
+        },
         Body::Series { episodes, .. } => !episodes.is_empty(),
         Body::Item { .. } => true,
     }
@@ -1167,6 +1480,65 @@ fn home_rows(ui: &mut egui::Ui, v: &mut View, h: &CatalogHome) -> Option<Go> {
             tr!("jf-no-libraries-desc"),
             |_| {},
         );
+    }
+    go
+}
+
+/// A library page: its tabs, then the one chosen.
+fn library_page(
+    ui: &mut egui::Ui,
+    v: &mut View,
+    l: &mut LibraryPage,
+    loading: bool,
+    caps: CatalogCapabilities,
+) -> Option<Go> {
+    ui.add_space(4.0);
+    let tabs = l.tabs();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (tab, label) in tabs {
+            if widgets::chip(ui, label, l.tab == tab).clicked() && l.tab != tab {
+                l.show(tab);
+            }
+        }
+    });
+    ui.add_space(10.0);
+    // A tab shown for the first time asks the server now.
+    if let Some(load) = l.next_load(loading) {
+        return Some(Go::Reload(load));
+    }
+    match l.tab {
+        LibraryTab::Recommended => {
+            let rows = l.rows.as_deref().unwrap_or_default();
+            library_rows(ui, v, &l.library.id, rows)
+        }
+        LibraryTab::Library => grid(ui, v, &mut l.grid, loading, caps),
+        LibraryTab::Collections => {
+            let go = grid(ui, v, &mut l.collections, loading, caps);
+            let none = l.got[LibraryTab::Collections.index()] && l.collections.items.is_empty();
+            if none && !loading {
+                page::empty_state(
+                    ui,
+                    icons::FOLDERS,
+                    tr!("catalog-no-collections"),
+                    tr!("catalog-no-collections-desc"),
+                    |_| {},
+                );
+            }
+            go
+        }
+    }
+}
+
+/// The rows of a library's Recommended tab; their scroll positions are the
+/// library's own.
+fn library_rows(ui: &mut egui::Ui, v: &mut View, library: &str, rows: &[CatalogRow]) -> Option<Go> {
+    ui.add_space(6.0);
+    let mut go = None;
+    for row in rows {
+        let mut shelf = row_shelf(row);
+        shelf.id = format!("{library}/{}", shelf.id);
+        go = go.or(shelf_view(ui, v, &shelf));
     }
     go
 }
@@ -1932,12 +2304,13 @@ mod tests {
 
     #[test]
     fn answers_reach_the_page_that_asked() {
-        let mut j = CatalogView::new(1);
+        let mut j = CatalogView::new(1, None);
         j.pages.push(Page {
             seq: 2,
             request_seq: None,
             loading: true,
             error: None,
+            loaded_at: None,
             body: Body::Grid(Box::new(Grid::new(
                 "Movies".into(),
                 CatalogQuery {
@@ -1985,7 +2358,7 @@ mod tests {
 
     #[test]
     fn late_unfiltered_answers_cannot_replace_a_studio_filtered_listing() {
-        let mut view = CatalogView::new(1);
+        let mut view = CatalogView::new(1, None);
         let query = CatalogQuery::default();
         view.pages[0].body = Body::Grid(Box::new(Grid::new("Movies".into(), query.clone())));
         let old = view.begin_request(1, 2, &Load::Grid(query)).unwrap();
@@ -2044,7 +2417,7 @@ mod tests {
 
     #[test]
     fn changing_filters_discards_old_shuffle_ids_and_in_flight_pages() {
-        let mut view = CatalogView::new(1);
+        let mut view = CatalogView::new(1, None);
         let mut grid = Grid::new(
             "Movies".into(),
             CatalogQuery {
@@ -2099,7 +2472,7 @@ mod tests {
 
     #[test]
     fn a_reload_that_supersedes_a_facet_action_does_not_strand_the_drawer() {
-        let mut view = CatalogView::new(1);
+        let mut view = CatalogView::new(1, None);
         let mut grid = Grid::new("Movies".into(), CatalogQuery::default());
         grid.filters_open = true;
         let first_facets = grid.unasked_facets().unwrap();
@@ -2135,7 +2508,7 @@ mod tests {
 
     #[test]
     fn a_shuffle_pages_through_its_own_order() {
-        let mut j = CatalogView::new(1);
+        let mut j = CatalogView::new(1, None);
         let mut g = Grid::new("Movies".into(), CatalogQuery::default());
         g.query.sort = CatalogSort::Random;
         j.pages[0].body = Body::Grid(Box::new(g));
@@ -2219,7 +2592,7 @@ mod tests {
 
     #[test]
     fn marks_show_everywhere() {
-        let mut j = CatalogView::new(1);
+        let mut j = CatalogView::new(1, None);
         let mut watched = item("e1", CatalogKind::Episode);
         watched.position = 300.0;
         j.loaded(
@@ -2234,6 +2607,7 @@ mod tests {
             request_seq: None,
             loading: false,
             error: None,
+            loaded_at: None,
             body: Body::Item {
                 item: Box::new(watched),
             },
@@ -2252,12 +2626,13 @@ mod tests {
 
     #[test]
     fn search_pages_show_rows_by_kind() {
-        let mut j = CatalogView::new(1);
+        let mut j = CatalogView::new(1, None);
         j.pages.push(Page {
             seq: 2,
             request_seq: None,
             loading: true,
             error: None,
+            loaded_at: None,
             body: Body::Search {
                 search: "alien".into(),
                 typed: None,
@@ -2342,7 +2717,7 @@ mod tests {
 
     #[test]
     fn marks_reach_server_rows() {
-        let mut j = CatalogView::new(1);
+        let mut j = CatalogView::new(1, None);
         let h = home_with(vec![row("a", "Row", CatalogKind::Movie)]);
         j.loaded(1, Ok(Loaded::Home(h)));
         j.mark("a-1", Mark::Played, true);
@@ -2415,6 +2790,252 @@ mod tests {
         assert_eq!(g.title, "Row title");
         assert!(g.server_order);
         assert_eq!(g.query, q);
+    }
+
+    fn plex_caps() -> CatalogCapabilities {
+        CatalogCapabilities {
+            library_pages: true,
+            ..CatalogCapabilities::default()
+        }
+    }
+
+    /// A page open on a library of a server with library pages.
+    fn library_view() -> CatalogView {
+        let mut lib = item("section:1", CatalogKind::Library);
+        lib.collection_type = Some("movies".into());
+        let (_, body) = page_for(lib, plex_caps());
+        let mut j = CatalogView::new(1, None);
+        j.pages[0].body = body;
+        j
+    }
+
+    fn library_of(j: &mut CatalogView) -> &mut LibraryPage {
+        let Body::Library(l) = &mut j.pages[0].body else {
+            panic!("not a library page")
+        };
+        l
+    }
+
+    /// Asks as the page does and has the server answer.
+    fn ask(j: &mut CatalogView, request: u64, load: &Load, answer: Loaded) {
+        j.begin_request(1, request, load).unwrap();
+        j.loaded(request, Ok(answer));
+    }
+
+    fn page_of(items: Vec<CatalogItem>) -> Loaded {
+        Loaded::Grid {
+            page: CatalogPage {
+                total: items.len(),
+                items,
+            },
+            append: false,
+            order: None,
+            by_id: false,
+        }
+    }
+
+    fn rows_load() -> Load {
+        Load::LibraryRows("section:1".into())
+    }
+
+    fn some_rows() -> Loaded {
+        Loaded::LibraryRows(vec![row("a", "Recently Added", CatalogKind::Movie)])
+    }
+
+    #[test]
+    fn a_plex_library_opens_on_its_recommended_rows() {
+        let mut lib = item("section:1", CatalogKind::Library);
+        lib.collection_type = Some("movies".into());
+        let (load, body) = page_for(lib, plex_caps());
+        assert!(matches!(&load, Load::LibraryRows(id) if id == "section:1"));
+        let Body::Library(l) = body else {
+            panic!("not a library page")
+        };
+        assert_eq!(l.tab, LibraryTab::Recommended);
+        assert!(l.rows.is_none());
+        assert_eq!(l.grid.query.parent.as_deref(), Some("section:1"));
+        assert_eq!(l.grid.query.types, [CatalogKind::Movie]);
+        assert_eq!(l.collections.query.parent.as_deref(), Some("section:1"));
+        assert_eq!(l.collections.query.types, [CatalogKind::BoxSet]);
+        assert!(l.next_load(false).is_none(), "the rows are already asked");
+    }
+
+    #[test]
+    fn an_empty_recommended_shows_the_library() {
+        let mut j = library_view();
+        ask(&mut j, 2, &rows_load(), Loaded::LibraryRows(Vec::new()));
+        let l = library_of(&mut j);
+        assert_eq!(l.tab, LibraryTab::Library);
+        assert!(l.tabs().iter().all(|t| t.0 != LibraryTab::Recommended));
+        assert!(l.next_load(true).is_none(), "not while something loads");
+        let Some(Load::Grid(q)) = l.next_load(false) else {
+            panic!("the titles are asked for now")
+        };
+        assert_eq!((q.start, q.types), (0, vec![CatalogKind::Movie]));
+    }
+
+    #[test]
+    fn a_failed_recommended_shows_the_library_and_the_tab_asks_again() {
+        let mut j = library_view();
+        j.begin_request(1, 2, &rows_load());
+        j.loaded(2, Err("the server is asleep".into()));
+        assert_eq!(j.pages[0].error.as_deref(), Some("the server is asleep"));
+        let l = library_of(&mut j);
+        assert_eq!(l.tab, LibraryTab::Library);
+        assert!(l.tabs().iter().any(|t| t.0 == LibraryTab::Recommended));
+        l.show(LibraryTab::Recommended);
+        assert!(matches!(l.next_load(false), Some(Load::LibraryRows(_))));
+    }
+
+    #[test]
+    fn tabs_load_when_first_shown() {
+        let mut j = library_view();
+        ask(&mut j, 2, &rows_load(), some_rows());
+        let l = library_of(&mut j);
+        assert_eq!(l.tab, LibraryTab::Recommended);
+        assert_eq!(l.tabs().len(), 3);
+        assert!(l.next_load(false).is_none(), "Recommended is there");
+
+        // Collections, shown for the first time, asks for the collections.
+        l.show(LibraryTab::Collections);
+        let Some(load) = l.next_load(false) else {
+            panic!("the collections are asked for now")
+        };
+        assert_eq!(load.tab(), LibraryTab::Collections);
+        let Load::Grid(q) = &load else {
+            panic!("a listing is asked for")
+        };
+        assert_eq!(q.types, [CatalogKind::BoxSet]);
+        assert_eq!(q.parent.as_deref(), Some("section:1"));
+        j.begin_request(1, 3, &load).unwrap();
+        assert!(library_of(&mut j).next_load(false).is_none());
+
+        // The user goes on to the titles while the collections come; the
+        // answer still lands on the collections.
+        library_of(&mut j).show(LibraryTab::Library);
+        assert!(library_of(&mut j).next_load(true).is_none());
+        let collection = item("collection:9", CatalogKind::BoxSet);
+        j.loaded(3, Ok(page_of(vec![collection])));
+        let l = library_of(&mut j);
+        assert_eq!((l.collections.items.len(), l.grid.items.len()), (1, 0));
+        assert_eq!(l.collections.total, 1);
+
+        // Now the titles are asked for, once.
+        let Some(load) = l.next_load(false) else {
+            panic!("the titles are asked for now")
+        };
+        assert_eq!(load.tab(), LibraryTab::Library);
+        j.begin_request(1, 4, &load).unwrap();
+        j.loaded(4, Ok(page_of(vec![item("m1", CatalogKind::Movie)])));
+        let l = library_of(&mut j);
+        assert_eq!((l.collections.items.len(), l.grid.items.len()), (1, 1));
+        assert!(l.next_load(false).is_none());
+        l.show(LibraryTab::Collections);
+        assert!(l.next_load(false).is_none(), "a tab that came stays");
+    }
+
+    #[test]
+    fn a_library_page_reloads_the_tab_shown_and_the_others_when_shown() {
+        let mut j = library_view();
+        ask(&mut j, 2, &rows_load(), some_rows());
+        library_of(&mut j).show(LibraryTab::Library);
+        let load = library_of(&mut j).next_load(false).unwrap();
+        let titles = page_of(vec![item("m1", CatalogKind::Movie)]);
+        ask(&mut j, 3, &load, titles);
+
+        let (seq, load) = j.reload().unwrap();
+        assert_eq!(seq, 1);
+        let Load::Grid(q) = load else {
+            panic!("the titles show again")
+        };
+        assert_eq!(q.types, [CatalogKind::Movie]);
+        let l = library_of(&mut j);
+        assert!(l.asked[LibraryTab::Library.index()]);
+        l.show(LibraryTab::Recommended);
+        assert!(matches!(l.next_load(false), Some(Load::LibraryRows(_))));
+    }
+
+    #[test]
+    fn marks_reach_every_tab_of_a_library() {
+        let mut j = library_view();
+        ask(&mut j, 2, &rows_load(), some_rows());
+        library_of(&mut j).show(LibraryTab::Library);
+        let load = library_of(&mut j).next_load(false).unwrap();
+        let titles = page_of(vec![item("a-1", CatalogKind::Movie)]);
+        ask(&mut j, 3, &load, titles);
+        j.mark("a-1", Mark::Played, true);
+        let l = library_of(&mut j);
+        assert!(l.grid.items[0].played);
+        assert!(l.rows.as_ref().unwrap()[0].items[0].played);
+    }
+
+    #[test]
+    fn the_filters_drawer_belongs_to_the_listing_shown() {
+        let mut j = library_view();
+        j.show_filters(true);
+        assert!(!j.filters_open(), "Recommended has no filters");
+        assert!(j.show_tab("library"));
+        j.show_filters(true);
+        assert!(j.filters_open());
+        assert!(j.show_tab("collections"));
+        assert!(!j.filters_open());
+        assert!(!j.show_tab("nonsense"));
+    }
+
+    #[test]
+    fn a_jellyfin_library_still_opens_as_a_grid() {
+        let mut lib = item("lib", CatalogKind::Library);
+        lib.collection_type = Some("movies".into());
+        let (load, body) = page_for(lib, CatalogCapabilities::default());
+        let Load::Grid(q) = load else {
+            panic!("a grid is asked for")
+        };
+        assert_eq!(q.parent.as_deref(), Some("lib"));
+        assert!(matches!(body, Body::Grid(_)));
+    }
+
+    #[test]
+    fn a_collection_opens_in_its_own_order() {
+        let collection = item("collection:9", CatalogKind::BoxSet);
+        let (_, body) = page_for(collection, plex_caps());
+        let Body::Grid(g) = body else {
+            panic!("a collection is a grid")
+        };
+        assert!(g.server_order);
+        assert_eq!(g.query.sort, CatalogSort::Server);
+    }
+
+    #[test]
+    fn a_cached_home_shows_while_it_reloads() {
+        let first = home_with(vec![row("a", "Old row", CatalogKind::Movie)]);
+        let mut cache = HomeCache::default();
+        assert!(cache.get("plex").is_none());
+        cache.put("plex", &first);
+        assert!(cache.get("other").is_none());
+
+        let mut j = CatalogView::new(1, cache.get("plex"));
+        assert!(j.pages[0].loading, "the fresh copy is on its way");
+        assert!(has_content(&j.pages[0].body), "and the old one is drawn");
+        j.loaded(1, Ok(Loaded::Home(home_with(Vec::new()))));
+        let Body::Home { home: Some(h), .. } = &j.pages[0].body else {
+            panic!("the front page")
+        };
+        assert!(h.rows.is_empty(), "the answer replaces it");
+
+        let later = Instant::now() + HOME_LIFE + Duration::from_secs(1);
+        assert!(cache.get_at("plex", later).is_none(), "long out of date");
+    }
+
+    #[test]
+    fn showing_the_browser_again_soon_does_not_refetch() {
+        let mut j = CatalogView::new(1, None);
+        assert!(!j.loaded_recently(), "nothing has answered yet");
+        j.loaded(1, Err("asleep".into()));
+        assert!(!j.loaded_recently(), "an error is no answer");
+        j.loaded(1, Ok(Loaded::Home(home_with(Vec::new()))));
+        assert!(j.loaded_recently());
+        let later = Instant::now() + FRESH + Duration::from_secs(1);
+        assert!(!j.loaded_recently_at(later));
     }
 
     #[test]
