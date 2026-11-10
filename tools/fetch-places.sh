@@ -10,7 +10,7 @@
 # when LATERNA_FETCH_ALLOW_FILE=1 (for tests, which use file:// urls).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-[ $# -ge 1 ] && [ $# -le 2 ] || { echo "usage: $0 OUTDIR [LOCKFILE]" >&2; exit 2; }
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then echo "usage: $0 OUTDIR [LOCKFILE]" >&2; exit 2; fi
 out="$1"
 lock="${2:-$root/packaging/places.lock}"
 [ -f "$lock" ] || { echo "fetch-places: no lock file $lock" >&2; exit 1; }
