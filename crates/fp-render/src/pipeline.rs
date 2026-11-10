@@ -57,6 +57,16 @@ pub(crate) struct PipelineDesc<'a> {
 }
 
 pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
+    create_entry(gpu, d, c"fs_main")
+}
+
+/// [`create`] with the module's fragment entry point named `fragment`
+/// (`vs_main` is always the vertex one).
+pub(crate) fn create_entry(
+    gpu: &Gpu,
+    d: &PipelineDesc,
+    fragment: &std::ffi::CStr,
+) -> Result<vk::Pipeline> {
     let module = gpu.shader(d.spv)?;
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
@@ -66,7 +76,7 @@ pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .module(module)
-            .name(c"fs_main"),
+            .name(fragment),
     ];
     let bindings = [vk::VertexInputBindingDescription::default()
         .binding(0)

@@ -106,9 +106,13 @@ pub(crate) enum Mark {
     Eyes,
     EyesDone,
     End,
+    /// Around building the video pyramid, which runs inside the eye passes'
+    /// span (before the first pass).
+    Pyramid,
+    PyramidDone,
 }
 
-const MARKS: usize = 6;
+const MARKS: usize = 8;
 
 /// One frame's GPU time per part, in milliseconds. A part the frame didn't
 /// have (no video, no eye passes) is `None`.
@@ -118,8 +122,10 @@ pub struct GpuTimes {
     pub panels: Option<f32>,
     /// The video frame: an upload, a 10-bit conversion, HDR measuring.
     pub video: Option<f32>,
-    /// Both eye passes.
+    /// Both eye passes (without the pyramid, which is timed on its own).
     pub eyes: Option<f32>,
+    /// Building the video pyramid: only for a frame that built one.
+    pub pyramid: Option<f32>,
     /// Copying panels into the compositor's layers.
     pub layers: Option<f32>,
     /// The whole frame.
@@ -138,10 +144,14 @@ fn parts(ticks: [Option<u64>; MARKS], bits: u32, period_ns: f32) -> GpuTimes {
         let (a, b) = (ticks[from as usize]?, ticks[to as usize]?);
         Some((b.wrapping_sub(a) & mask) as f32 * period_ns / 1e6)
     };
+    let pyramid = ms(Mark::Pyramid, Mark::PyramidDone);
+    // The pyramid is built after the eye passes' first mark, so it is taken out.
+    let eyes = ms(Mark::Eyes, Mark::EyesDone);
     GpuTimes {
         panels: ms(Mark::Start, Mark::Video),
         video: ms(Mark::Video, Mark::VideoDone),
-        eyes: ms(Mark::Eyes, Mark::EyesDone),
+        eyes: eyes.map(|e| (e - pyramid.unwrap_or(0.0)).max(0.0)),
+        pyramid,
         layers: ms(Mark::EyesDone, Mark::End),
         total: ms(Mark::Start, Mark::End),
     }
@@ -343,8 +353,13 @@ mod tests {
         assert!(s.take().unwrap().max >= 0.0);
     }
 
-    fn at(ticks: [u64; MARKS]) -> [Option<u64>; MARKS] {
-        ticks.map(Some)
+    /// Ticks for the marks up to `End`, the pyramid's two not written.
+    fn at(ticks: [u64; 6]) -> [Option<u64>; MARKS] {
+        let mut all = [None; MARKS];
+        for (mark, tick) in all.iter_mut().zip(ticks) {
+            *mark = Some(tick);
+        }
+        all
     }
 
     #[test]
@@ -356,6 +371,20 @@ mod tests {
         assert!(near(t.video, 1.042), "{t:?}");
         assert!(near(t.eyes, 3.125), "{t:?}");
         assert!(near(t.layers, 0.208), "{t:?}");
+        assert!(near(t.total, 4.427), "{t:?}");
+    }
+
+    #[test]
+    fn the_pyramid_is_a_part_of_its_own_and_not_of_the_eyes() {
+        let mut ticks = at([0, 1000, 21_000, 21_000, 81_000, 85_000]);
+        let t = parts(ticks, 64, 52.083);
+        assert_eq!(t.pyramid, None, "a frame that built none has no part");
+        ticks[Mark::Pyramid as usize] = Some(21_000);
+        ticks[Mark::PyramidDone as usize] = Some(31_000);
+        let t = parts(ticks, 64, 52.083);
+        let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-3);
+        assert!(near(t.pyramid, 0.521), "{t:?}");
+        assert!(near(t.eyes, 2.604), "{t:?}");
         assert!(near(t.total, 4.427), "{t:?}");
     }
 

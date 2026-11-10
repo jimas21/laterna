@@ -524,9 +524,10 @@ impl GpuWindow {
             at(&total, 1.0),
             total.len()
         );
-        let parts: [(&str, Part); 4] = [
+        let parts: [(&str, Part); 5] = [
             ("video", |t| t.video),
             ("eyes", |t| t.eyes),
+            ("pyramid", |t| t.pyramid),
             ("panels", |t| t.panels),
             ("layers", |t| t.layers),
         ];
@@ -568,6 +569,7 @@ mod tests {
                 panels: Some(0.1),
                 video: (i % 2 == 0).then_some(1.0),
                 eyes: Some(3.0 + i as f32 / 10.0),
+                pyramid: None,
                 layers: None,
                 total: Some(4.0 + i as f32 / 10.0),
             }));
@@ -582,6 +584,22 @@ mod tests {
             "{line}"
         );
         assert_eq!(w.take_line(), None, "the window starts again");
+    }
+
+    #[test]
+    fn the_pyramid_is_named_in_the_gpu_line_for_the_frames_that_built_one() {
+        let mut w = GpuWindow::default();
+        for i in 0..10 {
+            w.push(Some(fp_render::GpuTimes {
+                eyes: Some(3.0),
+                // Built on one frame in three, as 24p at 72 Hz does.
+                pyramid: (i % 3 == 0).then_some(0.4),
+                total: Some(4.0),
+                ..Default::default()
+            }));
+        }
+        let line = w.take_line().expect("a line");
+        assert!(line.contains("medians eyes 3.00, pyramid 0.40"), "{line}");
     }
 
     // As read on a Steam Frame (SteamOS 0.4.5).

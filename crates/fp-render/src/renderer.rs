@@ -14,6 +14,7 @@ use crate::mem::{self, Buffer, Image};
 use crate::params::{self, Quality, SceneParams, VideoParams};
 use crate::peak::PeakPass;
 use crate::pipeline::{self, Depth, PipelineDesc};
+use crate::pyramid::{self, PyramidPass};
 use crate::q10c::Converter;
 use crate::timing::{FrameTimer, GpuTimes, Mark, Series};
 use crate::tp10_eyes::Tp10Eyes;
@@ -30,6 +31,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const SLOTS: usize = 2;
+/// The most taps along a picture's long axis the video sampler takes where
+/// the device allows anisotropic filtering.
+const MAX_ANISOTROPY: f32 = 8.0;
 /// Linear-light background format of eye targets.
 pub const PANEL_FORMATS: [vk::Format; 2] = [vk::Format::R8G8B8A8_UNORM, vk::Format::R8G8B8A8_SRGB];
 
@@ -176,6 +180,9 @@ pub struct Renderer {
     pool: vk::CommandPool,
     dpool: vk::DescriptorPool,
     sampler: vk::Sampler,
+    /// Like `sampler`, and anisotropic where the device can: for the video
+    /// pyramid, and for room textures ([`Renderer::aniso_sampler`]).
+    aniso_sampler: vk::Sampler,
     scene_layout: vk::DescriptorSetLayout,
     scene_pl: vk::PipelineLayout,
     scene_pipe: vk::Pipeline,
@@ -197,6 +204,14 @@ pub struct Renderer {
     q10c: Option<Converter>,
     /// Samples 10-bit frames read in place without converting them.
     tp10_eyes: Option<Tp10Eyes>,
+    /// Builds each frame's mip chain for the scene shader where the picture
+    /// is minified (VQ5); `None` where the device has no format for it.
+    pyramid: Option<PyramidPass>,
+    /// The frame `set_video` showed this frame, when the scene shader reads it
+    /// from planes (the pyramid is made from those): not one read in TP10 bands.
+    shown_id: Option<u64>,
+    /// Levels of the pyramid the last `draw` read (0: none).
+    pyramid_levels: u32,
     /// Measures HDR frames for `hdr_peak`; without it HDR keeps the
     /// default peak.
     peak: Option<PeakPass>,
@@ -278,8 +293,26 @@ impl Renderer {
                     None,
                 )
                 .ctx("sampler")?;
+            let mut aniso_info = vk::SamplerCreateInfo::default()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .max_lod(vk::LOD_CLAMP_NONE);
+            if let Some(max) = gpu.max_anisotropy {
+                aniso_info = aniso_info
+                    .anisotropy_enable(true)
+                    .max_anisotropy(max.min(MAX_ANISOTROPY));
+            }
+            let aniso_sampler = d
+                .create_sampler(&aniso_info, None)
+                .ctx("anisotropic sampler")?;
 
             let depth_format = gpu.depth_format();
+            // Bindings 20 and 21 are the video pyramid and its sampler
+            // (planes.wgsl); the TP10 pipeline's layout has neither.
             let scene_layout = pipeline::set_layout(
                 &gpu,
                 &[
@@ -288,9 +321,12 @@ impl Renderer {
                     (2, vk::DescriptorType::SAMPLED_IMAGE),
                     (3, vk::DescriptorType::SAMPLED_IMAGE),
                     (4, vk::DescriptorType::SAMPLED_IMAGE),
+                    (20, vk::DescriptorType::SAMPLED_IMAGE),
+                    (21, vk::DescriptorType::SAMPLER),
                 ],
             )?;
             let scene_pl = pipeline::layout(&gpu, scene_layout, 4)?;
+            let pyramid = PyramidPass::new(&gpu, scene_pl);
             let scene_pipe = pipeline::create(
                 &gpu,
                 &PipelineDesc {
@@ -388,6 +424,7 @@ impl Renderer {
                 pool,
                 dpool,
                 sampler,
+                aniso_sampler,
                 scene_layout,
                 scene_pl,
                 scene_pipe,
@@ -416,6 +453,9 @@ impl Renderer {
                 video_gen: [0, 0],
                 q10c: Converter::new(&gpu),
                 tp10_eyes: None,
+                pyramid,
+                shown_id: None,
+                pyramid_levels: 0,
                 peak: PeakPass::new(&gpu, SLOTS)
                     .inspect_err(|e| log::warn!("HDR scenes aren't measured: {e}"))
                     .ok(),
@@ -489,6 +529,21 @@ impl Renderer {
 
     pub fn color_format(&self) -> vk::Format {
         self.color_format
+    }
+
+    /// A sampler like the video's (linear, clamped to the edge, every mip
+    /// level) that also filters anisotropically, up to 8 taps, where the
+    /// device allows it; plain trilinear where not. For textures seen at a
+    /// slant, such as a room's.
+    pub fn aniso_sampler(&self) -> vk::Sampler {
+        self.aniso_sampler
+    }
+
+    /// Levels of the video pyramid the last [`Renderer::draw`] read, 0 when
+    /// the picture was drawn without one (magnified, or not flat, or the
+    /// pyramid is off or left out).
+    pub fn pyramid_levels(&self) -> u32 {
+        self.pyramid_levels
     }
 
     fn new_slot(&self) -> Result<Slot> {
@@ -800,6 +855,14 @@ impl Renderer {
             self.gpu_times = t.read(&self.gpu, self.current);
             t.begin(&self.gpu, cmd, self.current);
         }
+        // A pyramid that keeps taking too long to build is given up on.
+        if let Some(ms) = self.gpu_times.and_then(|t| t.pyramid)
+            && let Some(pass) = self.pyramid.as_mut()
+        {
+            pass.observe(ms);
+        }
+        // Set again by this frame's `set_video`.
+        self.shown_id = None;
         self.recording = true;
         Ok(())
     }
@@ -831,6 +894,13 @@ impl Renderer {
         self.stamp(Mark::Video);
         let r = self.show_video(frame);
         self.stamp(Mark::VideoDone);
+        // The pyramid is made from planes: a frame read in TP10 bands, a failed
+        // one or none has no id to make it for.
+        let in_bands = self.slots[self.current].tp10_bound.is_some();
+        self.shown_id = match frame {
+            Some(f) if r.is_ok() && !in_bands => Some(f.id),
+            _ => None,
+        };
         r
     }
 
@@ -1411,7 +1481,14 @@ impl Renderer {
             }
             d.cmd_end_rendering(cmd);
         }
-        generate_mips(gpu, cmd, img, pw, ph, mips);
+        blit_chain(
+            gpu,
+            cmd,
+            img,
+            (pw, ph, mips),
+            LevelState::RENDERED,
+            LevelState::SAMPLED,
+        );
         // Free textures egui no longer needs (after this frame).
         if let Some(Some(p)) = self.panels.get_mut(panel) {
             p.painted = true;
@@ -1445,6 +1522,13 @@ impl Renderer {
             }
             (None, None) => vec![dummy; 3],
         };
+        // The video pyramid, shader-readable whether or not this frame builds
+        // it (see `PyramidPass::ensure`); the dummy where there is none.
+        let pyramid_view = self
+            .pyramid
+            .as_ref()
+            .and_then(PyramidPass::view)
+            .unwrap_or(dummy);
         let slot = &mut self.slots[self.current];
         let ubo = [vk::DescriptorBufferInfo::default()
             .buffer(slot.uniform.buffer)
@@ -1479,6 +1563,24 @@ impl Renderer {
                     .image_info(info),
             );
         }
+        let pyramid_info = [vk::DescriptorImageInfo::default()
+            .image_view(pyramid_view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let aniso = [vk::DescriptorImageInfo::default().sampler(self.aniso_sampler)];
+        writes.push(
+            vk::WriteDescriptorSet::default()
+                .dst_set(slot.scene_set)
+                .dst_binding(20)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .image_info(&pyramid_info),
+        );
+        writes.push(
+            vk::WriteDescriptorSet::default()
+                .dst_set(slot.scene_set)
+                .dst_binding(21)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .image_info(&aniso),
+        );
         // SAFETY: the set is not in use by any pending submission (the slot's
         // fence was waited on in begin_frame).
         unsafe { self.gpu.device.update_descriptor_sets(&writes, &[]) };
@@ -1506,7 +1608,6 @@ impl Renderer {
         video: &VideoParams,
         quads: &[QuadDraw],
     ) -> Result<()> {
-        self.update_scene_set();
         let width = targets[0].extent.width.max(targets[1].extent.width);
         let height = targets[0].extent.height.max(targets[1].extent.height);
         let (depth_image, depth_view) = self.depth_for(width, height)?;
@@ -1532,6 +1633,22 @@ impl Renderer {
         }
         .is_some();
         let env_on = self.prepare_env(slot_idx, video, &p, eyes);
+        // VQ5: the video pyramid, if this picture is minified enough to want
+        // one. Decided before the scene set is written, so the set points at
+        // its image, and before the uniform, which tells the shader about it.
+        let footprint = frame_desc.map_or(0.0, |desc| {
+            pyramid::scene_footprint(
+                &p,
+                (desc.width, desc.height),
+                crate::math::pixels_per_tan(&eyes[0].proj, targets[0].extent.width),
+                eyes[0].view.inverse().w_axis.truncate(),
+                video.screen_pose.w_axis.truncate(),
+            )
+        });
+        let plan = self.prepare_pyramid(&p, frame_desc, tp10, footprint);
+        p.display[2] = plan.map_or(0, |(_, levels)| levels);
+        self.pyramid_levels = p.display[2];
+        self.update_scene_set();
         // Quad vertices: two triangles per quad.
         let mut verts: Vec<QuadVertex> = Vec::with_capacity(quads.len() * 6);
         let mut sets = Vec::with_capacity(quads.len());
@@ -1576,6 +1693,22 @@ impl Renderer {
                 slot.garbage_buffers.push(old);
             }
             slot.quad_vb.bytes()[..bytes.len()].copy_from_slice(bytes);
+        }
+        // Build the pyramid the shader was told to read, unless it holds this
+        // frame already (a paused or repeated frame costs nothing). Nothing
+        // below can fail, so the pyramid is never marked built and left unbuilt.
+        let build = match (plan, self.pyramid.as_ref()) {
+            (Some((id, _)), Some(pass)) if !pass.holds(id) => Some(id),
+            _ => None,
+        };
+        if let Some(id) = build {
+            self.stamp(Mark::Pyramid);
+            let slot = &self.slots[slot_idx];
+            let (cmd, set) = (slot.cmd, slot.scene_set);
+            if let Some(pass) = self.pyramid.as_mut() {
+                pass.record(&self.gpu, cmd, self.scene_pl, set, id);
+            }
+            self.stamp(Mark::PyramidDone);
         }
         let slot = &self.slots[slot_idx];
         let (gpu, cmd) = (&self.gpu, slot.cmd);
@@ -1728,6 +1861,53 @@ impl Renderer {
             }
         }
         Ok(())
+    }
+
+    /// Decides whether this frame's picture reads the video pyramid
+    /// ([`crate::pyramid`]) and makes its image ready: the id of the frame it
+    /// is of, and its level count. `footprint` is the estimate of texels per
+    /// eye pixel at the screen's middle. Recording the build comes later,
+    /// once the scene's parameters are in the uniform buffer.
+    fn prepare_pyramid(
+        &mut self,
+        p: &SceneParams,
+        frame: Option<params::FrameDesc>,
+        tp10: bool,
+        footprint: f32,
+    ) -> Option<(u64, u32)> {
+        let desc = frame?;
+        let id = self.shown_id?;
+        let pass = self.pyramid.as_mut()?;
+        let slot = &mut self.slots[self.current];
+        let source = (desc.width, desc.height);
+        let on = self.quality.pyramid && slot.has_video && !pass.left_out(source);
+        let flat = p.mode[0] == 0;
+        let changed = if pyramid::wanted(on, flat, tp10, source, footprint) {
+            match pass.ensure(&self.gpu, slot.cmd, &mut slot.garbage, source) {
+                Ok(changed) => changed,
+                Err(e) => {
+                    pass.give_up(source, &e.to_string());
+                    return None;
+                }
+            }
+        } else {
+            // Switched off or left out: not holding its memory for nothing.
+            // Merely not wanted this frame (magnified, say): kept for the next.
+            let leave = !self.quality.pyramid || pass.left_out(source);
+            if leave && pass.drop_image(&mut slot.garbage) {
+                for s in &mut self.slots {
+                    s.scene_set_dirty = true;
+                }
+            }
+            return None;
+        };
+        if changed {
+            // Every frame slot's set points at the new image.
+            for s in &mut self.slots {
+                s.scene_set_dirty = true;
+            }
+        }
+        Some((id, pass.levels()))
     }
 
     /// Makes the place pass the first time it is wanted. False when places
@@ -2166,17 +2346,53 @@ fn usage_sampled() -> vk::ImageUsageFlags {
     vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST
 }
 
-/// Blits level 0 down the mip chain and leaves every level shader-readable.
-fn generate_mips(gpu: &Gpu, cmd: vk::CommandBuffer, image: vk::Image, w: u32, h: u32, mips: u32) {
+/// What `blit_chain` finds a mip level in: its layout, and the stage and
+/// access of the last use that has to finish before the level is written
+/// (or, for level 0, before it is read).
+#[derive(Clone, Copy)]
+pub(crate) struct LevelState {
+    pub layout: vk::ImageLayout,
+    pub last_use: (vk::PipelineStageFlags2, vk::AccessFlags2),
+}
+
+impl LevelState {
+    /// Just rendered into.
+    pub const RENDERED: LevelState = LevelState {
+        layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        last_use: mem::COLOR_WRITE,
+    };
+    /// Read by shaders, as a panel's lower levels are from the last paint.
+    pub const SAMPLED: LevelState = LevelState {
+        layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        last_use: mem::SHADER_READ,
+    };
+    /// Contents not wanted, but earlier shader reads of them (by frames still
+    /// in flight) must finish before they are written.
+    pub const DISCARDED: LevelState = LevelState {
+        layout: vk::ImageLayout::UNDEFINED,
+        last_use: mem::SHADER_READ,
+    };
+}
+
+/// Blits level 0 (in state `first`) down the mip chain, the other levels
+/// starting in state `rest`, and leaves every level shader-readable.
+pub(crate) fn blit_chain(
+    gpu: &Gpu,
+    cmd: vk::CommandBuffer,
+    image: vk::Image,
+    (w, h, mips): (u32, u32, u32),
+    first: LevelState,
+    rest: LevelState,
+) {
     let d = &gpu.device;
     mem::barrier(
         gpu,
         cmd,
         image,
         mem::range(0, 1),
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        first.layout,
         vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        mem::COLOR_WRITE,
+        first.last_use,
         mem::TRANSFER_READ,
     );
     let (mut mw, mut mh) = (w as i32, h as i32);
@@ -2187,9 +2403,9 @@ fn generate_mips(gpu: &Gpu, cmd: vk::CommandBuffer, image: vk::Image, w: u32, h:
             cmd,
             image,
             mem::range(level, 1),
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            rest.layout,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            mem::SHADER_READ,
+            rest.last_use,
             mem::TRANSFER_WRITE,
         );
         let sub = |l| vk::ImageSubresourceLayers {
@@ -2268,6 +2484,9 @@ impl Drop for Renderer {
             if let Some(mut t) = self.tp10_eyes.take() {
                 t.destroy(&gpu);
             }
+            if let Some(mut p) = self.pyramid.take() {
+                p.destroy(&gpu);
+            }
             self.imports.destroy(&gpu);
             for mut s in self.slots.drain(..) {
                 for mut i in s.garbage.drain(..) {
@@ -2305,6 +2524,7 @@ impl Drop for Renderer {
             d.destroy_descriptor_set_layout(self.scene_layout, None);
             d.destroy_descriptor_set_layout(self.tex_layout, None);
             d.destroy_sampler(self.sampler, None);
+            d.destroy_sampler(self.aniso_sampler, None);
             d.destroy_descriptor_pool(self.dpool, None);
             d.destroy_command_pool(self.pool, None);
         }
