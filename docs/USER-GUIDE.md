@@ -1076,6 +1076,16 @@ when you're done if you want the headset to last longer.
   performance overlay's GPU line after the change. It takes effect after a
   restart; the **Restart now** button appears when you change it. SteamVR's
   own resolution settings for FramePlayerX still set what Auto starts from.
+- When motion in a film looks uneven, as in a slow pan, check **Settings ›
+  General › Match the headset to the film**. A film at 24 frames a second
+  looks smooth when the headset's refresh rate is a whole multiple of it, such
+  as 72 Hz, where every film frame shows three times. While a video plays, this
+  asks SteamVR for the best rate it offers for that film (72 Hz for 24 frames a
+  second, 90 Hz for 30, 120 Hz for 60) and puts your own rate back when the
+  video closes. It stays quiet when SteamVR offers no choice, and it is capped
+  at 120 Hz. Turn it off and your rate is never changed. Either way, each
+  picture is chosen for the moment it reaches your eyes, which keeps the
+  picture in step with the sound.
 - After a crash, the next start asks whether to send a crash report to
   Laterna's developers, as a private issue on GitHub. It contains the
   versions of Laterna and the headset's system, what went wrong, and

@@ -304,6 +304,27 @@ impl XrSession {
         })
     }
 
+    /// How long from now the frame `state` describes reaches the display: its
+    /// predicted display time minus the present, both on the runtime's clock
+    /// (`XR_KHR_convert_timespec_time`). One predicted display period when
+    /// the runtime cannot convert, or its answer is not believable; never
+    /// more than 100 ms.
+    pub fn display_lead(&self, state: &xr::FrameState) -> Duration {
+        let period = state.predicted_display_period.as_nanos();
+        let now = self.clock_now();
+        lead_from(state.predicted_display_time.as_nanos(), now, period)
+    }
+
+    /// The present on the runtime's clock, in nanoseconds, when it can say.
+    fn clock_now(&self) -> Option<i64> {
+        // `now` needs the extension's functions loaded, or it panics. On
+        // Windows it wants another extension, which is not enabled.
+        if cfg!(windows) || !self.ctx.enabled.khr_convert_timespec_time {
+            return None;
+        }
+        self.ctx.instance.now().ok().map(xr::Time::as_nanos)
+    }
+
     /// Display refresh rates the app may request (`XR_FB_display_refresh_rate`),
     /// or `None` when the extension is not enabled or the call fails.
     pub fn refresh_rates(&self) -> Option<Vec<f32>> {
@@ -804,6 +825,20 @@ impl XrSession {
     }
 }
 
+/// The most a frame's lead may be: more would mean a clock that is wrong.
+const MAX_DISPLAY_LEAD: Duration = Duration::from_millis(100);
+
+/// The lead of a frame shown at `display_ns` when it is `now_ns` (both on the
+/// runtime's clock): the difference, or `period_ns` when the present is not
+/// known; between zero and [`MAX_DISPLAY_LEAD`].
+fn lead_from(display_ns: i64, now_ns: Option<i64>, period_ns: i64) -> Duration {
+    let ns = match now_ns {
+        Some(now) => display_ns.saturating_sub(now),
+        None => period_ns,
+    };
+    Duration::from_nanos(ns.max(0) as u64).min(MAX_DISPLAY_LEAD)
+}
+
 impl Drop for XrSession {
     fn drop(&mut self) {
         self.gpu.wait_idle();
@@ -832,6 +867,30 @@ mod tests {
             fov_text(fov),
             "left -50.0, right 40.0, up 45.0, down -35.0 (90.0 x 80.0 degrees)"
         );
+    }
+
+    #[test]
+    fn the_display_lead_is_the_time_to_the_display_within_limits() {
+        let ms = |n: u64| Duration::from_millis(n);
+        let (display, period) = (10_000_000_000, 13_888_889);
+        // 12 ms before the display instant.
+        assert_eq!(
+            lead_from(display, Some(display - 12_000_000), period),
+            ms(12)
+        );
+        // Unknown present: a period.
+        assert_eq!(
+            lead_from(display, None, period),
+            Duration::from_nanos(period as u64)
+        );
+        // Already past, or a clock far off: held to 0 and 100 ms.
+        assert_eq!(lead_from(display, Some(display + 5_000_000), period), ms(0));
+        assert_eq!(
+            lead_from(display, Some(display - 5_000_000_000), period),
+            ms(100)
+        );
+        assert_eq!(lead_from(i64::MAX, Some(i64::MIN), period), ms(100));
+        assert_eq!(lead_from(display, None, 0), ms(0));
     }
 
     #[test]

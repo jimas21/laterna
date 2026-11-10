@@ -183,6 +183,10 @@ pub struct Settings {
     /// The size of the picture drawn for each eye (Settings › General ›
     /// Render resolution). Takes effect when the app starts.
     pub render_scale: RenderScale,
+    /// While a video plays, ask the runtime for a refresh rate the film's
+    /// frame rate fits evenly (Settings › General › Match the headset to
+    /// the film). Off, the user's own rate is never changed.
+    pub auto_refresh_rate: bool,
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,
     /// Where the library and adjust panels were moved to: yaw and pitch in
@@ -345,6 +349,7 @@ impl Default for Settings {
             loop_playlist: false,
             perf_overlay: false,
             render_scale: RenderScale::default(),
+            auto_refresh_rate: true,
             controls: crate::bindings::Bindings::default(),
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),
@@ -594,6 +599,20 @@ mod tests {
         assert_eq!(json, r#""sharpest""#);
         assert_eq!(RenderScale::Sharper.factor(), 1.25);
         assert_eq!(RenderScale::Sharpest.factor(), 1.5);
+    }
+
+    #[test]
+    fn matching_the_refresh_rate_is_on_unless_the_file_says_off() {
+        let old: Settings = serde_json::from_str(r#"{"volume": 0.5}"#).unwrap();
+        assert!(old.auto_refresh_rate);
+        let off: Settings = serde_json::from_str(r#"{"auto_refresh_rate": false}"#).unwrap();
+        assert!(!off.auto_refresh_rate);
+        let s = Settings {
+            auto_refresh_rate: false,
+            ..Default::default()
+        };
+        let again: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert!(!again.auto_refresh_rate);
     }
 
     #[test]

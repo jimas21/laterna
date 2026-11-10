@@ -56,6 +56,10 @@ pub struct FrameInput {
     /// refresh rate (OpenXR), for the performance overlay.
     pub frame_ms: Option<f32>,
     pub display_hz: Option<f32>,
+    /// How long from now this frame reaches the display (OpenXR), so the
+    /// video frame chosen is the one due then. Zero when not known (the
+    /// desktop preview).
+    pub display_lead: Duration,
     /// The system recentered (the Steam button held) since the last frame.
     pub recentred: bool,
     /// How many pixels of an eye image make a unit of tangent, at the middle of
@@ -103,6 +107,9 @@ pub struct FrameOutput {
     /// The dashboard button was pressed: open SteamVR's dashboard over the
     /// app, which keeps running and playing.
     pub open_dashboard: bool,
+    /// The frame rate of the video open, when the headset's refresh rate is
+    /// to be matched to it (`Settings::auto_refresh_rate`); otherwise `None`.
+    pub film_fps: Option<f64>,
 }
 
 const MAIN: usize = 0;

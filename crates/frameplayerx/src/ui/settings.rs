@@ -311,6 +311,11 @@ fn general(ui: &mut egui::Ui, v: &mut View) {
                     }
                 },
             );
+            r.switch(
+                tr!("settings-match-refresh-rate"),
+                Some(tr!("settings-match-refresh-rate-desc")),
+                &mut s.auto_refresh_rate,
+            );
         }
         r.switch(
             tr!("settings-follow"),
