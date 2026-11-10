@@ -410,6 +410,12 @@ impl Settings {
             Ok(text) => match serde_json::from_str::<Settings>(&text) {
                 Ok(mut s) => {
                     s.audio_delay_ms = fp_core::audio_sync::clamp_delay_ms(s.audio_delay_ms);
+                    // The screen still at the old untouched default (6 m at
+                    // 4 m, about 74 degrees) takes the new one: Medium, 72.
+                    let v = &mut s.default_view;
+                    if v.screen_width == 6.0 && v.screen_distance == 4.0 {
+                        v.screen_width = fp_core::view::DEFAULT_SCREEN_WIDTH;
+                    }
                     // Saved before the global chroma key existed: its key
                     // was never chosen, so take the current default.
                     if s.default_view.key_own.is_none() {
@@ -578,6 +584,23 @@ mod tests {
         assert_eq!(Settings::load(&path).audio_delay_ms, 300);
         std::fs::write(&path, r#"{"audio_delay_ms": 14}"#).unwrap();
         assert_eq!(Settings::load(&path).audio_delay_ms, 10);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_old_untouched_screen_default_becomes_medium() {
+        let dir = std::env::temp_dir().join(format!("fp-screen-default-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let mut s = Settings::default();
+        s.default_view.screen_width = 6.0;
+        s.default_view.screen_distance = 4.0;
+        s.save(&path).unwrap();
+        let w = Settings::load(&path).default_view.screen_width;
+        assert_eq!(w, fp_core::view::DEFAULT_SCREEN_WIDTH);
+        // A size the user chose is kept.
+        s.default_view.screen_width = 6.5;
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).default_view.screen_width, 6.5);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
