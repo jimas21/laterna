@@ -38,7 +38,7 @@ The name comes from the *laterna magica*, the magic lantern: the first projector
 - **Playlists and watch history** from your server
 
 ### Earbuds *(next beta)*
-- **AirPods and other earbuds**: battery, noise control, and pause when you take one out. Uses [MagicPods for Frame](https://github.com/jimas21/MagicPodsCore), installed from Laterna's Settings
+- **AirPods and other earbuds**: battery, noise control, and pause when you take one out. Uses [Tragus](https://github.com/jimas21/MagicPodsCore), our earbuds companion for the Frame, installed from Laterna's Settings
 
 ---
 
