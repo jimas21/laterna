@@ -676,10 +676,7 @@ impl Sim {
                         let credentials =
                             PlexCredentials::manual("preview-token".into(), "ui-preview".into());
                         let servers = api.resources(&credentials)?;
-                        LinkState::Servers {
-                            credentials,
-                            servers,
-                        }
+                        LinkState::servers(credentials, servers, &[])
                     }
                     _ => return Err("plex-link-preview needs waiting, expired or servers".into()),
                 };

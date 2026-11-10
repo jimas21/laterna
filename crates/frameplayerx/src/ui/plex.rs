@@ -4,8 +4,9 @@ use super::sources::{address_hint, name_hint, text_field};
 use super::theme::{self, Weight};
 use super::widgets::{self, Kind};
 use super::{Action, SourceForm};
-use fp_sources::PlexConfig;
-use fp_sources::plex::auth::{LINK_URL, PlexCredentials, PlexPin, PlexResource};
+use fp_sources::plex::auth::{LINK_URL, PlexCredentials, PlexPin, PlexResource, linked_source_id};
+use fp_sources::{PlexConfig, SourceConfig};
+use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default)]
@@ -18,13 +19,188 @@ pub enum LinkState {
         polled: Instant,
         polling: bool,
     },
+    /// The account's servers, to switch on and add together. Nothing that
+    /// happens to one server replaces this state, so the list and the
+    /// sign-in stay for the next try.
     Servers {
         credentials: PlexCredentials,
         servers: Vec<PlexResource>,
+        /// Machine identifiers of the servers switched on.
+        ticked: BTreeSet<String>,
+        /// What became of the servers asked for, by machine identifier; a
+        /// server without an entry is `Ready`.
+        rows: HashMap<String, ServerRow>,
     },
     Connecting,
     Connected,
     Failed(String),
+}
+
+/// Where one server of the list stands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServerRow {
+    Ready,
+    Checking,
+    /// Now a source, under this name.
+    Added(String),
+    /// Could not be added; the reason is shown, and it can be tried again.
+    Failed(String),
+}
+
+impl LinkState {
+    /// The list for a freshly signed-in account. Servers it owns that are
+    /// not sources yet start switched on; shared ones are left to choose.
+    pub fn servers(
+        credentials: PlexCredentials,
+        servers: Vec<PlexResource>,
+        configs: &[SourceConfig],
+    ) -> Self {
+        let ticked = servers
+            .iter()
+            .filter(|s| s.owned && !is_linked(configs, &credentials, &s.machine_identifier))
+            .map(|s| s.machine_identifier.clone())
+            .collect();
+        Self::Servers {
+            credentials,
+            servers,
+            ticked,
+            rows: HashMap::new(),
+        }
+    }
+}
+
+/// The name of the source that already plays `machine` for the account
+/// `credentials` belong to, as the account itself rather than one of its
+/// profiles.
+pub(crate) fn linked_name(
+    configs: &[SourceConfig],
+    credentials: &PlexCredentials,
+    machine: &str,
+) -> Option<String> {
+    let key = credentials
+        .account
+        .as_ref()
+        .map_or(&credentials.client_identifier, |a| &a.uuid);
+    for config in configs {
+        if let SourceConfig::Plex(p) = config
+            && p.profile.is_none()
+            && p.machine_identifier == machine
+            && p.account_key().as_ref() == Some(key)
+        {
+            return Some(p.name.clone());
+        }
+    }
+    None
+}
+
+fn is_linked(configs: &[SourceConfig], credentials: &PlexCredentials, machine: &str) -> bool {
+    linked_name(configs, credentials, machine).is_some()
+}
+
+/// How many servers "Add" would check now.
+pub(crate) fn pending(state: &LinkState, configs: &[SourceConfig]) -> usize {
+    wanted(state, configs).len()
+}
+
+/// A server being checked, or just added, is not asked for again.
+fn settled(row: Option<&ServerRow>) -> bool {
+    matches!(row, Some(ServerRow::Checking | ServerRow::Added(_)))
+}
+
+/// The servers "Add" would check now: switched on, not sources yet and not
+/// being checked.
+fn wanted<'a>(state: &'a LinkState, configs: &[SourceConfig]) -> Vec<&'a PlexResource> {
+    let LinkState::Servers {
+        credentials,
+        servers,
+        ticked,
+        rows,
+    } = state
+    else {
+        return Vec::new();
+    };
+    servers
+        .iter()
+        .filter(|s| {
+            let machine = &s.machine_identifier;
+            ticked.contains(machine)
+                && !is_linked(configs, credentials, machine)
+                && !settled(rows.get(machine))
+        })
+        .collect()
+}
+
+/// The id a server gets as a new source: stable for this account and
+/// server when the account is known (so adding it again, later or after
+/// removing it, reaches what was watched), else made from the time. A linked
+/// source being edited keeps its own id for its own server; one entered with
+/// a token is another identity, so its id is never reused.
+fn new_source_id(
+    credentials: &PlexCredentials,
+    machine: &str,
+    editing: Option<&PlexConfig>,
+    now_ms: u64,
+    index: usize,
+) -> String {
+    if let Some(old) = editing
+        && old.auth.is_some()
+        && old.machine_identifier == machine
+    {
+        return old.id.clone();
+    }
+    match &credentials.account {
+        Some(account) => linked_source_id(&account.uuid, machine, None),
+        None => format!("plex-{now_ms}-{index}"),
+    }
+}
+
+/// Starts checking the servers switched on: their rows say so, the list
+/// stays, and the action asks the app to test them and add those that work.
+fn start_batch(f: &mut SourceForm, configs: &[SourceConfig], now_ms: u64) -> Option<Action> {
+    let LinkState::Servers { credentials, .. } = &f.plex.state else {
+        return None;
+    };
+    let credentials = credentials.clone();
+    let chosen = wanted(&f.plex.state, configs);
+    let servers: Vec<PlexResource> = chosen.into_iter().cloned().collect();
+    let editing = match &f.editing {
+        Some(SourceConfig::Plex(old)) => Some(old),
+        _ => None,
+    };
+    // A typed name is for a single server; several keep their own. While a
+    // source is edited the name field holds that source's name, so it only
+    // goes to that source's own server.
+    let typed = f.name.trim();
+    let own_server = |server: &PlexResource| match editing {
+        Some(old) => old.machine_identifier == server.machine_identifier,
+        None => true,
+    };
+    let single = servers.len() == 1 && own_server(&servers[0]);
+    let name = (single && !typed.is_empty()).then_some(typed);
+    let mut checks = Vec::new();
+    let mut refused = Vec::new();
+    for (index, server) in servers.iter().enumerate() {
+        let machine = &server.machine_identifier;
+        let id = new_source_id(&credentials, machine, editing, now_ms, index);
+        match server_config(server, &credentials, &id, name, f) {
+            Some(config) => checks.push(config),
+            None => refused.push(machine.clone()),
+        }
+    }
+    let generation = f.plex.generation;
+    if let LinkState::Servers { rows, .. } = &mut f.plex.state {
+        for config in &checks {
+            rows.insert(config.machine_identifier.clone(), ServerRow::Checking);
+        }
+        for machine in refused {
+            let reason = tr!("plex-server-no-address").to_string();
+            rows.insert(machine, ServerRow::Failed(reason));
+        }
+    }
+    (!checks.is_empty()).then_some(Action::PlexAddServers {
+        generation,
+        configs: checks,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,6 +251,9 @@ pub struct Connect {
     pub token: String,
     pub connection: ConnectionMode,
     pub selected: Option<PlexConfig>,
+    /// The code was claimed by a different account than the source being
+    /// edited, so its servers are added as new sources.
+    pub other_account: bool,
 }
 
 impl Default for Connect {
@@ -86,6 +265,7 @@ impl Default for Connect {
             token: String::new(),
             connection: ConnectionMode::default(),
             selected: None,
+            other_account: false,
         }
     }
 }
@@ -108,6 +288,7 @@ impl Connect {
         self.generation = self.generation.wrapping_add(1);
         self.state = LinkState::Idle;
         self.selected = None;
+        self.other_account = false;
     }
 
     fn use_token(&mut self, manual: bool) {
@@ -200,8 +381,9 @@ pub fn form(
     ui: &mut egui::Ui,
     f: &mut SourceForm,
     id: String,
+    configs: &[SourceConfig],
     actions: &mut Vec<Action>,
-) -> Option<fp_sources::SourceConfig> {
+) -> Option<SourceConfig> {
     if let LinkState::Waiting {
         pin,
         polled,
@@ -209,7 +391,9 @@ pub fn form(
     } = &mut f.plex.state
     {
         ui.ctx().request_repaint_after(Duration::from_millis(500));
-        if pin.expired() {
+        // While a poll is out, its answer decides: a code claimed just
+        // before it ran out still counts.
+        if pin.expired() && !*polling {
             f.plex.state = LinkState::Failed(tr!("plex-link-expired").into());
         } else if !*polling && polled.elapsed() >= Duration::from_secs(2) {
             *polling = true;
@@ -290,8 +474,15 @@ pub fn form(
         });
     });
     ui.add_space(12.0);
-    if f.editing.is_some() {
+    // Signing in again to a source entered with a token makes a separate
+    // source; to a linked one it signs that account in again.
+    if let Some(SourceConfig::Plex(old)) = &f.editing
+        && old.auth.is_none()
+    {
         ui.label(tr!("plex-new-account-source"));
+    }
+    if f.plex.other_account {
+        ui.label(tr!("plex-another-account"));
     }
     let state = f.plex.state.clone();
     match state {
@@ -301,34 +492,7 @@ pub fn form(
                 ui.label(tr!("settings-device-connecting"));
             });
         }
-        LinkState::Servers {
-            credentials,
-            servers,
-        } => {
-            widgets::section_label(ui, tr!("plex-server-select"));
-            if servers.is_empty() {
-                ui.label(tr!("plex-no-servers"));
-            }
-            widgets::rows(ui, |r| {
-                for server in servers {
-                    let desc = if server.owned {
-                        tr!("plex-server-owned")
-                    } else {
-                        tr!("plex-server-shared")
-                    };
-                    r.row(&server.name, Some(desc), |ui| {
-                        if widgets::button_sized(ui, None, tr!("common-add"), Kind::Secondary, 44.0)
-                            .clicked()
-                            && let Some(cfg) = server_config(&server, &credentials, &id, f)
-                        {
-                            f.plex.selected = None;
-                            f.plex.state = LinkState::Connecting;
-                            actions.push(Action::PlexConnect(cfg));
-                        }
-                    });
-                }
-            });
-        }
+        LinkState::Servers { .. } => server_list(ui, f, configs, actions),
         LinkState::Connected if f.plex.manual => {
             ui.label(tr!("quick-connect-authorized-desc"));
         }
@@ -383,9 +547,9 @@ pub fn form(
         )
         .clicked()
         {
-            return Some(fp_sources::SourceConfig::Plex(cfg));
+            return Some(SourceConfig::Plex(cfg));
         }
-    } else {
+    } else if !matches!(f.plex.state, LinkState::Servers { .. }) {
         ui.add_enabled_ui(false, |ui| {
             widgets::button(
                 ui,
@@ -399,8 +563,90 @@ pub fn form(
     None
 }
 
+static READY: ServerRow = ServerRow::Ready;
+
+/// The account's servers, each with a switch and where it stands, and the
+/// button that adds every one switched on.
+fn server_list(
+    ui: &mut egui::Ui,
+    f: &mut SourceForm,
+    configs: &[SourceConfig],
+    actions: &mut Vec<Action>,
+) {
+    widgets::section_label(ui, tr!("plex-server-select"));
+    if let LinkState::Servers {
+        credentials,
+        servers,
+        ticked,
+        rows,
+    } = &mut f.plex.state
+    {
+        if servers.is_empty() {
+            ui.label(tr!("plex-no-servers"));
+        }
+        widgets::rows(ui, |r| {
+            for server in servers.iter() {
+                let machine = &server.machine_identifier;
+                let owner = if server.owned {
+                    tr!("plex-server-owned")
+                } else {
+                    tr!("plex-server-shared")
+                };
+                let row = rows.get(machine).unwrap_or(&READY);
+                let linked = is_linked(configs, credentials, machine);
+                let added = linked || matches!(row, ServerRow::Added(_));
+                if added {
+                    r.row(&server.name, Some(owner), |ui| {
+                        let text = egui::RichText::new(tr!("plex-server-added"));
+                        ui.label(text.color(theme::OK));
+                    });
+                    continue;
+                }
+                if *row == ServerRow::Checking {
+                    r.row(&server.name, Some(owner), |ui| {
+                        ui.spinner();
+                        ui.label(tr!("plex-server-checking"));
+                    });
+                    continue;
+                }
+                let desc = match row {
+                    ServerRow::Failed(reason) => format!("{owner} \u{b7} {reason}"),
+                    _ => owner.to_string(),
+                };
+                let mut on = ticked.contains(machine);
+                r.switch(&server.name, Some(&desc), &mut on);
+                set_ticked(ticked, machine, on);
+            }
+        });
+    }
+    ui.add_space(12.0);
+    let count = pending(&f.plex.state, configs);
+    let checking = match &f.plex.state {
+        LinkState::Servers { rows, .. } => rows.values().any(|r| *r == ServerRow::Checking),
+        _ => false,
+    };
+    let label = tr!("plex-servers-add", count = count);
+    let add = ui
+        .add_enabled_ui(count > 0 && !checking, |ui| {
+            widgets::button(ui, Some(super::icons::CHECK), &label, Kind::Primary)
+        })
+        .inner
+        .clicked();
+    if add && let Some(action) = start_batch(f, configs, fp_core::playback::now_ms()) {
+        actions.push(action);
+    }
+}
+
+fn set_ticked(ticked: &mut BTreeSet<String>, machine: &str, on: bool) {
+    if on {
+        ticked.insert(machine.to_string());
+    } else {
+        ticked.remove(machine);
+    }
+}
+
 fn replacement_id(f: &mut SourceForm, current: String) -> String {
-    if let Some(fp_sources::SourceConfig::Plex(old)) = &f.editing
+    if let Some(SourceConfig::Plex(old)) = &f.editing
         && old.access_token != f.plex.token.trim()
     {
         f.editing = None;
@@ -412,7 +658,7 @@ fn replacement_id(f: &mut SourceForm, current: String) -> String {
 
 fn manual_config(f: &SourceForm, id: String) -> PlexConfig {
     let mut cfg = match &f.editing {
-        Some(fp_sources::SourceConfig::Plex(c)) => c.clone(),
+        Some(SourceConfig::Plex(c)) => c.clone(),
         _ => PlexConfig {
             id,
             name: "Plex".into(),
@@ -444,10 +690,13 @@ fn manual_config(f: &SourceForm, id: String) -> PlexConfig {
     cfg
 }
 
+/// `name` replaces the server's own name; the connection mode and the other
+/// switches of the form apply.
 fn server_config(
     server: &PlexResource,
     credentials: &PlexCredentials,
     id: &str,
+    name: Option<&str>,
     f: &SourceForm,
 ) -> Option<PlexConfig> {
     let connection = server
@@ -458,15 +707,8 @@ fn server_config(
         .or_else(|| server.connections.iter().find(|c| !c.relay))
         .or_else(|| server.connections.first())?;
     let mut config = PlexConfig {
-        id: f
-            .editing
-            .as_ref()
-            .map_or_else(|| id.to_string(), |c| c.id().to_string()),
-        name: if f.name.trim().is_empty() {
-            server.name.clone()
-        } else {
-            f.name.trim().to_string()
-        },
+        id: id.to_string(),
+        name: name.map_or_else(|| server.name.clone(), str::to_string),
         url: connection.uri.clone(),
         machine_identifier: server.machine_identifier.clone(),
         access_token: server
@@ -475,8 +717,9 @@ fn server_config(
             .unwrap_or_else(|| credentials.access_token.clone()),
         connections: server.connections.clone(),
         auth: Some(credentials.clone()),
+        // The switch is drawn only for a token; a linked server is always checked.
         insecure_tls: false,
-        parallel_downloads: false,
+        parallel_downloads: f.parallel_downloads,
         max_height: None,
         local_only: true,
         allow_relay: false,
@@ -489,6 +732,7 @@ fn server_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fp_sources::plex::auth::{PlexAccount, PlexConnection, PlexProfile};
 
     #[test]
     fn connection_modes_default_to_local_and_reach_both_setup_methods() {
@@ -498,7 +742,7 @@ mod tests {
             name: "Plex".into(),
             machine_identifier: "machine".into(),
             access_token: Some("server-token".into()),
-            connections: vec![fp_sources::plex::auth::PlexConnection {
+            connections: vec![PlexConnection {
                 uri: "https://server.plex.direct:32400".into(),
                 address: Some("192.168.1.10".parse().unwrap()),
                 port: Some(32400),
@@ -510,6 +754,11 @@ mod tests {
             provides: "server".into(),
         };
         let auth = PlexCredentials::manual("account-token".into(), "client".into());
+        // A self-signed token source does not carry over to a linked one.
+        form.insecure_tls = true;
+        let linked = server_config(&server, &auth, "id", None, &form).unwrap();
+        assert!(!linked.insecure_tls);
+        form.insecure_tls = false;
         for (mode, local_only, allow_relay) in [
             (ConnectionMode::Local, true, false),
             (ConnectionMode::Direct, false, false),
@@ -519,7 +768,7 @@ mod tests {
             assert_eq!(form.plex.connection, mode);
             assert!(matches!(form.plex.state, LinkState::Idle));
             let manual = manual_config(&form, "manual".into());
-            let linked = server_config(&server, &auth, "linked", &form).unwrap();
+            let linked = server_config(&server, &auth, "id", None, &form).unwrap();
             for config in [manual, linked] {
                 assert_eq!(
                     (config.local_only, config.allow_relay),
@@ -547,8 +796,7 @@ mod tests {
             ));
             saved.local_only = local_only;
             saved.allow_relay = allow_relay;
-            let mut form =
-                super::super::sources::edit_form(&fp_sources::SourceConfig::Plex(saved.clone()));
+            let mut form = super::super::sources::edit_form(&SourceConfig::Plex(saved.clone()));
             assert_eq!(form.plex.connection, mode);
             assert_eq!(form.plex.selected.as_ref(), Some(&saved));
             assert!(form.plex.set_connection(mode).is_none());
@@ -602,7 +850,7 @@ mod tests {
             ..Default::default()
         };
         let original = manual_config(&form, "old-source".into());
-        form.editing = Some(fp_sources::SourceConfig::Plex(original));
+        form.editing = Some(SourceConfig::Plex(original));
         assert_eq!(replacement_id(&mut form, "old-source".into()), "old-source");
         form.plex.token = "another-account".into();
         let id = replacement_id(&mut form, "old-source".into());
@@ -612,5 +860,255 @@ mod tests {
         assert_eq!(new.id, id);
         assert_eq!(new.access_token, "another-account");
         assert!(new.machine_identifier.is_empty());
+    }
+
+    fn resource(name: &str, machine: &str, owned: bool) -> PlexResource {
+        PlexResource {
+            name: name.into(),
+            machine_identifier: machine.into(),
+            access_token: Some(format!("{machine}-token")),
+            connections: vec![PlexConnection {
+                uri: format!("https://{machine}.plex.direct:32400"),
+                address: None,
+                port: Some(32400),
+                local: true,
+                relay: false,
+                protocol: "https".into(),
+            }],
+            owned,
+            provides: "server".into(),
+        }
+    }
+
+    /// A server of the account's own, named after its identifier.
+    fn own(machine: &str) -> PlexResource {
+        resource(machine, machine, true)
+    }
+
+    fn signed_in(uuid: &str) -> PlexCredentials {
+        let mut credentials = PlexCredentials::manual("account-token".into(), "client".into());
+        credentials.account = Some(Box::new(PlexAccount {
+            id: 1,
+            uuid: uuid.into(),
+            title: "Owner".into(),
+            home: false,
+        }));
+        credentials
+    }
+
+    fn list_form(servers: Vec<PlexResource>, configs: &[SourceConfig]) -> SourceForm {
+        let mut form = SourceForm::default();
+        form.plex.state = LinkState::servers(signed_in("account-uuid-1"), servers, configs);
+        form
+    }
+
+    fn ticked(form: &SourceForm) -> Vec<String> {
+        match &form.plex.state {
+            LinkState::Servers { ticked, .. } => ticked.iter().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn row(form: &SourceForm, machine: &str) -> Option<ServerRow> {
+        match &form.plex.state {
+            LinkState::Servers { rows, .. } => rows.get(machine).cloned(),
+            _ => None,
+        }
+    }
+
+    fn asked(action: Option<Action>) -> Vec<PlexConfig> {
+        let Some(Action::PlexAddServers { configs, .. }) = action else {
+            panic!("no servers were asked for");
+        };
+        configs
+    }
+
+    /// A source already playing `machine` as the account of `signed_in`.
+    fn source_of(machine: &str, name: &str) -> SourceConfig {
+        SourceConfig::Plex(PlexConfig {
+            id: format!("existing-{machine}"),
+            name: name.into(),
+            machine_identifier: machine.into(),
+            auth: Some(signed_in("account-uuid-1")),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn ticking_two_servers_asks_for_both_and_keeps_the_list() {
+        let servers = vec![
+            resource("Home", "m1", true),
+            resource("Home TV", "m2", true),
+            resource("Friend", "m3", false),
+        ];
+        let mut form = list_form(servers, &[]);
+        // Your own servers start switched on; shared ones are yours to choose.
+        assert_eq!(ticked(&form), ["m1", "m2"]);
+        form.plex.connection = ConnectionMode::Direct;
+        let configs = asked(start_batch(&mut form, &[], 1000));
+        assert_eq!(configs.len(), 2);
+        let names: Vec<&str> = configs.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Home", "Home TV"]);
+        assert_ne!(configs[0].id, configs[1].id);
+        let expected = linked_source_id("account-uuid-1", "m1", None);
+        assert_eq!(configs[0].id, expected);
+        assert!(configs.iter().all(|c| !c.local_only && !c.allow_relay));
+        // The list and the sign-in stay; both rows say they are checked.
+        assert!(matches!(form.plex.state, LinkState::Servers { .. }));
+        assert_eq!(row(&form, "m1"), Some(ServerRow::Checking));
+        assert_eq!(row(&form, "m2"), Some(ServerRow::Checking));
+        assert_eq!(row(&form, "m3"), None);
+        // Pressing again while they are checked asks for nothing.
+        assert!(start_batch(&mut form, &[], 1001).is_none());
+    }
+
+    #[test]
+    fn servers_of_an_account_plex_would_not_name_get_distinct_ids() {
+        let unnamed = PlexCredentials::manual("account-token".into(), "client".into());
+        let mut form = SourceForm::default();
+        form.plex.state = LinkState::servers(unnamed, vec![own("m1"), own("m2")], &[]);
+        let configs = asked(start_batch(&mut form, &[], 42));
+        assert_eq!(configs[0].id, "plex-42-0");
+        assert_eq!(configs[1].id, "plex-42-1");
+    }
+
+    #[test]
+    fn a_server_already_linked_shows_added_and_is_not_asked_again() {
+        let configs = [source_of("m1", "Home")];
+        let credentials = signed_in("account-uuid-1");
+        let found = linked_name(&configs, &credentials, "m1");
+        assert_eq!(found.as_deref(), Some("Home"));
+        assert!(!is_linked(&configs, &credentials, "m2"));
+        // Another account's source for the same server is not this one.
+        assert!(!is_linked(&configs, &signed_in("account-uuid-2"), "m1"));
+        // Nor is a profile's.
+        let profile = PlexConfig {
+            machine_identifier: "m2".into(),
+            auth: Some(credentials.clone()),
+            profile: Some(Box::new(PlexProfile {
+                id: 7,
+                uuid: "profile-1".into(),
+                title: "Kid".into(),
+                protected: false,
+                restricted: true,
+                token: "profile-token".into(),
+            })),
+            ..Default::default()
+        };
+        let only = [SourceConfig::Plex(profile)];
+        assert!(!is_linked(&only, &credentials, "m2"));
+        let mut form = list_form(vec![own("m1"), own("m2")], &configs);
+        assert_eq!(ticked(&form), ["m2"]);
+        // Even switched on by hand, it is not asked for again.
+        if let LinkState::Servers { ticked, .. } = &mut form.plex.state {
+            ticked.insert("m1".into());
+        }
+        let checks = asked(start_batch(&mut form, &configs, 1));
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].machine_identifier, "m2");
+        assert_eq!(row(&form, "m1"), None);
+    }
+
+    #[test]
+    fn a_failed_server_keeps_the_list_and_can_be_retried() {
+        let mut form = list_form(vec![own("m1"), own("m2")], &[]);
+        assert_eq!(asked(start_batch(&mut form, &[], 1)).len(), 2);
+        // The app reports one server added and the other not answering.
+        if let LinkState::Servers { rows, .. } = &mut form.plex.state {
+            rows.insert("m1".into(), ServerRow::Failed("timed out".into()));
+            rows.insert("m2".into(), ServerRow::Added("m2".into()));
+        }
+        // Still the list, with the sign-in: nothing starts over.
+        assert!(matches!(form.plex.state, LinkState::Servers { .. }));
+        let again = asked(start_batch(&mut form, &[], 2));
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].machine_identifier, "m1");
+        assert_eq!(row(&form, "m1"), Some(ServerRow::Checking));
+        // A server Plex gives no address for says so instead of being asked.
+        let mut lost = own("m3");
+        lost.connections.clear();
+        let mut form = list_form(vec![lost], &[]);
+        assert!(start_batch(&mut form, &[], 3).is_none());
+        assert!(matches!(row(&form, "m3"), Some(ServerRow::Failed(_))));
+    }
+
+    #[test]
+    fn one_ticked_server_takes_the_typed_name() {
+        let mut form = list_form(vec![own("m1"), own("m2")], &[]);
+        form.name = "  Living room ".into();
+        // Two servers keep their own names.
+        let both = asked(start_batch(&mut form, &[], 1));
+        let names: Vec<&str> = both.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["m1", "m2"]);
+        let mut form = list_form(vec![own("m1"), own("m2")], &[]);
+        form.name = "  Living room ".into();
+        if let LinkState::Servers { ticked, .. } = &mut form.plex.state {
+            ticked.remove("m2");
+        }
+        let one = asked(start_batch(&mut form, &[], 1));
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].name, "Living room");
+    }
+
+    #[test]
+    fn the_source_being_edited_keeps_its_id_for_its_own_server() {
+        let credentials = signed_in("account-uuid-1");
+        let old = PlexConfig {
+            id: "old-id".into(),
+            machine_identifier: "m1".into(),
+            auth: Some(signed_in("account-uuid-1")),
+            ..Default::default()
+        };
+        let kept = new_source_id(&credentials, "m1", Some(&old), 1, 0);
+        assert_eq!(kept, "old-id");
+        let other = new_source_id(&credentials, "m2", Some(&old), 1, 0);
+        let expected = linked_source_id("account-uuid-1", "m2", None);
+        assert_eq!(other, expected);
+    }
+
+    #[test]
+    fn a_token_source_being_edited_never_lends_its_id_to_a_linked_one() {
+        let credentials = signed_in("account-uuid-1");
+        let token_source = PlexConfig {
+            id: "token-id".into(),
+            machine_identifier: "m1".into(),
+            auth: None,
+            ..Default::default()
+        };
+        let id = new_source_id(&credentials, "m1", Some(&token_source), 1, 0);
+        assert_eq!(id, linked_source_id("account-uuid-1", "m1", None));
+        assert_ne!(id, "token-id");
+        // The same through the form.
+        let mut form = list_form(vec![own("m1")], &[]);
+        form.editing = Some(SourceConfig::Plex(token_source));
+        let configs = asked(start_batch(&mut form, &[], 1));
+        let expected = linked_source_id("account-uuid-1", "m1", None);
+        assert_eq!(configs[0].id, expected);
+    }
+
+    #[test]
+    fn linked_servers_ignore_the_token_forms_self_signed_switch() {
+        let mut form = list_form(vec![own("m1"), own("m2")], &[]);
+        form.insecure_tls = true;
+        let configs = asked(start_batch(&mut form, &[], 1));
+        assert_eq!(configs.len(), 2);
+        assert!(configs.iter().all(|c| !c.insecure_tls));
+    }
+
+    #[test]
+    fn the_edited_sources_name_is_not_given_to_another_server() {
+        let edited = source_of("m1", "Home");
+        // Another server ticked while editing keeps its own name.
+        let mut form = list_form(vec![resource("Home TV", "m2", true)], &[]);
+        form.editing = Some(edited.clone());
+        form.name = "Home".into();
+        let other = asked(start_batch(&mut form, &[], 1));
+        assert_eq!(other[0].name, "Home TV");
+        // Its own server takes the typed name.
+        let mut form = list_form(vec![resource("Home", "m1", true)], &[]);
+        form.editing = Some(edited);
+        form.name = "Den".into();
+        let own_one = asked(start_batch(&mut form, &[], 1));
+        assert_eq!(own_one[0].name, "Den");
     }
 }

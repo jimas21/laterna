@@ -71,6 +71,11 @@ pub(super) enum Job {
     PlexInitiated(u64, Result<fp_sources::plex::auth::PlexPin, String>),
     PlexPolled(u64, Box<Result<PlexLink, String>>),
     PlexConnected(u64, Box<Result<fp_sources::PlexConfig, String>>),
+    /// The servers asked for in the Plex list, each tested: by machine
+    /// identifier, the working source or why not.
+    PlexServersChecked(u64, Vec<(String, Result<fp_sources::PlexConfig, String>)>),
+    /// The accounts older Plex sources belong to, by pairing identifier.
+    PlexAccounts(Vec<(String, fp_sources::plex::auth::PlexAccount)>),
     /// The last run crashed: the report the user may send.
     CrashReport(Box<crate::crash::Report>),
     CrashSent(Result<(), String>),
@@ -500,6 +505,10 @@ impl App {
             Job::PlexInitiated(generation, result) => self.plex_initiated(generation, result),
             Job::PlexPolled(generation, result) => self.plex_polled(generation, *result),
             Job::PlexConnected(generation, result) => self.plex_connected(generation, *result),
+            Job::PlexServersChecked(generation, checks) => {
+                self.plex_servers_checked(generation, checks);
+            }
+            Job::PlexAccounts(accounts) => self.plex_accounts_named(accounts),
             Job::CrashReport(report) => {
                 self.ui.crash = Some(ui::crash::CrashPrompt::new(*report));
                 self.show_browser = true;

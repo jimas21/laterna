@@ -1390,3 +1390,19 @@ plex-connection-manual-local-desc = For an access token, use a LAN IP address wi
 plex-test-required = Connect to a server before saving.
 # Plex edit form: changing credentials keeps the existing source separate.
 plex-new-account-source = Linking again or replacing the token adds a separate source and keeps this one.
+# Plex server list: the button that adds every server switched on.
+plex-servers-add = { $count ->
+    [one] Add { $count } server
+   *[other] Add { $count } servers
+}
+# Short: a server in the list that is already a source here.
+plex-server-added = Added
+plex-server-checking = Checking...
+plex-server-no-address = Plex lists no address for this server.
+plex-server-failed = This server could not be checked.
+# Toast: the servers just added; $names is their names, separated by commas.
+plex-servers-added = Added { $names }
+# Toast: linking again replaced the sign-in of every source of this account.
+plex-signed-in-again = Signed in to { $account } again
+# Plex server list: the code was claimed by a different account than the source being edited.
+plex-another-account = This is another Plex account: its servers are added as new sources.
