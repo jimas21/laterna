@@ -20,6 +20,7 @@ use crate::mem::{self, Image};
 use crate::params::SceneParams;
 use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::renderer::{LevelState, blit_chain};
+use crate::tp10_eyes::Tp10Eyes;
 use ash::vk;
 use glam::{Vec2, Vec3};
 
@@ -121,12 +122,30 @@ pub(crate) fn scene_footprint(
     )
 }
 
-/// Whether a frame should have a pyramid: it is on, the picture is flat and
-/// not read in TP10 bands (which have none yet), the size is one we build, and
-/// the estimated footprint `fp` ([`footprint`]) says the picture is minified.
-pub(crate) fn wanted(on: bool, flat: bool, tp10: bool, source: (u32, u32), fp: f32) -> bool {
+/// Whether a frame should have a pyramid: it is on, the picture is flat, the
+/// size is one we build, the estimated footprint `fp` ([`footprint`]) says the
+/// picture is minified, and a picture read in TP10 bands (`tp10`) has the
+/// pipeline that builds from them (`tp10_ready`).
+pub(crate) fn wanted(
+    on: bool,
+    flat: bool,
+    (tp10, tp10_ready): (bool, bool),
+    source: (u32, u32),
+    fp: f32,
+) -> bool {
     let fits = source.0 <= MAX_SOURCE && source.1 <= MAX_SOURCE;
-    on && flat && !tp10 && fits && fp > MIN_FOOTPRINT
+    on && flat && (!tp10 || tp10_ready) && fits && fp > MIN_FOOTPRINT
+}
+
+/// What the pass that builds a frame's pyramid reads the picture from.
+pub(crate) enum Reads<'a> {
+    /// Planes in the scene's descriptor set `set`, under pipeline layout `layout`.
+    Planes {
+        layout: vk::PipelineLayout,
+        set: vk::DescriptorSet,
+    },
+    /// The decoder's buffer, through frame slot `slot`'s descriptor buffer.
+    Tp10 { eyes: &'a Tp10Eyes, slot: usize },
 }
 
 /// Leaky count of builds that took longer than [`BUDGET_MS`]: each one
@@ -212,6 +231,11 @@ impl PyramidPass {
     /// Whether the pyramid is left out for pictures of this size.
     pub fn left_out(&self, source: (u32, u32)) -> bool {
         self.left_out == Some(source)
+    }
+
+    /// The format the image is made in (what a TP10 pipeline draws into).
+    pub fn format(&self) -> vk::Format {
+        self.format
     }
 
     /// The sampled view of the whole chain, if an image exists. It is always
@@ -319,16 +343,9 @@ impl PyramidPass {
     }
 
     /// Records the build of frame `frame_id`'s pyramid into `cmd`, from the
-    /// planes `set` (the scene set, bound as the eye passes bind it) points
-    /// at, with the scene's parameters already in its uniform buffer.
-    pub fn record(
-        &mut self,
-        gpu: &Gpu,
-        cmd: vk::CommandBuffer,
-        layout: vk::PipelineLayout,
-        set: vk::DescriptorSet,
-        frame_id: u64,
-    ) {
+    /// picture `reads` says where is (bound as the eye passes bind it), with
+    /// the scene's parameters already written for it.
+    pub fn record(&mut self, gpu: &Gpu, cmd: vk::CommandBuffer, reads: Reads, frame_id: u64) {
         let Some(p) = self.image.as_mut() else {
             return;
         };
@@ -378,15 +395,26 @@ impl PyramidPass {
                 }],
             );
             d.cmd_set_scissor(cmd, 0, &[area]);
-            d.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-            d.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout,
-                0,
-                &[set],
-                &[],
-            );
+            match reads {
+                Reads::Planes { layout, set } => {
+                    d.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
+                    d.cmd_bind_descriptor_sets(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        layout,
+                        0,
+                        &[set],
+                        &[],
+                    );
+                }
+                Reads::Tp10 { eyes, slot } => {
+                    // Made ready before the build was planned; nothing to
+                    // draw from otherwise.
+                    if eyes.bind_pyramid(gpu, cmd, slot).is_none() {
+                        log::warn!("video pyramid: no pipeline for a 10-bit picture");
+                    }
+                }
+            }
             d.cmd_draw(cmd, 3, 1, 0, 0);
             d.cmd_end_rendering(cmd);
         }
@@ -484,14 +512,23 @@ mod tests {
     #[test]
     fn the_pyramid_is_wanted_for_minified_flat_pictures_it_can_build() {
         let size = (3840, 2160);
-        assert!(wanted(true, true, false, size, 5.0));
-        assert!(!wanted(false, true, false, size, 5.0), "switched off");
-        assert!(!wanted(true, false, false, size, 5.0), "not flat");
-        assert!(!wanted(true, true, true, size, 5.0), "TP10 has none yet");
-        assert!(!wanted(true, true, false, size, 0.5), "magnified");
-        assert!(!wanted(true, true, false, (16384, 8192), 5.0), "too wide");
-        assert!(!wanted(true, true, false, (8192, 8193), 5.0), "too tall");
-        assert!(wanted(true, true, false, (8192, 8192), 5.0), "the largest");
+        let planes = (false, false);
+        assert!(wanted(true, true, planes, size, 5.0));
+        assert!(!wanted(false, true, planes, size, 5.0), "switched off");
+        assert!(!wanted(true, false, planes, size, 5.0), "not flat");
+        assert!(
+            !wanted(true, true, (true, false), size, 5.0),
+            "TP10 without the pipeline that builds from it"
+        );
+        assert!(wanted(true, true, (true, true), size, 5.0), "TP10 with it");
+        assert!(
+            wanted(true, true, (false, false), size, 5.0),
+            "planes need no TP10 pipeline"
+        );
+        assert!(!wanted(true, true, planes, size, 0.5), "magnified");
+        assert!(!wanted(true, true, planes, (16384, 8192), 5.0), "too wide");
+        assert!(!wanted(true, true, planes, (8192, 8193), 5.0), "too tall");
+        assert!(wanted(true, true, planes, (8192, 8192), 5.0), "the largest");
     }
 
     #[test]

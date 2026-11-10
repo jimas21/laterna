@@ -18,6 +18,12 @@
 @group(0) @binding(12) var chroma2: texture_2d<f32>;
 @group(0) @binding(13) var chroma3: texture_2d<f32>;
 
+// The video pyramid (src/pyramid.rs) and the sampler that reads it, as in
+// planes.wgsl: here they are two more descriptors of the TP10 eye passes'
+// descriptor buffer (src/tp10_eyes.rs).
+@group(0) @binding(20) var pyr: texture_2d<f32>;
+@group(0) @binding(21) var samp_aniso: sampler;
+
 // Where `uv` falls in a plane read in bands `b` (Params.tp10): the
 // coordinates in its band, and the band.
 fn in_band(uv: vec2<f32>, b: vec4<f32>) -> vec3<f32> {
@@ -62,8 +68,19 @@ fn luma_at(uv: vec2<f32>) -> f32 {
     return luma_tp10(uv) * params.yuv_offset.w;
 }
 
-// No video pyramid for a picture read in place yet: scene.wgsl asks for it
-// only when `display.z` says one was built, which a TP10 frame never does.
+// The pyramid at stored coordinates `p`, filtered over the footprint the
+// gradients `gx`, `gy` span: raw codes, offsets still in (fs_pyramid wrote
+// them so). As planes.wgsl's.
 fn pyramid_raw(p: vec2<f32>, gx: vec2<f32>, gy: vec2<f32>) -> vec3<f32> {
-    return vec3<f32>(0.0);
+    return textureSampleGrad(pyr, samp_aniso, p, gx, gy).rgb;
+}
+
+// The pyramid's first level, as planes.wgsl's: one pixel per 2x2 luma texels
+// of the stored frame, the raw codes (the offsets not taken off) so a UNORM
+// image can hold them. Each tap picks its own band, as the eye passes' do.
+@fragment
+fn fs_pyramid(in: VsOut) -> @location(0) vec4<f32> {
+    let uv = in.ndc * 0.5 + 0.5;
+    let raw = vec3<f32>(luma_tp10(uv), chroma_tp10(uv)) * params.yuv_offset.w;
+    return vec4<f32>(raw, 1.0);
 }

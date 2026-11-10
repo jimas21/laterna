@@ -17,6 +17,10 @@ use ash::vk;
 const LUMA: u32 = 2;
 const CHROMA: u32 = LUMA + MAX_LUMA_BANDS as u32;
 const BINDINGS: u32 = CHROMA + MAX_CHROMA_BANDS as u32;
+/// Bindings of the video pyramid and the sampler that reads it, where
+/// `planes_tp10.wgsl` declares them (the same numbers as `planes.wgsl`).
+const PYRAMID: u32 = 20;
+const ANISO: u32 = 21;
 
 /// One frame slot's descriptors and parameters, mapped for the CPU.
 struct SlotBuffers {
@@ -38,9 +42,16 @@ pub(crate) struct Tp10Eyes {
     /// for; `glow_failed` once making it has failed.
     glow_pipeline: vk::Pipeline,
     glow_failed: bool,
+    /// The pyramid's first-level pipeline (`fs_pyramid`), made when first asked
+    /// for; `pyramid_failed` once making it has failed.
+    pyramid_pipeline: vk::Pipeline,
+    pyramid_failed: bool,
     set_size: u64,
     /// Where each binding's descriptor is in a slot's buffer.
     offsets: Vec<usize>,
+    /// Where the pyramid's descriptor and its sampler's are in a slot's buffer.
+    pyramid_at: usize,
+    aniso_at: usize,
     sampled_size: usize,
     slots: Vec<SlotBuffers>,
 }
@@ -52,12 +63,16 @@ unsafe impl Send for Tp10Eyes {}
 impl Tp10Eyes {
     /// The pipeline and `slots` frame slots' buffers, drawing into
     /// `color_format` (with a depth attachment of `depth_format` in the
-    /// instance, which it ignores) and sampling through `sampler`.
+    /// instance, which it ignores) and sampling through `sampler`; `aniso` is
+    /// the pyramid's sampler and `dummy` a view for its descriptor until there
+    /// is a pyramid.
     pub fn new(
         gpu: &Gpu,
         color_format: vk::Format,
         depth_format: vk::Format,
         sampler: vk::Sampler,
+        aniso: vk::Sampler,
+        dummy: vk::ImageView,
         slots: usize,
     ) -> Result<Tp10Eyes> {
         let mut t = Tp10Eyes {
@@ -67,12 +82,22 @@ impl Tp10Eyes {
             pipeline: vk::Pipeline::null(),
             glow_pipeline: vk::Pipeline::null(),
             glow_failed: false,
+            pyramid_pipeline: vk::Pipeline::null(),
+            pyramid_failed: false,
             set_size: 0,
             offsets: Vec::new(),
+            pyramid_at: 0,
+            aniso_at: 0,
             sampled_size: 0,
             slots: Vec::new(),
         };
-        if let Err(e) = t.create(gpu, color_format, depth_format, sampler, slots) {
+        if let Err(e) = t.create(
+            gpu,
+            color_format,
+            depth_format,
+            (sampler, aniso, dummy),
+            slots,
+        ) {
             t.destroy(gpu);
             return Err(e);
         }
@@ -84,7 +109,7 @@ impl Tp10Eyes {
         gpu: &Gpu,
         color_format: vk::Format,
         depth_format: vk::Format,
-        sampler: vk::Sampler,
+        (sampler, aniso, dummy): (vk::Sampler, vk::Sampler, vk::ImageView),
         slots: usize,
     ) -> Result<()> {
         let mut dbp = vk::PhysicalDeviceDescriptorBufferPropertiesEXT::default();
@@ -102,10 +127,11 @@ impl Tp10Eyes {
             )));
         }
         let bindings: Vec<_> = (0..BINDINGS)
+            .chain([PYRAMID, ANISO])
             .map(|b| {
                 let ty = match b {
                     0 => vk::DescriptorType::UNIFORM_BUFFER,
-                    1 => vk::DescriptorType::SAMPLER,
+                    1 | ANISO => vk::DescriptorType::SAMPLER,
                     _ => vk::DescriptorType::SAMPLED_IMAGE,
                 };
                 vk::DescriptorSetLayoutBinding::default()
@@ -138,6 +164,14 @@ impl Tp10Eyes {
                         as usize
                 })
                 .collect();
+            self.pyramid_at = self
+                .db
+                .get_descriptor_set_layout_binding_offset(self.set_layout, PYRAMID)
+                as usize;
+            self.aniso_at = self
+                .db
+                .get_descriptor_set_layout_binding_offset(self.set_layout, ANISO)
+                as usize;
         }
         self.layout = pipeline::layout(gpu, self.set_layout, 4)?;
         self.pipeline = pipeline::create(
@@ -154,7 +188,7 @@ impl Tp10Eyes {
             },
         )?;
         for _ in 0..slots {
-            let s = self.slot_buffers(gpu, &dbp, sampler)?;
+            let s = self.slot_buffers(gpu, &dbp, sampler, aniso, dummy)?;
             self.slots.push(s);
         }
         Ok(())
@@ -167,6 +201,8 @@ impl Tp10Eyes {
         gpu: &Gpu,
         dbp: &vk::PhysicalDeviceDescriptorBufferPropertiesEXT,
         sampler: vk::Sampler,
+        aniso: vk::Sampler,
+        dummy: vk::ImageView,
     ) -> Result<SlotBuffers> {
         let d = &gpu.device;
         let mut s = SlotBuffers {
@@ -245,6 +281,14 @@ impl Tp10Eyes {
                         }),
                     &mut set[at..at + dbp.sampler_descriptor_size],
                 );
+                let at = self.aniso_at;
+                self.db.get_descriptor(
+                    &vk::DescriptorGetInfoEXT::default()
+                        .ty(vk::DescriptorType::SAMPLER)
+                        .data(vk::DescriptorDataEXT { p_sampler: &aniso }),
+                    &mut set[at..at + dbp.sampler_descriptor_size],
+                );
+                self.write_pyramid_view(set, dummy);
             }
             Ok(())
         })();
@@ -286,8 +330,48 @@ impl Tp10Eyes {
         }
     }
 
-    /// Binds the pipeline and slot `slot`'s descriptors for the eye passes.
-    pub fn bind(&self, gpu: &Gpu, cmd: vk::CommandBuffer, slot: usize) {
+    /// Writes the pyramid's descriptor, for `view`, into a slot's `set` bytes.
+    fn write_pyramid_view(&self, set: &mut [u8], view: vk::ImageView) {
+        let info = vk::DescriptorImageInfo::default()
+            .image_view(view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let at = self.pyramid_at;
+        // SAFETY: the view is valid and the destination holds a sampled image
+        // descriptor (its size checked in `create`).
+        unsafe {
+            self.db.get_descriptor(
+                &vk::DescriptorGetInfoEXT::default()
+                    .ty(vk::DescriptorType::SAMPLED_IMAGE)
+                    .data(vk::DescriptorDataEXT {
+                        p_sampled_image: &info,
+                    }),
+                &mut set[at..at + self.sampled_size],
+            );
+        }
+    }
+
+    /// Completes slot `slot`'s frame once the pyramid is decided: the final
+    /// parameters (`write` had them before the pyramid's levels were known)
+    /// and the pyramid's `view` (a stand-in where there is none).
+    pub fn finish(&mut self, slot: usize, params: &SceneParams, view: vk::ImageView) {
+        let Some(s) = self.slots.get(slot) else {
+            return;
+        };
+        let bytes = bytemuck::bytes_of(params);
+        // SAFETY: both mappings cover their buffers, which no submitted
+        // frame reads any more.
+        let (set, out) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(s.descriptor_bytes, self.set_size as usize),
+                std::slice::from_raw_parts_mut(s.params_bytes, bytes.len()),
+            )
+        };
+        out.copy_from_slice(bytes);
+        self.write_pyramid_view(set, view);
+    }
+
+    /// Binds `pipeline` and slot `slot`'s descriptors.
+    fn bind_with(&self, gpu: &Gpu, cmd: vk::CommandBuffer, slot: usize, pipeline: vk::Pipeline) {
         let Some(s) = self.slots.get(slot) else {
             return;
         };
@@ -301,7 +385,7 @@ impl Tp10Eyes {
         // the slot's descriptors were written for this frame.
         unsafe {
             gpu.device
-                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
+                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
             self.db.cmd_bind_descriptor_buffers(cmd, &binding);
             self.db.cmd_set_descriptor_buffer_offsets(
                 cmd,
@@ -312,6 +396,55 @@ impl Tp10Eyes {
                 &[0],
             );
         }
+    }
+
+    /// Binds the pipeline and slot `slot`'s descriptors for the eye passes.
+    pub fn bind(&self, gpu: &Gpu, cmd: vk::CommandBuffer, slot: usize) {
+        self.bind_with(gpu, cmd, slot, self.pipeline);
+    }
+
+    /// Makes the pipeline that builds the pyramid's first level from this
+    /// picture, drawing into `format`, if it isn't made yet. False when it
+    /// can't be made.
+    pub fn ensure_pyramid(&mut self, gpu: &Gpu, format: vk::Format) -> bool {
+        if self.pyramid_pipeline == vk::Pipeline::null() && !self.pyramid_failed {
+            let desc = PipelineDesc {
+                spv: crate::SCENE_TP10_SPV,
+                layout: self.layout,
+                color_format: format,
+                vertex_stride: 0,
+                attributes: &[],
+                blend: false,
+                descriptor_buffer: true,
+                depth: Depth::None,
+            };
+            match pipeline::create_entry(gpu, &desc, c"fs_pyramid") {
+                Ok(p) => self.pyramid_pipeline = p,
+                Err(e) => {
+                    log::warn!("video pyramid: not built for 10-bit pictures read in place: {e}");
+                    self.pyramid_failed = true;
+                }
+            }
+        }
+        self.pyramid_pipeline != vk::Pipeline::null()
+    }
+
+    /// Binds the pyramid pipeline and slot `slot`'s descriptors, as [`bind`]
+    /// does for the eye passes; the pipeline layout to bind the rest with, or
+    /// `None` when there is nothing to bind.
+    ///
+    /// [`bind`]: Tp10Eyes::bind
+    pub fn bind_pyramid(
+        &self,
+        gpu: &Gpu,
+        cmd: vk::CommandBuffer,
+        slot: usize,
+    ) -> Option<vk::PipelineLayout> {
+        if self.pyramid_pipeline == vk::Pipeline::null() || slot >= self.slots.len() {
+            return None;
+        }
+        self.bind_with(gpu, cmd, slot, self.pyramid_pipeline);
+        Some(self.layout)
     }
 
     /// Makes the pipeline that measures the picture for the light it gives its
@@ -341,31 +474,10 @@ impl Tp10Eyes {
         cmd: vk::CommandBuffer,
         slot: usize,
     ) -> Option<vk::PipelineLayout> {
-        let s = self.slots.get(slot)?;
-        if self.glow_pipeline == vk::Pipeline::null() {
+        if self.glow_pipeline == vk::Pipeline::null() || slot >= self.slots.len() {
             return None;
         }
-        let binding = [vk::DescriptorBufferBindingInfoEXT::default()
-            .address(s.descriptor_address)
-            .usage(
-                vk::BufferUsageFlags::RESOURCE_DESCRIPTOR_BUFFER_EXT
-                    | vk::BufferUsageFlags::SAMPLER_DESCRIPTOR_BUFFER_EXT,
-            )];
-        let d = &gpu.device;
-        // SAFETY: recording; the pipeline, layout and buffer are valid, and
-        // the slot's descriptors were written for this frame.
-        unsafe {
-            d.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.glow_pipeline);
-            self.db.cmd_bind_descriptor_buffers(cmd, &binding);
-            self.db.cmd_set_descriptor_buffer_offsets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.layout,
-                0,
-                &[0],
-                &[0],
-            );
-        }
+        self.bind_with(gpu, cmd, slot, self.glow_pipeline);
         Some(self.layout)
     }
 
@@ -389,6 +501,7 @@ impl Tp10Eyes {
             let d = &gpu.device;
             d.destroy_pipeline(std::mem::take(&mut self.pipeline), None);
             d.destroy_pipeline(std::mem::take(&mut self.glow_pipeline), None);
+            d.destroy_pipeline(std::mem::take(&mut self.pyramid_pipeline), None);
             d.destroy_pipeline_layout(std::mem::take(&mut self.layout), None);
             d.destroy_descriptor_set_layout(std::mem::take(&mut self.set_layout), None);
         }

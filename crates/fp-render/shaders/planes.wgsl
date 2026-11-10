@@ -7,8 +7,8 @@
 
 // The video pyramid (src/pyramid.rs) and the sampler that reads it: the
 // stored frame at half size and below, with raw codes in the channels, built
-// once per video frame. Only this file declares them, so the TP10 pipeline's
-// descriptor layout stays as it is (planes_tp10.wgsl has a stub).
+// once per video frame. planes_tp10.wgsl declares them too, for the TP10
+// eye passes' descriptor buffer.
 @group(0) @binding(20) var pyr: texture_2d<f32>;
 @group(0) @binding(21) var samp_aniso: sampler;
 
