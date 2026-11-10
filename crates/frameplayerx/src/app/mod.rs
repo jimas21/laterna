@@ -576,7 +576,12 @@ impl App {
             return None;
         }
         let pts = p.points();
-        Some(p.world_point(egui::pos2(x * pts.x, y * pts.y)))
+        // On the panel's plane itself, not the 2 mm in front of it that
+        // `world_point` gives: a ray reaching a thin panel at a low angle (the
+        // docked screen's move bar, seen from a hand held level with it) would
+        // pass the bar's edge by more than its own height.
+        let at = p.world_point(egui::pos2(x * pts.x, y * pts.y));
+        Some(at - p.pose.z_axis.truncate().normalize() * 0.002)
     }
 
     /// Saves and applies settings edited through the UI.
