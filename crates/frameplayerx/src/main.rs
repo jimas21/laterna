@@ -29,6 +29,7 @@ mod services;
 mod settings;
 mod shuffle;
 mod subtitles;
+mod tragus;
 mod ui;
 mod watch;
 mod world;

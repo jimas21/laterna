@@ -45,6 +45,8 @@ settings-passthrough = Passthrough
 settings-controller = Controller
 # Short: a tab.
 settings-haptics = Haptics
+# Heading of a group in Settings > Sound.
+settings-earbuds = Earbuds
 # Short: a tab.
 settings-remote = Remote control
 # Short: a tab.
@@ -1381,3 +1383,18 @@ plex-connection-manual-local-desc = For an access token, use a LAN IP address wi
 plex-test-required = Connect to a server before saving.
 # Plex edit form: changing credentials keeps the existing source separate.
 plex-new-account-source = Linking again or replacing the token adds a separate source and keeps this one.
+
+# Settings > Earbuds
+earbuds-title = Tragus
+earbuds-desc = Earbud battery and noise control in Steam's menu, for AirPods and other earbuds.
+# Short: a button.
+earbuds-install = Install Tragus
+# Short: a button.
+earbuds-reinstall = Reinstall Tragus
+earbuds-working = Installing Tragus...
+earbuds-installed = Tragus is installed.
+earbuds-uptodate = Tragus is installed and up to date.
+earbuds-updated = Tragus is installed. Restart the headset once to see it in Steam's menu.
+earbuds-failed = Tragus could not be installed.
+earbuds-open = Open Tragus
+earbuds-open-hint = Coming in the next update

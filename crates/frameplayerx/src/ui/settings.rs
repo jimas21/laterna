@@ -513,7 +513,62 @@ fn sound(ui: &mut egui::Ui, v: &mut View) {
             },
         );
     });
-    subtitles(ui, s, &mut v.state.languages_open);
+    earbuds(ui, &v.state.tragus);
+    subtitles(ui, &mut *v.settings, &mut v.state.languages_open);
+}
+
+/// The Earbuds group in Sound: install Tragus, or note that it is installed.
+fn earbuds(ui: &mut egui::Ui, tragus: &crate::tragus::Tragus) {
+    use crate::tragus::Phase;
+    let phase = tragus.phase();
+    let running = matches!(phase, Phase::Running(_));
+    let installed = crate::tragus::installed();
+    heading(ui, tr!("settings-earbuds"));
+    widgets::rows(ui, |r| {
+        if installed && !running {
+            r.row(tr!("earbuds-installed"), None, |ui| {
+                open_tragus(ui);
+            });
+        }
+        let (label, desc) = if installed {
+            (tr!("earbuds-reinstall"), None)
+        } else {
+            (tr!("earbuds-install"), Some(tr!("earbuds-desc")))
+        };
+        r.row(tr!("earbuds-title"), desc, |ui| {
+            let kind = if installed { Kind::Secondary } else { Kind::Primary };
+            if running {
+                ui.spinner();
+            } else if widgets::button(ui, Some(icons::DOWNLOAD_SIMPLE), label, kind).clicked() {
+                tragus.start(ui.ctx());
+            }
+        });
+    });
+    let text = match &phase {
+        Phase::Idle => None,
+        Phase::Running(m) if m.is_empty() => Some(tr!("earbuds-working").to_string()),
+        Phase::Running(m) => Some(m.clone()),
+        Phase::Updated => Some(tr!("earbuds-updated").to_string()),
+        Phase::UpToDate => Some(tr!("earbuds-uptodate").to_string()),
+        Phase::Failed(m) => Some(format!("{} {m}", tr!("earbuds-failed"))),
+    };
+    if let Some(text) = text {
+        note(ui, &text);
+    }
+    if running {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+    }
+}
+
+/// The "Open Tragus" button. Disabled until a later change wires it to
+/// Tragus's own menu: that wiring goes here and nowhere else.
+fn open_tragus(ui: &mut egui::Ui) {
+    let button = ui
+        .add_enabled_ui(false, |ui| {
+            widgets::button(ui, None, tr!("earbuds-open"), Kind::Secondary)
+        })
+        .inner;
+    button.on_disabled_hover_text(tr!("earbuds-open-hint"));
 }
 
 /// Which subtitles videos start with, in which language, and how far away.

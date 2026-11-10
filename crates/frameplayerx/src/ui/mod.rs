@@ -765,6 +765,8 @@ pub struct Picking {
 pub struct UiState {
     pub screen: Screen,
     pub settings_tab: SettingsTab,
+    /// The Tragus install in Settings › Earbuds.
+    pub tragus: crate::tragus::Tragus,
     /// The controller input whose choices are open in Settings > Controller.
     pub remap_open: Option<RemapSlot>,
     /// Settings > Controller shows what the buttons do with the grip held.
@@ -846,6 +848,7 @@ impl Default for UiState {
         UiState {
             screen: Screen::Home,
             settings_tab: SettingsTab::General,
+            tragus: crate::tragus::Tragus::default(),
             remap_open: None,
             remap_grip: false,
             languages_open: false,
