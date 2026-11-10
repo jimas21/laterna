@@ -1052,7 +1052,6 @@ dependencies = [
  "egui",
  "fluent-syntax",
  "fp-core",
- "fp-earbuds",
  "fp-haptics",
  "fp-library",
  "fp-media",
