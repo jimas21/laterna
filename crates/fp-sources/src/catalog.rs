@@ -521,6 +521,7 @@ pub trait Catalog: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::slice::from_ref;
 
     fn of_kind(kind: CatalogKind) -> CatalogItem {
         CatalogItem {
@@ -536,12 +537,12 @@ mod tests {
         let movie = of_kind(CatalogKind::Movie);
         let episode = of_kind(CatalogKind::Episode);
         assert_eq!(RowShape::of(&[]), RowShape::Landscape);
-        assert_eq!(RowShape::of(&[movie.clone()]), RowShape::Portrait);
+        assert_eq!(RowShape::of(from_ref(&movie)), RowShape::Portrait);
         assert_eq!(
             RowShape::of(&[movie.clone(), of_kind(CatalogKind::Series)]),
             RowShape::Portrait
         );
-        assert_eq!(RowShape::of(&[episode.clone()]), RowShape::Landscape);
+        assert_eq!(RowShape::of(from_ref(&episode)), RowShape::Landscape);
         assert_eq!(RowShape::of(&[movie, episode]), RowShape::Landscape);
         assert_eq!(
             RowShape::of(&[of_kind(CatalogKind::Playlist)]),
