@@ -2374,7 +2374,7 @@ mod tests {
     }
 
     fn floor(r: &Renderer) -> Option<(PlaceKind, f32)> {
-        r.env.as_ref().and_then(|e| e.floor())
+        r.env.as_ref().and_then(EnvPass::floor)
     }
 
     #[test]
