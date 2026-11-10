@@ -28,11 +28,8 @@ The name comes from the *laterna magica*, the magic lantern: the first projector
 - **Settings apply at once**: changing the screen's default position in Settings moves the video you're watching
 
 ### Places to watch *(in progress)*
-- **A cinema** with seats to choose from, front, middle or back
-- **A studio**: a simple backdrop with a floor that catches the screen's glow
-- **House lights** that dim when the film starts and come back up when you pause
-- **The room lit by the film** you're watching
-- The plain, empty space stays available, and stays the default
+- **Environments**: watch from a seat in a cinema, or in a studio, instead of empty space
+- **House lights** that dim when the film starts
 
 ### Plex *(in progress)*
 - **Your server's own rows**, with its posters and artwork
@@ -40,8 +37,8 @@ The name comes from the *laterna magica*, the magic lantern: the first projector
 - **Sign in once** and every server on your account is there
 - **Playlists and watch history** from your server
 
-### Earbuds
-- **AirPods and other earbuds**: battery levels, noise control, and the video pauses when you take an earbud out. This comes through the open-source MagicPods programs adapted for the Frame ([MagicPodsCore](https://github.com/jimas21/MagicPodsCore) and [MagicPodsLinux](https://github.com/jimas21/MagicPodsLinux)). Install them from inside Laterna, under Settings › Earbuds *(arriving in the next beta)*
+### Earbuds *(next beta)*
+- **AirPods and other earbuds**: battery, noise control, and pause when you take one out. Uses [MagicPods for Frame](https://github.com/jimas21/MagicPodsCore), installed from Laterna's Settings
 
 ---
 
@@ -80,33 +77,29 @@ The name comes from the *laterna magica*, the magic lantern: the first projector
 ## Quick Start
 
 <p align="center">
-  <a href="https://github.com/jimas21/laterna/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+  <a href="https://github.com/jimas21/laterna/releases/latest/download/Install-Laterna.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
   <a href="https://jimas21.github.io/laterna/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 </p>
 
 > [!IMPORTANT]
-> Laterna has only **beta** releases so far, and the buttons above install the latest **stable** release, so they work from the first stable release on. Until then, install a beta from a PC with `frameplayerx-install --channel beta`, or in Desktop Mode's Konsole with
-> `curl -fsSL https://github.com/jimas21/laterna/releases/download/v0.18.0-beta.1/frameplayerx-desktop-install.py -o /tmp/fpi.py && python3 /tmp/fpi.py --beta`.
-> Then set **Settings › Updates** to **Beta** to get the next ones.
+> Laterna's installers ship with its next beta, and the buttons above work from its first stable release. Until then it is in testing.
 
 1. **Install** with one of the buttons above, or from a terminal:
 
    - **Desktop Mode, on the headset**: open this page in the headset's browser and press **Desktop Mode** to download the installer. Open it from your Downloads folder and confirm when Desktop Mode asks whether to trust it. A terminal window opens, installs the latest release and adds Laterna to your Steam library. It may ask to close Steam for a moment; Laterna then shows up in Gaming Mode.
    - **Frame Control, from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [Frame Control](https://github.com/saphid/steam-frame). Then press its button in your PC's browser and it installs the latest release on the headset.
-   - **From a PC's terminal**: turn on Developer Mode, download the installer for your PC (`frameplayerx-install`) from the [release page](https://github.com/jimas21/laterna/releases/latest), then:
+   - **From a PC's terminal**: turn on Developer Mode, download `laterna-install` for your PC from the [release page](https://github.com/jimas21/laterna/releases/latest), then:
 
      ```bash
-     frameplayerx-install pair <headset-ip>    # once: the address in Steam Settings › Internet on the headset
-     frameplayerx-install --channel beta       # installs the newest release, betas included
+     laterna-install pair <headset-ip>    # once: the address in Steam Settings › Internet on the headset
+     laterna-install                      # installs the newest release; add --channel beta for betas
      ```
 
      For `pair`, open Steam Settings › Developer › Pair new host on the headset and keep it showing.
 
 2. **Start it** from the Steam library on the headset. Browse the headset and its cards under **On this device**, and add a library of a folder, or a media server, under **Sources › Add source**.
 
-To update later, open **Settings › Updates** and press **Download and install** when a new version is listed, then **Restart now**. To remove it, see [Uninstall](docs/USER-GUIDE.md#uninstall) in the user guide.
-
-The installer files and the app's folders still carry FramePlayerX's file names, so Laterna installs over an existing FramePlayerX and keeps your settings and libraries.
+To update later, open **Settings › Updates** and press **Download and install** when a new version is listed, then **Restart now**. To remove it, see [Uninstall](docs/USER-GUIDE.md#uninstall) in the user guide. Laterna installs over an existing FramePlayerX and keeps its settings and libraries.
 
 ---
 
@@ -183,7 +176,7 @@ Not for now. The installers in [Quick Start](#quick-start) add it to your Steam 
 
 ### Why a separate fork?
 
-Laterna goes further in a few directions than FramePlayerX aims to: places to watch in, a fuller Plex experience, earbud support and picture-quality work tuned on the Frame. Keeping it separate lets those grow without pulling FramePlayerX along, while Laterna keeps taking in FramePlayerX's improvements.
+Laterna goes further in a few directions: places to watch in, a fuller Plex experience, earbud support and picture-quality work tuned on the Frame. It keeps taking in FramePlayerX's updates, and offers fixes and features back to FramePlayerX where they fit, so both players get better.
 
 ---
 
