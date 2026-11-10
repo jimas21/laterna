@@ -6,6 +6,5 @@
 # the build. Packs are made with tools/pack-encode.py and published as release
 # assets of the public jimas21/laterna-places repository; the url names one
 # release asset, the sha256 is printed by pack-encode.py --zip.
-#
-# Example (replace the version and the sha256 with the real ones):
-# cinema-v2 https://github.com/jimas21/laterna-places/releases/download/cinema-v2-2026.11.10-1/cinema-v2-2026.11.10-1.zip 0000000000000000000000000000000000000000000000000000000000000000
+
+cinema-v2 https://github.com/jimas21/laterna-places/releases/download/cinema-v2-2026.11.10-1/cinema-v2-2026.11.10-1.zip 2b6b89195ed38885a17a1047ba88ae6941adf177a0a237599e897ec08460a7bc
