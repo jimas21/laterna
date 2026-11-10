@@ -7,11 +7,13 @@
 //!   ([`ByteSource`], [`Entry`]).
 //! - [`playback`]: playback status and commands shared with haptics and the
 //!   remote-control API.
+//! - [`audio_sync`]: keeping sound in step with the picture, and the audio delay.
 //! - [`language`]: language tags of subtitle and audio tracks.
 //! - [`dirs`]: where FramePlayerX keeps config, data and cache.
 //! - [`sync`]: locking that survives a panicking thread.
 //! - [`volume`]: microSD cards and USB drives, known by their filesystem's ID.
 
+pub mod audio_sync;
 pub mod dirs;
 pub mod format;
 pub mod language;

@@ -19,11 +19,12 @@ use crate::info::{MediaInfo, read_info};
 use crate::input::Input;
 use crate::subtitle::{self, Cue};
 use crate::{Error, Result};
+use fp_core::audio_sync::{self, DelayState};
 use fp_core::sync::lock;
 use fp_core::{ByteSource, NetCounters};
 use fp_ffmpeg_sys as ff;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -74,6 +75,9 @@ pub struct PlayerConfig {
     pub start_at: f64,
     pub start_paused: bool,
     pub volume: f32,
+    /// Milliseconds the sound plays later than the picture (negative:
+    /// earlier); see [`fp_core::audio_sync`].
+    pub audio_delay_ms: i32,
     /// Set for a stream a server transcodes; [`Self::start_at`] is then
     /// ignored.
     pub timeline: Option<Timeline>,
@@ -94,6 +98,7 @@ impl Default for PlayerConfig {
             start_at: 0.0,
             start_paused: false,
             volume: 1.0,
+            audio_delay_ms: 0,
             timeline: None,
             frame_sequential: None,
         }
@@ -251,6 +256,8 @@ struct Shared {
     external_cues: Mutex<Vec<Cue>>,
     head: Mutex<ambisonic::Quat>,
     volume: Mutex<f32>,
+    /// The audio delay in milliseconds.
+    audio_delay_ms: AtomicI32,
     speed: Mutex<f64>,
     stats: Mutex<Stats>,
     has_video: bool,
@@ -357,6 +364,7 @@ impl Player {
             external_cues: Mutex::new(Vec::new()),
             head: Mutex::new(ambisonic::IDENTITY),
             volume: Mutex::new(config.volume),
+            audio_delay_ms: AtomicI32::new(audio_sync::clamp_delay_ms(config.audio_delay_ms)),
             speed: Mutex::new(1.0),
             stats: Mutex::new(Stats::default()),
             has_video: info.video.is_some(),
@@ -564,6 +572,19 @@ impl Player {
 
     pub fn set_volume(&self, v: f32) {
         *lock(&self.shared.volume) = v.clamp(0.0, 2.0);
+    }
+
+    /// The milliseconds the sound plays later than the picture.
+    pub fn audio_delay_ms(&self) -> i32 {
+        self.shared.audio_delay_ms.load(Ordering::Relaxed)
+    }
+
+    /// Plays the sound `ms` later than the picture (negative: earlier), from
+    /// the next chunk of audio on.
+    pub fn set_audio_delay_ms(&self, ms: i32) {
+        self.shared
+            .audio_delay_ms
+            .store(audio_sync::clamp_delay_ms(ms), Ordering::Relaxed);
     }
 
     /// Selects an audio stream by stream index.
@@ -1169,6 +1190,7 @@ fn audio_thread(
     let mut frame = Frame::new();
     let mut buf: Vec<f32> = Vec::new();
     let mut was_paused = false;
+    let mut delay = DelayState::default();
     if let Some((_, d)) = decoders.iter().find(|(i, _)| Some(*i) == current) {
         sh.stats().audio_decoder = d.name.clone();
     }
@@ -1190,6 +1212,7 @@ fn audio_thread(
         if paused || sh.buffering.load(Ordering::Acquire) {
             if paused && !was_paused {
                 sink.flush();
+                delay.reset();
             }
             was_paused = paused;
             if sh.apkts.len() > 0 && sh.serial() != serial {
@@ -1228,6 +1251,8 @@ fn audio_thread(
             resampler.reset();
             stretch.reset();
             sink.flush();
+            // The queue is empty again, so the delay has to be made again.
+            delay.reset();
         }
         let Some(pkt) = pkt else {
             sh.audio_done.store(true, Ordering::Release);
@@ -1267,26 +1292,21 @@ fn audio_thread(
                 continue;
             }
             // Sync against the video clock: when will this chunk be heard,
-            // and what media time will the clock show then?
+            // and what media time will the clock show then? The audio delay
+            // moves where the chunk belongs (see `fp_core::audio_sync`).
             let heard_at = sh.clock.now() + sink.delay() * speed;
-            let diff = pts - heard_at;
-            let samples: &[f32] = if diff < -0.06 {
-                let skip = ((-diff / speed) * audio::RATE as f64) as usize * 2;
-                if skip >= out.len() {
-                    continue;
-                } else {
-                    &out[skip..]
-                }
-            } else {
-                if diff > 0.06 {
-                    let pad = ((diff / speed).min(0.5) * audio::RATE as f64) as usize * 2;
-                    let _ = sink.write(&vec![0.0; pad]);
-                }
-                &out
+            let target = f64::from(sh.audio_delay_ms.load(Ordering::Relaxed)) / 1000.0;
+            let plan = delay.plan(target, speed, pts, heard_at, out.len(), audio::RATE, 2);
+            if plan.pad > 0 {
+                let _ = sink.write(&vec![0.0; plan.pad]);
+            }
+            let Some(samples) = out.get(plan.skip..).filter(|s| !s.is_empty()) else {
+                continue;
             };
             if let Err(e) = sink.write(samples) {
                 log::warn!("{e}");
                 sink = output::open(&output::Backend::Null, 2);
+                delay.reset();
             }
             if sh.quit.load(Ordering::Acquire) || sh.serial() != serial || sh.ctl().paused {
                 break;
@@ -1354,6 +1374,24 @@ mod tests {
             std::thread::sleep(Duration::from_millis(11));
         }
         shown
+    }
+
+    #[test]
+    fn the_audio_delay_is_kept_in_range() {
+        let p = open(
+            "h264_aac_180_LR.mp4",
+            PlayerConfig {
+                audio_delay_ms: 120,
+                ..cfg()
+            },
+        );
+        assert_eq!(p.audio_delay_ms(), 120);
+        p.set_audio_delay_ms(-5000);
+        assert_eq!(p.audio_delay_ms(), -200);
+        p.set_audio_delay_ms(5000);
+        assert_eq!(p.audio_delay_ms(), 300);
+        p.set_audio_delay_ms(0);
+        assert_eq!(p.audio_delay_ms(), 0);
     }
 
     #[test]

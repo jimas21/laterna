@@ -557,6 +557,12 @@ impl App {
                 self.connect_devices();
             }
         }
+        // Settings > Sound > Audio delay applies to the open video at once.
+        if self.settings.audio_delay_ms != self.saved.audio_delay_ms
+            && let Some(p) = &self.playback
+        {
+            p.player.set_audio_delay_ms(self.settings.audio_delay_ms);
+        }
         if self.settings.ui_scale != self.saved.ui_scale {
             self.apply_ui_scale();
         }

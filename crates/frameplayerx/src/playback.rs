@@ -649,6 +649,7 @@ fn player_config(
         },
         start_at,
         volume: settings.volume,
+        audio_delay_ms: settings.audio_delay_ms,
         frame_sequential,
         ..Default::default()
     }

@@ -138,6 +138,8 @@ background-grey = Grey
 background-navy = Navy
 settings-sound-heading = Sound
 settings-volume = Volume
+settings-audio-delay = Audio delay
+settings-audio-delay-desc = Plays the sound later (+) or earlier (-) than the picture. Use it when wireless earbuds lag behind.
 settings-audio-device = Audio device
 # "default" is the device's name: keep it as it is.
 settings-audio-device-desc = "default" follows the system output.

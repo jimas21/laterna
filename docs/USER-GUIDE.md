@@ -584,6 +584,15 @@ point at it and push the thumbstick left or right.
 Each push is one step, and holding repeats. **Save for this video** keeps
 the settings for that file.
 
+### Audio delay
+
+If the sound runs behind the picture (wireless earbuds often do), or ahead
+of it, open **Settings › Sound** and move **Audio delay**. It goes from
+-200 to +300 ms in steps of 10. A plus plays the sound later, a minus plays
+it earlier. It takes effect at once, in the video that is playing. 0 is the
+default, and the reset button next to the number puts it back. The setting
+is the same for every output: the speakers and your earbuds share it.
+
 ### Subtitles
 
 Subtitles come from inside the video or from files beside it, named after
