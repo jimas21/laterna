@@ -15,7 +15,7 @@ use glam::{Vec2, Vec3};
 pub const HALF_WIDTH: f32 = 9.0;
 /// The front wall, 5 cm behind the screen panel.
 pub const FRONT_Z: f32 = -0.05;
-pub const BACK_Z: f32 = 22.5;
+pub const BACK_Z: f32 = 17.5;
 pub const CEILING_Y: f32 = 10.0;
 /// Rows of seats.
 pub const ROWS: usize = 12;
@@ -27,9 +27,14 @@ pub const SCREEN_MAX: Vec2 = Vec2::new(14.0, 7.2);
 
 const CELL: f32 = kit::GRID_CELL;
 /// Depth of a row's tread.
-const TREAD: f32 = 1.15;
+const TREAD: f32 = 0.95;
+/// How much each row's floor stands above the one in front, and the first
+/// row's height. Steep enough that every eye looks up at the picture by no
+/// more than the angle a neck likes.
+const RISE: f32 = 0.4;
+const FIRST_FLOOR: f32 = 1.0;
 /// Where the first riser stands; the floor is flat in front of it.
-const FIRST_RISER_Z: f32 = 5.425;
+const FIRST_RISER_Z: f32 = 2.5;
 const STAGE_HALF_WIDTH: f32 = 8.0;
 const STAGE_DEPTH: f32 = 2.0;
 const STAGE_HEIGHT: f32 = 0.5;
@@ -39,12 +44,12 @@ const AISLES: [[f32; 2]; 2] = [[-5.13, -4.1], [4.1, 5.13]];
 /// The first seat's centre and the seat count of each block of a row.
 const BLOCKS: [(f32, usize); 3] = [(-3.72, 13), (-7.98, 5), (5.5, 5)];
 /// Wood strips on each side wall.
-const STRIPS: usize = 10;
+const STRIPS: usize = 8;
 const STRIP_PITCH: f32 = 2.45;
 const STRIP_WIDTH: f32 = 0.12;
 const STRIP_DEPTH: f32 = 0.06;
 const DOWNLIGHT_X: [f32; 5] = [-6.0, -3.0, 0.0, 3.0, 6.0];
-const DOWNLIGHT_Z: [f32; 5] = [3.0, 7.0, 11.0, 15.0, 19.0];
+const DOWNLIGHT_Z: [f32; 5] = [3.0, 6.5, 10.0, 13.5, 16.5];
 const DOWNLIGHT_POWER: f32 = 30.0;
 const SLOT_POWER: f32 = 12.0;
 /// The bake sum that counts as fully lit.
@@ -70,12 +75,12 @@ mod mat {
 
 /// Floor height of row `k`, counting from the front.
 fn row_floor(k: usize) -> f32 {
-    0.25 + 0.42 * k as f32
+    FIRST_FLOOR + RISE * k as f32
 }
 
 /// Where row `k`'s seats stand, front to back.
 fn row_z(k: usize) -> f32 {
-    6.0 + TREAD * k as f32
+    FIRST_RISER_Z + TREAD * (k as f32 + 0.5)
 }
 
 /// Where the last row's tread ends and the flat rear platform begins.
@@ -97,20 +102,23 @@ fn seat(name: SeatName, row: usize) -> Seat {
     Seat { name, eye }
 }
 
-/// The seats (front, middle and back, in the middle of rows 3, 7 and 11) and
-/// the screen's frame.
+/// The rows the three seats are in, from the front. Chosen so a 16:9 film that
+/// fills the frame's height (12.8 m wide) spans about 85 (front), 72 (middle)
+/// and 58 (back) degrees from the eye; a test checks it.
+const SEAT_ROWS: [usize; 3] = [4, 6, 9];
+
+/// The seats (front, middle and back) and the screen's frame.
 pub fn layout() -> Layout {
     let seats = vec![
-        seat(SeatName::Front, 3),
-        seat(SeatName::Middle, 7),
-        seat(SeatName::Back, 11),
+        seat(SeatName::Front, SEAT_ROWS[0]),
+        seat(SeatName::Middle, SEAT_ROWS[1]),
+        seat(SeatName::Back, SEAT_ROWS[2]),
     ];
     Layout {
         seats,
-        // Front: from there the picture spans about 67 degrees, near the
-        // usual screen's 74. From the middle it is under 50 and looks small
-        // and soft on the headset.
-        default_seat: 0,
+        // The middle seat: the picture spans about 72 degrees there, the
+        // same as the ordinary screen's Medium size.
+        default_seat: 1,
         screen: Some(ScreenFrame {
             centre: SCREEN_CENTRE,
             max: SCREEN_MAX,
@@ -502,16 +510,61 @@ mod tests {
         assert!(screen.centre.z > FRONT_Z);
     }
 
+    /// Degrees a 16:9 film filling the frame's height spans from `seat`.
+    fn across(layout: &Layout, seat: &Seat) -> f32 {
+        let screen = layout.screen.unwrap();
+        // 12.8 m wide.
+        let half_width = screen.max.y * 16.0 / 9.0 / 2.0;
+        2.0 * (half_width / (screen.centre - seat.eye).length())
+            .atan()
+            .to_degrees()
+    }
+
     #[test]
-    fn the_front_seat_is_the_default_and_the_picture_looks_large_from_it() {
+    fn the_middle_seat_is_the_default_and_the_picture_spans_72_degrees_from_it() {
         let layout = layout();
         let seat = layout.seat(layout.default_seat);
-        assert_eq!(seat.name, SeatName::Front);
+        assert_eq!(seat.name, SeatName::Middle);
+        let a = across(&layout, seat);
+        assert!((a - 72.0).abs() < 1.5, "{a}");
+    }
+
+    #[test]
+    fn the_seats_span_about_85_72_and_58_degrees() {
+        let layout = layout();
+        let got: Vec<f32> = layout.seats.iter().map(|s| across(&layout, s)).collect();
+        for (a, want) in got.iter().zip([85.0, 72.0, 58.0]) {
+            assert!((a - want).abs() < 1.5, "{got:?}");
+        }
+    }
+
+    #[test]
+    fn every_eye_looks_at_the_picture_comfortably() {
+        let layout = layout();
         let screen = layout.screen.unwrap();
-        // A 16:9 film fills the frame's height: 12.8 m wide.
-        let half_width = screen.max.y * 16.0 / 9.0 / 2.0;
-        let across = 2.0 * (half_width / (screen.centre - seat.eye).length()).atan();
-        assert!(across.to_degrees() > 60.0, "{}", across.to_degrees());
+        for seat in &layout.seats {
+            let name = seat.name;
+            let ahead = (seat.eye.z - screen.centre.z).hypot(seat.eye.x - screen.centre.x);
+            let up = |y: f32| ((y - seat.eye.y) / ahead).atan().to_degrees();
+            // The top edge is under 35 degrees above the eye.
+            let top = up(screen.centre.y + screen.max.y / 2.0);
+            assert!(top < 35.0, "{name:?}: top edge {top}");
+            // The centre is level with the eye or lower, by up to 10 degrees;
+            // the front row's is a few degrees above it.
+            let centre = up(screen.centre.y);
+            assert!((-10.0..=6.0).contains(&centre), "{name:?}: centre {centre}");
+        }
+    }
+
+    #[test]
+    fn each_eye_is_over_the_floor_of_a_real_row() {
+        for (seat, row) in layout().seats.iter().zip(SEAT_ROWS) {
+            assert!((floor_at(seat.eye.z) - row_floor(row)).abs() < 1e-6);
+            assert!((seat.eye.y - row_floor(row) - EYE_HEIGHT).abs() < 1e-6);
+            // On the tread, not at its edge.
+            let from_riser = seat.eye.z - (FIRST_RISER_Z + TREAD * row as f32);
+            assert!((0.2..TREAD - 0.2).contains(&from_riser), "{from_riser}");
+        }
     }
 
     #[test]
@@ -591,7 +644,7 @@ mod tests {
     #[test]
     fn floor_at_follows_the_treads() {
         assert_eq!(floor_at(1.0), 0.0);
-        assert!((floor_at(row_z(0)) - 0.25).abs() < 1e-6);
+        assert!((floor_at(row_z(0)) - row_floor(0)).abs() < 1e-6);
         assert!((floor_at(row_z(7)) - row_floor(7)).abs() < 1e-6);
         assert!((floor_at(BACK_Z) - row_floor(ROWS - 1)).abs() < 1e-6);
     }

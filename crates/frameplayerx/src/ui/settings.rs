@@ -486,23 +486,18 @@ fn video_position(ui: &mut egui::Ui, v: &mut View) {
     note(ui, tr!("settings-video-position-desc"));
     heading(ui, tr!("settings-flat-videos"));
     widgets::rows(ui, |r| {
-        r.slider(
-            tr!("settings-screen-distance"),
-            None,
+        widgets::screen_size_rows(
+            r,
+            (
+                tr!("settings-screen-distance"),
+                tr!("settings-screen-width"),
+            ),
             &mut d.screen_distance,
-            fp_core::view::SCREEN_DISTANCE,
-            4.0,
-            " m",
-            1,
-        );
-        r.slider(
-            tr!("settings-screen-width"),
-            Some(tr!("settings-screen-width-desc")),
             &mut d.screen_width,
-            0.5..=30.0,
-            6.0,
-            " m",
-            1,
+            (
+                fp_core::view::DEFAULT_SCREEN_DISTANCE,
+                fp_core::view::DEFAULT_SCREEN_WIDTH,
+            ),
         );
         r.slider(
             tr!("settings-screen-curvature"),

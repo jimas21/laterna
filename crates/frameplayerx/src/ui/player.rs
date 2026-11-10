@@ -1440,23 +1440,12 @@ fn position_tab(
         ui.add_space(6.0);
         widgets::section_label(ui, tr!("adjust-screen"));
         widgets::rows(ui, |r| {
-            r.slider(
-                tr!("adjust-distance"),
-                None,
+            widgets::screen_size_rows(
+                r,
+                (tr!("adjust-distance"), tr!("adjust-width")),
                 &mut s.screen_distance,
-                fp_core::view::SCREEN_DISTANCE,
-                d.screen_distance,
-                " m",
-                1,
-            );
-            r.slider(
-                tr!("adjust-width"),
-                Some(tr!("settings-screen-width-desc")),
                 &mut s.screen_width,
-                0.5..=30.0,
-                d.screen_width,
-                " m",
-                1,
+                (d.screen_distance, d.screen_width),
             );
             r.slider(
                 tr!("adjust-curvature"),
