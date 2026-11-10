@@ -208,8 +208,9 @@ pub struct Noise {
 
 impl Noise {
     /// Whether the app may switch to `mode`: the control is writable and the device offers it.
+    /// Wind is never allowed.
     pub fn allows(&self, mode: NoiseMode) -> bool {
-        self.writable && self.options & mode.bit() != 0
+        mode != NoiseMode::Wind && self.writable && self.options & mode.bit() != 0
     }
 }
 

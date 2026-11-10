@@ -3,6 +3,7 @@
 
 mod actions;
 mod frame;
+mod earbuds;
 mod headset;
 mod input;
 mod plex;
@@ -195,6 +196,8 @@ pub struct App {
     /// The video was paused because the headset came off: it says so when
     /// the headset is back on.
     headset_paused: bool,
+    /// The link to Tragus and the pause-when-an-earbud-comes-out policy.
+    earbuds: earbuds::EarbudsRun,
     /// When the web remote's details were last built.
     remote_details_at: Instant,
     /// The open video's picture for the web remote, by its location.
@@ -333,6 +336,7 @@ impl App {
             queue: Default::default(),
             last_status: None,
             headset_paused: false,
+            earbuds: earbuds::EarbudsRun::default(),
             remote_details_at: Instant::now(),
             remote_picture: None,
             update: None,

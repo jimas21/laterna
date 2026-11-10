@@ -68,11 +68,21 @@ pub struct EarbudPolicy {
     seen: Option<Wear>,
     /// When both earbuds went in, while they are in.
     worn_since: Option<Instant>,
+    /// When a closed-case report began, straight after a reading of worn or partial.
+    na_since: Option<Instant>,
+    /// Consecutive frames the player has shown as not paused while a hold is kept.
+    unpaused_frames: u8,
 }
 
 impl EarbudPolicy {
     /// How long both earbuds must stay in before a resume.
     pub const SETTLE: Duration = Duration::from_secs(1);
+    /// How long a closed-case report must last to count as the buds being out; a single
+    /// transient one is ignored.
+    pub const NA_DEBOUNCE: Duration = Duration::from_millis(300);
+    /// Frames the player may still show as playing after we paused it before the hold is
+    /// given up as the user's doing.
+    pub const HOLD_GRACE_FRAMES: u8 = 5;
 
     /// Call once per frame with the latest reading.
     ///
@@ -81,20 +91,26 @@ impl EarbudPolicy {
     /// (after a reconnect, say) only seeds. A closed-case report straight after a reading of
     /// worn or partial counts as not worn.
     pub fn step(&mut self, r: WearReading, cx: &Context) -> Decision {
-        if cx.rule == PauseRule::Off {
+        // With the rule off the readings are still followed, so that turning it on later
+        // does not act on a transition that happened long before.
+        let off = cx.rule == PauseRule::Off;
+        if off {
             self.hold = None;
-            return Decision::Nothing;
+            self.unpaused_frames = 0;
+        } else {
+            self.check_hold(cx);
         }
-        self.check_hold(cx);
         if self.epoch != Some(r.epoch) {
             self.epoch = Some(r.epoch);
             self.seen = None;
             self.worn_since = None;
+            self.na_since = None;
         }
         if !r.usable {
+            self.na_since = None;
             return Decision::Nothing;
         }
-        let Some(wear) = self.meaningful(r.wear) else {
+        let Some(wear) = self.meaningful(r.wear, cx.now) else {
             self.worn_since = None;
             return Decision::Nothing;
         };
@@ -103,6 +119,9 @@ impl EarbudPolicy {
             let _ = self.worn_since.get_or_insert(cx.now);
         } else {
             self.worn_since = None;
+        }
+        if off {
+            return Decision::Nothing;
         }
         let enters = prev.is_some_and(|p| !cx.rule.pauses_on(p)) && cx.rule.pauses_on(wear);
         if enters {
@@ -113,6 +132,9 @@ impl EarbudPolicy {
 
     /// A video just opened: pause it at once if an earbud is already out.
     pub fn opened(&mut self, r: WearReading, cx: &Context) -> Decision {
+        // A hold belongs to the video that was open when it was made.
+        self.hold = None;
+        self.unpaused_frames = 0;
         let fresh = r.usable && self.epoch == Some(r.epoch);
         let out = self.seen.is_some_and(|w| cx.rule.pauses_on(w));
         if fresh && out {
@@ -126,6 +148,7 @@ impl EarbudPolicy {
     /// video closed, or the feature was turned off.
     pub fn release(&mut self) {
         self.hold = None;
+        self.unpaused_frames = 0;
     }
 
     /// Whether this policy owns the current pause.
@@ -136,17 +159,34 @@ impl EarbudPolicy {
     /// Drops a hold that no longer describes the player.
     fn check_hold(&mut self, cx: &Context) {
         let other_video = self.hold.is_some_and(|seq| seq != cx.open_seq);
-        if other_video || !cx.paused || cx.player == PlayerNow::Closed {
+        if cx.paused {
+            self.unpaused_frames = 0;
+        } else {
+            // The player may take a few frames to show the pause we asked for.
+            self.unpaused_frames = self.unpaused_frames.saturating_add(1);
+        }
+        let played = self.unpaused_frames >= Self::HOLD_GRACE_FRAMES;
+        if other_video || played || cx.player == PlayerNow::Closed {
             self.hold = None;
+            self.unpaused_frames = 0;
         }
     }
 
     /// The reading to act on, or `None` for one to ignore.
-    fn meaningful(&self, wear: Option<Wear>) -> Option<Wear> {
-        match wear? {
+    fn meaningful(&mut self, wear: Option<Wear>, now: Instant) -> Option<Wear> {
+        let wear = wear?;
+        if !matches!(wear, Wear::NotAvailable | Wear::Unknown) {
+            self.na_since = None;
+        }
+        match wear {
             Wear::Unknown => None,
             Wear::NotAvailable => match self.seen {
-                Some(Wear::Worn | Wear::Partial) => Some(Wear::NotWorn),
+                Some(Wear::Worn | Wear::Partial) => {
+                    // Counts as out only once it persists.
+                    let since = *self.na_since.get_or_insert(now);
+                    (now.saturating_duration_since(since) >= Self::NA_DEBOUNCE)
+                        .then_some(Wear::NotWorn)
+                }
                 _ => None,
             },
             known => Some(known),
@@ -252,7 +292,8 @@ mod tests {
     fn after(rule: PauseRule, first: Wear, then: Wear) -> Decision {
         let mut rig = Rig::new(rule);
         assert_eq!(rig.feed(first, Playing, 0), Nothing);
-        rig.feed(then, Playing, 1)
+        // Late enough for a closed-case report to have lasted.
+        rig.feed(then, Playing, 400)
     }
 
     fn check(rule: PauseRule, cases: &[(Wear, Wear, Decision)]) {
@@ -390,8 +431,54 @@ mod tests {
         assert_eq!(rig.feed(Worn, Paused, 1500), Nothing);
 
         let mut rig = paused_by_us(PauseRule::EitherBud);
+        // A few frames still showing playing are the pause not having landed yet.
         rig.feed(Worn, Playing, 100);
+        assert!(rig.p.holds());
+        for ms in 101..110 {
+            rig.feed(Worn, Playing, ms);
+        }
         assert!(!rig.p.holds());
+    }
+
+    #[test]
+    fn a_transient_closed_case_report_pauses_nothing() {
+        let mut rig = Rig::new(PauseRule::EitherBud);
+        rig.feed(Worn, Playing, 0);
+        assert_eq!(rig.feed(NotAvailable, Playing, 10), Nothing);
+        assert_eq!(rig.feed(Worn, Playing, 50), Nothing);
+        // The clock starts over for the next report.
+        assert_eq!(rig.feed(NotAvailable, Playing, 600), Nothing);
+        assert_eq!(rig.feed(Worn, Playing, 650), Nothing);
+    }
+
+    #[test]
+    fn readings_seen_with_the_rule_off_do_not_fire_later() {
+        let mut rig = Rig::new(PauseRule::Off);
+        rig.feed(Worn, Playing, 0);
+        rig.feed(NotWorn, Playing, 10);
+        rig.rule = PauseRule::EitherBud;
+        // Already out when it was turned on: no transition, no pause.
+        assert_eq!(rig.feed(NotWorn, Playing, 20), Nothing);
+        rig.feed(Worn, Playing, 30);
+        assert_eq!(rig.feed(NotWorn, Playing, 40), Pause);
+    }
+
+    #[test]
+    fn a_new_video_starts_without_the_old_hold() {
+        let mut rig = paused_by_us(PauseRule::EitherBud);
+        rig.seq = SEQ + 1;
+        // Worn: nothing to pause for; the old hold is gone.
+        let d = rig.open(read(Worn), Playing, 100);
+        assert_eq!(d, Nothing);
+        assert!(!rig.p.holds());
+    }
+
+    #[test]
+    fn back_in_does_not_resume_when_resume_is_off() {
+        let mut rig = paused_by_us(PauseRule::EitherBud);
+        rig.resume = false;
+        rig.feed(Worn, Paused, 100);
+        assert_eq!(rig.feed(Worn, Paused, 2000), Nothing);
     }
 
     #[test]
@@ -482,8 +569,9 @@ mod tests {
     fn after_a_closed_case_pause_the_buds_going_back_in_resume() {
         let mut rig = Rig::new(PauseRule::EitherBud);
         rig.feed(Worn, Playing, 0);
-        assert_eq!(rig.feed(NotAvailable, Playing, 10), Pause);
-        assert_eq!(rig.feed(NotAvailable, Paused, 50), Nothing);
+        assert_eq!(rig.feed(NotAvailable, Playing, 10), Nothing);
+        assert_eq!(rig.feed(NotAvailable, Playing, 400), Pause);
+        assert_eq!(rig.feed(NotAvailable, Paused, 450), Nothing);
         rig.feed(Worn, Paused, 500);
         assert_eq!(rig.feed(Worn, Paused, 1600), Resume);
     }

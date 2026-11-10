@@ -257,7 +257,7 @@ impl Worker {
                 return SessionEnd::Stopped;
             }
             if Instant::now() >= deadline {
-                log::info!("earbuds: the core did not greet us");
+                log::debug!("earbuds: the core did not greet us");
                 return SessionEnd::Lost;
             }
             match self.read_one(ws) {
@@ -341,7 +341,10 @@ impl Worker {
         let Some(device) = self.state.apple_device() else {
             return true;
         };
-        let allowed = device.noise.is_some_and(|n| n.allows(mode));
+        // Asking for the mode already in effect changes nothing, so nothing is pending.
+        let allowed = device
+            .noise
+            .is_some_and(|n| n.allows(mode) && n.selected != Some(mode));
         if !allowed {
             return true;
         }

@@ -67,7 +67,7 @@ fn nothing_secret_reaches_the_log() {
     core.shared.kill_below(1);
     assert!(wait_state(&mut link, |s| s.link == Link::Searching));
     assert!(wait_state(&mut link, |s| s.device.is_some()));
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(Duration::from_millis(400));
     drop(link);
     core.finish();
 

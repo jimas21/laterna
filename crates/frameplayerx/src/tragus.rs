@@ -93,6 +93,81 @@ impl Tragus {
     }
 }
 
+/// A battery cell on screen.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Slot {
+    Left,
+    Right,
+    Case,
+    Headphones,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Level {
+    pub slot: Slot,
+    pub percent: u8,
+    pub charging: bool,
+}
+
+/// What the inline Tragus settings show for a snapshot of the link.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Panel {
+    /// Installed, not answering yet; it usually does within seconds.
+    Starting,
+    /// Installed just now by this app; the service starts after a restart.
+    RestartNeeded,
+    /// Answering, but no earbuds are connected.
+    NoEarbuds,
+    Device {
+        name: String,
+        levels: Vec<Level>,
+        /// The modes to offer (never Wind); empty when the device does not allow changes.
+        modes: Vec<fp_earbuds::NoiseMode>,
+        /// The mode in effect, or the one just asked for.
+        selected: Option<fp_earbuds::NoiseMode>,
+    },
+}
+
+pub fn panel(state: &fp_earbuds::EarbudsState, just_installed: bool) -> Panel {
+    use fp_earbuds::{Link, NoiseMode};
+    if state.link != Link::Connected {
+        return if just_installed {
+            Panel::RestartNeeded
+        } else {
+            Panel::Starting
+        };
+    }
+    let Some(d) = state.apple_device() else {
+        return Panel::NoEarbuds;
+    };
+    let mut levels = Vec::new();
+    if let Some(b) = &d.battery {
+        for (slot, cell) in [
+            (Slot::Left, &b.left),
+            (Slot::Right, &b.right),
+            (Slot::Case, &b.case),
+            (Slot::Headphones, &b.single),
+        ] {
+            if let Some(percent) = cell.shown() {
+                levels.push(Level {
+                    slot,
+                    percent,
+                    charging: cell.charging,
+                });
+            }
+        }
+    }
+    let noise = d.noise.filter(|n| n.writable);
+    Panel::Device {
+        name: d.name.clone(),
+        levels,
+        modes: noise
+            .map(|n| NoiseMode::offered(n.options).collect())
+            .unwrap_or_default(),
+        selected: state.noise_pending.or(d.noise.and_then(|n| n.selected)),
+    }
+}
+
 /// The installer's status file: `{state, message, time}`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Status {
@@ -220,6 +295,77 @@ mod tests {
         assert!(verify(b"hello", SCRIPT_SHA256).is_err());
         let hello = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         assert!(verify(b"hello", hello).is_ok());
+    }
+
+    fn buds_state(link: fp_earbuds::Link, noise_options: u8) -> fp_earbuds::EarbudsState {
+        use fp_earbuds::{Battery, Cell, CellStatus, Earbuds, EarbudsState, Noise, NoiseMode};
+        let cell = |percent, charging, status| Cell {
+            percent,
+            charging,
+            status,
+        };
+        EarbudsState {
+            link,
+            device: Some(Earbuds {
+                name: "Buds".into(),
+                address: "AA".into(),
+                vendor: fp_earbuds::APPLE_VENDOR,
+                model: 1,
+                battery: Some(Battery {
+                    left: cell(80, false, CellStatus::Connected),
+                    right: cell(60, true, CellStatus::Cached),
+                    case: cell(0, false, CellStatus::NotAvailable),
+                    single: cell(0, false, CellStatus::Disconnected),
+                }),
+                wear: None,
+                noise: Some(Noise {
+                    selected: Some(NoiseMode::Off),
+                    options: noise_options,
+                    writable: true,
+                }),
+            }),
+            ..EarbudsState::default()
+        }
+    }
+
+    #[test]
+    fn a_snapshot_maps_to_battery_and_modes() {
+        use fp_earbuds::{Link, NoiseMode};
+        // 1 + 2 + 8 + 16: Wind is in the options and is not offered.
+        let Panel::Device {
+            name,
+            levels,
+            modes,
+            selected,
+        } = panel(&buds_state(Link::Connected, 27), false)
+        else {
+            panic!("expected a device");
+        };
+        assert_eq!(name, "Buds");
+        assert_eq!(levels.len(), 2);
+        assert_eq!((levels[0].slot == Slot::Left, levels[0].percent), (true, 80));
+        assert!(levels[1].charging && levels[1].percent == 60);
+        assert_eq!(
+            modes,
+            [NoiseMode::Off, NoiseMode::Transparency, NoiseMode::NoiseCancel]
+        );
+        assert_eq!(selected, Some(NoiseMode::Off));
+    }
+
+    #[test]
+    fn not_answering_and_no_earbuds_are_told_apart() {
+        use fp_earbuds::{EarbudsState, Link};
+        let searching = EarbudsState {
+            link: Link::Searching,
+            ..EarbudsState::default()
+        };
+        assert_eq!(panel(&searching, false), Panel::Starting);
+        assert_eq!(panel(&searching, true), Panel::RestartNeeded);
+        let none = EarbudsState {
+            link: Link::Connected,
+            ..EarbudsState::default()
+        };
+        assert_eq!(panel(&none, false), Panel::NoEarbuds);
     }
 
     #[test]

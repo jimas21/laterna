@@ -74,6 +74,8 @@ pub struct Settings {
     /// A video playing pauses when the headset comes off (the session drops
     /// below visible) and stays paused when it goes back on.
     pub pause_on_headset_off: bool,
+    /// A video playing pauses when an earbud comes out (needs Tragus).
+    pub pause_on_earbud_out: bool,
     /// The format a video starts in when nothing identifies it (no
     /// metadata, file name tag or telling shape).
     pub default_format: fp_core::format::VideoFormat,
@@ -220,6 +222,7 @@ impl Default for Settings {
             passthrough: false,
             resume: true,
             pause_on_headset_off: true,
+            pause_on_earbud_out: true,
             default_format: fp_core::format::VideoFormat::FALLBACK,
             fisheye_presets: FISHEYE_PRESETS.to_vec(),
             fisheye_start: FISHEYE_START,
@@ -356,6 +359,7 @@ mod tests {
         assert_eq!(p.seek_step, 10.0);
         assert!(!p.haptics_enabled, "haptics stay off until turned on");
         assert!(p.pause_on_headset_off, "old files get the new default");
+        assert!(p.pause_on_earbud_out, "old files get the new default");
         assert_eq!(p.default_format, fp_core::format::VideoFormat::FALLBACK);
         assert_eq!(p.fisheye_presets, FISHEYE_PRESETS);
         assert_eq!(p.fisheye_start, FISHEYE_START);

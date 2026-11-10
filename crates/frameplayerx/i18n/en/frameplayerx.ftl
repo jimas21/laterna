@@ -925,6 +925,7 @@ button-dpad-up = D-pad up
 button-bumper = Bumper
 button-stick-press = Thumbstick press
 toast-paused-headset-off = Paused: headset off
+toast-paused-earbud-out = Paused: earbud out
 toast-sound-on = Sound on
 toast-muted = Muted
 toast-no-room = This headset can't show your room
@@ -1398,4 +1399,22 @@ earbuds-uptodate = Tragus is installed and up to date.
 earbuds-updated = Tragus is installed. Restart the headset once to see it in Steam's menu.
 earbuds-failed = Tragus could not be installed.
 earbuds-open = Open Tragus
-earbuds-open-hint = Coming in the next update
+earbuds-left = Left
+earbuds-right = Right
+earbuds-case = Case
+earbuds-headphones = Headphones
+earbuds-charging = charging
+earbuds-noise = Noise control
+# Short: a chip.
+earbuds-mode-off = Off
+# Short: a chip.
+earbuds-mode-transparency = Transparency
+# Short: a chip.
+earbuds-mode-adaptive = Adaptive
+# Short: a chip.
+earbuds-mode-noise-cancel = Noise cancelling
+earbuds-starting = Tragus is starting…
+earbuds-restart = Restart the headset once to finish installing Tragus.
+earbuds-none = No earbuds connected.
+earbuds-pause = Pause when an earbud comes out
+earbuds-pause-desc = The video stays paused when the earbud goes back in.

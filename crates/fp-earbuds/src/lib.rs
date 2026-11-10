@@ -170,7 +170,7 @@ impl EarbudsLink {
     /// reports it, or for a few seconds.
     pub fn set_noise(&self, mode: NoiseMode) {
         let allowed = self.cached.apple_device().and_then(|d| d.noise);
-        if allowed.is_some_and(|n| n.allows(mode)) {
+        if allowed.is_some_and(|n| n.allows(mode) && n.selected != Some(mode)) {
             self.send(Command::SetNoise(mode));
         }
     }

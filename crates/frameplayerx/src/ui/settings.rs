@@ -513,68 +513,129 @@ fn sound(ui: &mut egui::Ui, v: &mut View) {
             },
         );
     });
-    earbuds(ui, &v.state.tragus);
-    subtitles(ui, &mut *v.settings, &mut v.state.languages_open);
+    earbuds(ui, v);
+    subtitles(ui, v.settings, &mut v.state.languages_open);
 }
 
-/// The Earbuds group in Sound: install Tragus, or note that it is installed.
-fn earbuds(ui: &mut egui::Ui, tragus: &crate::tragus::Tragus) {
-    use crate::tragus::Phase;
-    let phase = tragus.phase();
+/// The Earbuds group in Sound: install Tragus, or show its settings inline.
+fn earbuds(ui: &mut egui::Ui, v: &mut View) {
+    use crate::tragus::{Panel, Phase};
+    let phase = v.state.tragus.phase();
     let running = matches!(phase, Phase::Running(_));
     let version = crate::tragus::installed();
-    let installed = version.is_some();
     heading(ui, tr!("settings-earbuds"));
     widgets::rows(ui, |r| {
-        if let Some(version) = version.as_deref().filter(|_| !running) {
-            let line = if version.is_empty() {
-                tr!("earbuds-installed-plain").to_string()
-            } else {
-                tr!("earbuds-installed", version = version)
-            };
-            r.row(&line, None, |ui| {
-                open_tragus(ui);
-            });
-        }
-        let (label, desc) = if installed {
-            (tr!("earbuds-reinstall"), None)
-        } else {
-            (tr!("earbuds-install"), Some(tr!("earbuds-desc")))
+        let (title, desc, label, kind) = match version.as_deref() {
+            Some("") => (
+                tr!("earbuds-installed-plain").to_string(),
+                None,
+                tr!("earbuds-reinstall"),
+                Kind::Secondary,
+            ),
+            Some(ver) => (
+                tr!("earbuds-installed", version = ver),
+                None,
+                tr!("earbuds-reinstall"),
+                Kind::Secondary,
+            ),
+            None => (
+                tr!("earbuds-title").to_string(),
+                Some(tr!("earbuds-desc")),
+                tr!("earbuds-install"),
+                Kind::Primary,
+            ),
         };
-        r.row(tr!("earbuds-title"), desc, |ui| {
-            let kind = if installed { Kind::Secondary } else { Kind::Primary };
+        r.row(&title, desc, |ui| {
             if running {
                 ui.spinner();
             } else if widgets::button(ui, Some(icons::DOWNLOAD_SIMPLE), label, kind).clicked() {
-                tragus.start(ui.ctx());
+                v.state.tragus.start(ui.ctx());
             }
         });
+        if version.is_some() {
+            r.switch(
+                tr!("earbuds-pause"),
+                Some(tr!("earbuds-pause-desc")),
+                &mut v.settings.pause_on_earbud_out,
+            );
+        }
     });
     let text = match &phase {
-        Phase::Idle => None,
+        Phase::Idle | Phase::UpToDate | Phase::Updated => None,
         Phase::Running(m) if m.is_empty() => Some(tr!("earbuds-working").to_string()),
         Phase::Running(m) => Some(m.clone()),
-        Phase::Updated => Some(tr!("earbuds-updated").to_string()),
-        Phase::UpToDate => Some(tr!("earbuds-uptodate").to_string()),
         Phase::Failed(m) => Some(format!("{} {m}", tr!("earbuds-failed"))),
     };
     if let Some(text) = text {
         note(ui, &text);
     }
     if running {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500));
+    }
+    if version.is_none() || running {
+        return;
+    }
+    // The app polls the link every frame; keep frames coming while this is open.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(500));
+    match crate::tragus::panel(&v.state.earbuds, phase == Phase::Updated) {
+        Panel::Starting => note(ui, tr!("earbuds-starting")),
+        Panel::RestartNeeded => note(ui, tr!("earbuds-restart")),
+        Panel::NoEarbuds => note(ui, tr!("earbuds-none")),
+        Panel::Device {
+            name,
+            levels,
+            modes,
+            selected,
+        } => {
+            widgets::rows(ui, |r| {
+                r.row(&name, None, |_| {});
+                for l in &levels {
+                    let text = if l.charging {
+                        format!("{}%, {}", l.percent, tr!("earbuds-charging"))
+                    } else {
+                        format!("{}%", l.percent)
+                    };
+                    r.row(slot_label(&l.slot), None, |ui| {
+                        ui.label(RichText::new(text).font(theme::font(Weight::Medium, 18.0)));
+                    });
+                }
+                if !modes.is_empty() {
+                    r.row(tr!("earbuds-noise"), None, |ui| {
+                        // Right to left: the first mode shows first from the right.
+                        for m in modes.iter().rev() {
+                            if widgets::chip(ui, mode_label(*m), selected == Some(*m)).clicked() {
+                                v.actions.push(Action::SetEarbudsNoise(*m));
+                            }
+                        }
+                    });
+                }
+            });
+        }
     }
 }
 
-/// The "Open Tragus" button. Disabled until a later change wires it to
-/// Tragus's own menu: that wiring goes here and nowhere else.
-fn open_tragus(ui: &mut egui::Ui) {
-    let button = ui
-        .add_enabled_ui(false, |ui| {
-            widgets::button(ui, None, tr!("earbuds-open"), Kind::Secondary)
-        })
-        .inner;
-    button.on_disabled_hover_text(tr!("earbuds-open-hint"));
+fn slot_label(slot: &crate::tragus::Slot) -> &'static str {
+    use crate::tragus::Slot;
+    match slot {
+        Slot::Left => tr!("earbuds-left"),
+        Slot::Right => tr!("earbuds-right"),
+        Slot::Case => tr!("earbuds-case"),
+        Slot::Headphones => tr!("earbuds-headphones"),
+    }
+}
+
+fn mode_label(mode: fp_earbuds::NoiseMode) -> &'static str {
+    use fp_earbuds::NoiseMode;
+    match mode {
+        NoiseMode::Off => tr!("earbuds-mode-off"),
+        NoiseMode::Transparency => tr!("earbuds-mode-transparency"),
+        NoiseMode::Adaptive => tr!("earbuds-mode-adaptive"),
+        NoiseMode::NoiseCancel => tr!("earbuds-mode-noise-cancel"),
+        // Never offered.
+        NoiseMode::Wind => "",
+    }
 }
 
 /// Which subtitles videos start with, in which language, and how far away.
