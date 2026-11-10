@@ -187,37 +187,27 @@ fn stereo_halves_stay_apart_when_minified() {
     e.destroy(&r);
 }
 
-#[test]
-fn every_upload_layout_minifies_alike() {
+/// Draws `rgba` (a 640 texel square picture) as every upload layout and range
+/// and checks each matches the 8-bit full range one to within `tolerance`.
+///
+/// Each pattern gets a renderer of its own: the pyramid is given up for a
+/// picture size once its builds keep going over their time budget, and on the
+/// software device (which builds on the CPU) every build does, so one renderer
+/// can be asked for about a dozen builds before it falls back to the four taps.
+fn layouts_minify_alike(name: &str, rgba: &[u8], tolerance: u8) {
     let Some((mut r, mut e)) = setup() else {
         return;
     };
     let p = filling_screen(StereoLayout::Mono);
     let size = 640u32;
-    // A checker of black and white texels, and one of red and blue squares
-    // four texels across (so chroma has detail of its own).
-    let mut squares = Vec::new();
-    for y in 0..size {
-        for x in 0..size {
-            if (x / 4 + y / 4).is_multiple_of(2) {
-                squares.extend_from_slice(&[230, 20, 20, 255]);
-            } else {
-                squares.extend_from_slice(&[30, 40, 220, 255]);
-            }
-        }
-    }
-    let patterns = [
-        ("black and white", testcard::checker(size, size, 1), 4),
-        ("red and blue", squares, 8),
-    ];
     let layouts = [
         PixelLayout::I420 { bits: 10 },
         PixelLayout::Nv12,
         PixelLayout::P010,
     ];
-    for (name, rgba, tolerance) in patterns {
+    {
         let mut draw = |layout, full_range| {
-            let f = fp_media::VideoFrame::from_rgba_as(size, size, &rgba, layout, full_range);
+            let f = fp_media::VideoFrame::from_rgba_as(size, size, rgba, layout, full_range);
             let f = Arc::new(f.expect("frame"));
             let [l, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
             assert!(r.pyramid_levels() > 0, "{name} as {layout:?}: no pyramid");
@@ -236,6 +226,29 @@ fn every_upload_layout_minifies_alike() {
         }
     }
     e.destroy(&r);
+}
+
+#[test]
+fn every_upload_layout_minifies_a_checker_alike() {
+    let rgba = testcard::checker(640, 640, 1);
+    layouts_minify_alike("black and white", &rgba, 4);
+}
+
+#[test]
+fn every_upload_layout_minifies_coloured_squares_alike() {
+    // Red and blue squares four texels across, so chroma has detail of its own.
+    let size = 640u32;
+    let mut squares = Vec::new();
+    for y in 0..size {
+        for x in 0..size {
+            if (x / 4 + y / 4).is_multiple_of(2) {
+                squares.extend_from_slice(&[230, 20, 20, 255]);
+            } else {
+                squares.extend_from_slice(&[30, 40, 220, 255]);
+            }
+        }
+    }
+    layouts_minify_alike("red and blue", &squares, 8);
 }
 
 #[test]
