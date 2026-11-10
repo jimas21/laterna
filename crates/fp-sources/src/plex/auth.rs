@@ -4,7 +4,7 @@
 //! belong on job threads; a pending link is kept only until it completes.
 
 use crate::error::{Error, Result};
-use crate::http::{HttpClient, HttpOptions};
+use crate::http::{HttpClient, HttpOptions, HttpReply};
 use crate::timeutil::parse_iso8601;
 use crate::urlutil::redact;
 use base64::Engine;
@@ -18,9 +18,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ACCOUNT_API: &str = "https://clients.plex.tv/api/v2";
 const LINK_API: &str = "https://plex.tv/api/v2";
+/// The older plex.tv API, which still holds the Home users and the profile
+/// switch.
+const LEGACY_API: &str = "https://plex.tv/api";
 /// Where a user enters the four-character code on another device.
 pub const LINK_URL: &str = "https://plex.tv/link";
 const JSON_LIMIT: u64 = 8 << 20;
+/// For the older plex.tv API, which answers in XML unless it is told JSON.
+const ACCEPT_EITHER: &str = "application/xml, application/json;q=0.9";
 const TOKEN_LIFETIME: u64 = 7 * 24 * 60 * 60;
 /// How this app names itself to Plex (its device list shows this).
 pub(crate) const PRODUCT: &str = "Laterna";
@@ -28,6 +33,15 @@ pub(crate) const PRODUCT: &str = "Laterna";
 pub(crate) const DEVICE: &str = "Steam Frame";
 /// The longest client identifier [`PlexAuthClient::initiate`] accepts.
 const CLIENT_IDENTIFIER_MAX: usize = 128;
+/// What [`PlexAuthClient::switch_profile`] reports, inside [`Error::Auth`],
+/// when plex.tv refuses the PIN. Test for it with [`is_wrong_pin`].
+pub const WRONG_PIN: &str = "that Plex PIN";
+/// The status plex.tv is taken to answer a wrong PIN with. A 401 is the
+/// account's own token being dead and is never reported as a wrong PIN. Not
+/// yet confirmed against a live account (see the device check).
+const WRONG_PIN_STATUS: u16 = 403;
+/// How a signed-out error from the account API names the account.
+const ACCOUNT_NAME: &str = "Plex";
 
 /// A registered signing key. PKCS#8 contains the private key and must only
 /// be saved with the source's other private credentials.
@@ -123,6 +137,42 @@ impl fmt::Debug for PlexProfile {
             .field("protected", &self.protected)
             .finish_non_exhaustive()
     }
+}
+
+/// A Plex Home member an account can switch to. It carries no token: a
+/// switch makes the [`PlexProfile`] that does.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PlexHomeUser {
+    pub id: u64,
+    pub uuid: String,
+    /// Shown in pickers; never logged.
+    pub title: String,
+    /// A picture address on plex.tv, when the member has one.
+    pub thumb: Option<String>,
+    /// Switching to this member asks for the Plex PIN.
+    pub protected: bool,
+    /// A managed member who sees only what was shared with them.
+    pub restricted: bool,
+    /// The Home's owner.
+    pub admin: bool,
+}
+
+// Written by hand: a derived Debug would print the title and picture.
+impl fmt::Debug for PlexHomeUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlexHomeUser")
+            .field("id", &self.id)
+            .field("protected", &self.protected)
+            .field("restricted", &self.restricted)
+            .field("admin", &self.admin)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Whether an error from [`PlexAuthClient::switch_profile`] is plex.tv
+/// refusing the PIN (as opposed to a dead account token or an outage).
+pub fn is_wrong_pin(error: &Error) -> bool {
+    matches!(error, Error::Auth(what) if what == WRONG_PIN)
 }
 
 /// The id a linked source gets: stable per account, server and profile, so
@@ -269,6 +319,8 @@ impl fmt::Debug for PlexResource {
 pub struct PlexAuthClient {
     base: String,
     link_base: String,
+    /// The Home users and the profile switch.
+    legacy_base: String,
 }
 
 impl Default for PlexAuthClient {
@@ -282,6 +334,7 @@ impl PlexAuthClient {
         Self {
             base: ACCOUNT_API.into(),
             link_base: LINK_API.into(),
+            legacy_base: LEGACY_API.into(),
         }
     }
 
@@ -303,15 +356,18 @@ impl PlexAuthClient {
                 "Plex test endpoint must be HTTP loopback".into(),
             ));
         }
+        let base = base.trim_end_matches('/');
         Ok(Self {
-            base: base.trim_end_matches('/').into(),
-            link_base: base.trim_end_matches('/').into(),
+            base: base.into(),
+            link_base: base.into(),
+            // `http://host/api/v2` keeps its older API at `http://host/api`.
+            legacy_base: base.strip_suffix("/v2").unwrap_or(base).into(),
         })
     }
 
-    fn client(base: &str, client: &str, token: Option<&str>) -> HttpClient {
+    fn client(base: &str, client: &str, token: Option<&str>, accept: &str) -> HttpClient {
         let mut headers = vec![
-            ("Accept".into(), "application/json".into()),
+            ("Accept".into(), accept.into()),
             ("X-Plex-Product".into(), PRODUCT.into()),
             ("X-Plex-Version".into(), env!("CARGO_PKG_VERSION").into()),
             ("X-Plex-Device".into(), DEVICE.into()),
@@ -341,7 +397,7 @@ impl PlexAuthClient {
     ) -> Result<Value> {
         let address = format!("{base}{path}");
         let bytes = body.as_ref().map(serde_json::to_vec).transpose()?;
-        let reply = Self::client(base, client, token)
+        let reply = Self::client(base, client, token, "application/json")
             .request(
                 method,
                 &address,
@@ -475,6 +531,97 @@ impl PlexAuthClient {
         })
     }
 
+    /// The members of the account's Plex Home, the account itself among
+    /// them. The older plex.tv list (XML) is asked first, the newer one when
+    /// it is missing or unreadable; which of the two plex.tv answers is
+    /// still to be confirmed on a live account. A refused account token is
+    /// [`Error::Auth`].
+    ///
+    /// Whether an account that is not the Home's owner may list and switch
+    /// members is likewise unconfirmed: if plex.tv refuses, that is the
+    /// error returned.
+    pub fn home_users(&self, account: &PlexCredentials) -> Result<Vec<PlexHomeUser>> {
+        let first = match self.home_list(&self.legacy_base, account) {
+            Ok(users) => return Ok(users),
+            Err(e) if list_unreadable(&e) => e,
+            Err(e) => return Err(e),
+        };
+        match self.home_list(&self.base, account) {
+            Ok(users) => Ok(users),
+            Err(second @ Error::Auth(_)) => Err(second),
+            Err(_) => Err(first),
+        }
+    }
+
+    fn home_list(&self, base: &str, account: &PlexCredentials) -> Result<Vec<PlexHomeUser>> {
+        let address = format!("{base}/home/users");
+        let reply = self
+            .send(base, "GET", &address, account)?
+            .error_for_status(&address)?;
+        parse_home_users(&reply.body)
+    }
+
+    /// One request to plex.tv under the account's token, whatever its status.
+    fn send(
+        &self,
+        base: &str,
+        method: &str,
+        address: &str,
+        account: &PlexCredentials,
+    ) -> Result<HttpReply> {
+        let client = Self::client(
+            base,
+            &account.client_identifier,
+            Some(&account.access_token),
+            ACCEPT_EITHER,
+        );
+        client.request(method, address, &[], None, JSON_LIMIT)
+    }
+
+    /// Switches to a Plex Home member (`POST /home/users/{id}/switch`) and
+    /// returns the profile with the token it plays under. The account's
+    /// token asks; the PIN, four digits, goes to plex.tv in this one call
+    /// and nowhere else: it is not stored and not part of any error.
+    ///
+    /// plex.tv refusing the PIN is [`Error::Auth`] holding [`WRONG_PIN`]
+    /// (see [`is_wrong_pin`]); the account's own token being dead is
+    /// [`Error::SignedOut`].
+    pub fn switch_profile(
+        &self,
+        account: &PlexCredentials,
+        user: &PlexHomeUser,
+        pin: Option<&str>,
+    ) -> Result<PlexProfile> {
+        if pin.is_some_and(|p| p.len() != 4 || !p.bytes().all(|b| b.is_ascii_digit())) {
+            return Err(Error::Config("a Plex PIN is four digits".into()));
+        }
+        let mut address = format!("{}/home/users/{}/switch", self.legacy_base, user.id);
+        if let Some(pin) = pin {
+            address.push_str("?pin=");
+            address.push_str(pin);
+        }
+        let reply = self.send(&self.legacy_base, "POST", &address, account)?;
+        match reply.status {
+            401 => return Err(Error::SignedOut(ACCOUNT_NAME.into())),
+            WRONG_PIN_STATUS if pin.is_some() || user.protected => {
+                return Err(Error::Auth(WRONG_PIN.into()));
+            }
+            _ => {}
+        }
+        // Not the address, which holds the PIN.
+        let reply = reply.error_for_status("plex.tv")?;
+        let token = switched_token(&reply.body)
+            .ok_or_else(|| Error::parse("Plex profile switch", "missing token"))?;
+        Ok(PlexProfile {
+            id: user.id,
+            uuid: user.uuid.clone(),
+            title: user.title.clone(),
+            protected: user.protected,
+            restricted: user.restricted,
+            token,
+        })
+    }
+
     /// Lists server resources only. Player devices commonly have null
     /// accessToken and must not make the entire response fail to parse.
     pub fn resources(&self, credentials: &PlexCredentials) -> Result<Vec<PlexResource>> {
@@ -574,6 +721,114 @@ fn boolean(value: &Value, field: &str) -> bool {
     value
         .get(field)
         .is_some_and(|v| v == true || v == 1 || v == "1" || v == "true")
+}
+
+fn number(value: &Value, field: &str) -> Option<u64> {
+    value
+        .get(field)
+        .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()))
+}
+
+/// Whether a failed Home list is worth asking the other endpoint for.
+fn list_unreadable(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::NotFound(_) | Error::Parse { .. } | Error::HttpStatus { .. }
+    )
+}
+
+/// A reply that is XML (`<`) or JSON, whichever the endpoint chose to send.
+fn is_xml(body: &[u8]) -> bool {
+    body.iter()
+        .find(|b| !b.is_ascii_whitespace())
+        .is_some_and(|b| *b == b'<')
+}
+
+/// The members of a Plex Home from either plex.tv list: the older XML
+/// (`MediaContainer/User` attributes) or the newer JSON (a `users` array, a
+/// bare array or `MediaContainer.User`). A reply with no member is an
+/// unknown shape, never an empty Home: the account is always in its own.
+fn parse_home_users(body: &[u8]) -> Result<Vec<PlexHomeUser>> {
+    let users: Vec<PlexHomeUser> = if is_xml(body) {
+        let text = String::from_utf8_lossy(body);
+        let doc = crate::xml::parse(&text)?;
+        let mut rows = Vec::new();
+        doc.find_all("User", &mut rows);
+        rows.into_iter().filter_map(home_user_from_xml).collect()
+    } else {
+        let value: Value = serde_json::from_slice(body)
+            .map_err(|_| Error::parse("Plex Home users", "not JSON or XML"))?;
+        let rows = value
+            .as_array()
+            .or_else(|| value.get("users").and_then(Value::as_array))
+            .or_else(|| {
+                value
+                    .get("MediaContainer")?
+                    .get("User")
+                    .and_then(Value::as_array)
+            });
+        rows.into_iter()
+            .flatten()
+            .filter_map(home_user_from_json)
+            .collect()
+    };
+    if users.is_empty() {
+        return Err(Error::parse("Plex Home users", "no members in the reply"));
+    }
+    Ok(users)
+}
+
+fn home_user_from_json(row: &Value) -> Option<PlexHomeUser> {
+    Some(PlexHomeUser {
+        id: number(row, "id")?,
+        uuid: string(row, "uuid")?,
+        title: string(row, "title")
+            .or_else(|| string(row, "username"))
+            .unwrap_or_default(),
+        thumb: string(row, "thumb"),
+        protected: boolean(row, "protected"),
+        restricted: boolean(row, "restricted"),
+        admin: boolean(row, "admin") || boolean(row, "homeAdmin"),
+    })
+}
+
+fn attr_text<'a>(element: &'a crate::xml::Element, name: &str) -> Option<&'a str> {
+    element.attr(name).filter(|v| !v.is_empty())
+}
+
+fn home_user_from_xml(row: &crate::xml::Element) -> Option<PlexHomeUser> {
+    let text = |name: &str| attr_text(row, name);
+    let flag = |name: &str| text(name).is_some_and(|v| v == "1" || v == "true");
+    Some(PlexHomeUser {
+        id: text("id")?.parse().ok()?,
+        uuid: text("uuid")?.to_owned(),
+        title: text("title")
+            .or_else(|| text("username"))
+            .unwrap_or_default()
+            .to_owned(),
+        thumb: text("thumb").map(str::to_owned),
+        protected: flag("protected"),
+        restricted: flag("restricted"),
+        admin: flag("admin"),
+    })
+}
+
+/// The token a profile switch returned: `authToken` or its older name
+/// `authenticationToken`, on the JSON object (or its `user`) or on the XML
+/// root element.
+fn switched_token(body: &[u8]) -> Option<String> {
+    if is_xml(body) {
+        let doc = crate::xml::parse(&String::from_utf8_lossy(body)).ok()?;
+        let root = doc.children.first()?;
+        return token_named(|name| attr_text(root, name).map(str::to_owned));
+    }
+    let value: Value = serde_json::from_slice(body).ok()?;
+    token_named(|name| string(&value, name))
+        .or_else(|| token_named(|name| string(value.get("user")?, name)))
+}
+
+fn token_named(get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    get("authToken").or_else(|| get("authenticationToken"))
 }
 
 fn expiry(value: &Value) -> Option<u64> {

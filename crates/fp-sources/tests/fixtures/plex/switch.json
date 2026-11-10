@@ -1,0 +1,10 @@
+{
+  "id": 2,
+  "uuid": "uuid-guest",
+  "title": "Guest",
+  "protected": true,
+  "restricted": false,
+  "home": true,
+  "authToken": "guest-plextv-token",
+  "authenticationToken": "guest-plextv-token"
+}

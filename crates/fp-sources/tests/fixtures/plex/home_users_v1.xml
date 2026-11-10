@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer friendlyName="myPlex" identifier="com.plexapp.plugins.myplex" size="3">
+  <User id="1" uuid="uuid-owner" admin="1" guest="0" restricted="0" protected="0" title="Owner" username="owner" email="owner@example.invalid" thumb="https://example.invalid/avatar/1" home="1" />
+  <User id="2" uuid="uuid-guest" admin="0" guest="0" restricted="0" protected="1" title="Guest" username="" email="" thumb="https://example.invalid/avatar/2" home="1" />
+  <User id="3" uuid="uuid-kid" admin="0" guest="0" restricted="1" protected="0" title="Kid" username="" email="" thumb="" home="1" />
+</MediaContainer>
