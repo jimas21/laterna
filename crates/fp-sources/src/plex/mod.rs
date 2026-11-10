@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::Url;
 
-use auth::{PlexAuthClient, PlexConnection};
+use auth::{DEVICE, PRODUCT, PlexAuthClient, PlexConnection};
 
 const JSON_LIMIT: u64 = 32 << 20;
 const PAGE_LIMIT: usize = 200;
@@ -147,9 +147,9 @@ impl PlexSource {
             vec![
                 ("X-Plex-Token".into(), config.access_token.clone()),
                 ("X-Plex-Client-Identifier".into(), client_id.to_string()),
-                ("X-Plex-Product".into(), "FramePlayerX".into()),
+                ("X-Plex-Product".into(), PRODUCT.into()),
                 ("X-Plex-Version".into(), env!("CARGO_PKG_VERSION").into()),
-                ("X-Plex-Device".into(), "Steam Frame".into()),
+                ("X-Plex-Device".into(), DEVICE.into()),
                 ("X-Plex-Platform".into(), "Linux".into()),
                 ("X-Plex-Pms-Api-Version".into(), "1.0".into()),
             ],

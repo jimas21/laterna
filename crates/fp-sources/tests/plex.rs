@@ -106,6 +106,7 @@ fn config(server: &TestServer) -> PlexConfig {
         max_height: None,
         local_only: false,
         allow_relay: true,
+        ..Default::default()
     }
 }
 

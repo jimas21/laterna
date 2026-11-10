@@ -1453,6 +1453,7 @@ mod tests {
             max_height: None,
             local_only: false,
             allow_relay: true,
+            ..Default::default()
         };
         let saved = SourceConfig::Plex(cfg.clone());
         let form = edit_form(&saved);

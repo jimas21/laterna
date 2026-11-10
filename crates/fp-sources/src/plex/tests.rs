@@ -71,6 +71,7 @@ fn rejected_saved_credentials_renew_at_handshake_or_on_a_later_request() {
             max_height: None,
             local_only: false,
             allow_relay: true,
+            ..Default::default()
         };
         let mut source = PlexSource::new(&config).unwrap();
         source.auth_api = api;
@@ -116,6 +117,7 @@ fn a_listed_remote_address_has_to_be_encrypted() {
         max_height: None,
         local_only: false,
         allow_relay: false,
+        ..Default::default()
     };
     let tried =
         |c: &PlexConfig| -> Vec<String> { connections(c).into_iter().map(|c| c.uri).collect() };
@@ -183,6 +185,7 @@ fn a_server_that_stays_down_is_only_asked_once_in_a_while() {
         max_height: None,
         local_only: false,
         allow_relay: false,
+        ..Default::default()
     })
     .unwrap();
     let picture = "plex://source/source/machine/image/resource?path=%2Fa.jpg";

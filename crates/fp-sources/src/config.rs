@@ -280,10 +280,52 @@ pub struct PlexConfig {
     pub local_only: bool,
     #[serde(default = "plex_relay_default")]
     pub allow_relay: bool,
+    /// The Plex Home profile this source plays as; `None`: the linked
+    /// account itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::plex::auth::PlexProfile>,
+    /// Section keys left out of tiles, rows, search and history.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_sections: Vec<String>,
 }
 
 fn plex_relay_default() -> bool {
     true
+}
+
+impl Default for PlexConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            url: String::new(),
+            machine_identifier: String::new(),
+            access_token: String::new(),
+            connections: Vec::new(),
+            auth: None,
+            insecure_tls: false,
+            parallel_downloads: false,
+            max_height: None,
+            local_only: false,
+            allow_relay: plex_relay_default(),
+            profile: None,
+            hidden_sections: Vec::new(),
+        }
+    }
+}
+
+impl PlexConfig {
+    /// What groups the sources of one account: its uuid, else (links made
+    /// before the account was recorded) the pairing's client identifier.
+    /// A manually entered source belongs to no account.
+    pub fn account_key(&self) -> Option<String> {
+        let auth = self.auth.as_ref()?;
+        let key = match &auth.account {
+            Some(account) => &account.uuid,
+            None => &auth.client_identifier,
+        };
+        Some(key.clone())
+    }
 }
 
 impl fmt::Debug for PlexConfig {
@@ -295,6 +337,7 @@ impl fmt::Debug for PlexConfig {
             .field("machine_identifier", &self.machine_identifier)
             .field("access_token", &"***")
             .field("auth", &self.auth.as_ref().map(|_| "***"))
+            .field("profile", &self.profile.as_ref().map(|p| p.id))
             .finish_non_exhaustive()
     }
 }
@@ -492,7 +535,7 @@ pub fn save_configs(path: &Path, configs: &[SourceConfig]) -> Result<()> {
 
 /// Writes `data` to `path` readable only by the user (mode 0600, a newly
 /// created folder 0700), atomically (temporary file + rename).
-pub(crate) fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
+pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         let mut builder = std::fs::DirBuilder::new();
         builder.recursive(true);
@@ -554,6 +597,7 @@ pub fn load_configs(path: &Path) -> Result<Vec<SourceConfig>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plex::auth::{PlexAccount, PlexCredentials, PlexProfile, linked_source_id};
 
     fn sample() -> Vec<SourceConfig> {
         vec![
@@ -683,5 +727,97 @@ mod tests {
         assert_eq!(configs[0].id(), "l");
         assert_eq!(configs[3].name(), "Share");
         assert!(configs[3].describe().contains("smb://nas.local/media/vr"));
+    }
+
+    #[test]
+    fn old_plex_sources_load_without_the_new_fields() {
+        let old = serde_json::json!({
+            "type": "plex", "id": "plex-1", "name": "Plex",
+            "url": "http://plex.example:32400", "machine_identifier": "machine",
+            "access_token": "server-secret",
+            "auth": {"access_token": "account-secret", "client_identifier": "device-abc"},
+        });
+        let SourceConfig::Plex(config) = serde_json::from_value(old).unwrap() else {
+            panic!("a Plex source");
+        };
+        assert!(config.profile.is_none());
+        assert!(config.hidden_sections.is_empty());
+        assert!(config.allow_relay, "the default is unchanged");
+        assert!(config.auth.as_ref().unwrap().account.is_none());
+        assert_eq!(config.account_key().as_deref(), Some("device-abc"));
+        let saved = serde_json::to_string(&SourceConfig::Plex(config)).unwrap();
+        for field in ["profile", "hidden_sections", "\"account\""] {
+            assert!(!saved.contains(field), "{field} is not written when unset");
+        }
+    }
+
+    #[test]
+    fn plex_accounts_group_sources_and_stay_private() {
+        let account = PlexAccount {
+            id: 7,
+            uuid: "account-uuid-1".into(),
+            title: "Owner Name".into(),
+            home: true,
+        };
+        let mut credentials =
+            PlexCredentials::manual("account-secret".into(), "device-abc".into());
+        credentials.account = Some(account);
+        let config = PlexConfig {
+            auth: Some(credentials),
+            profile: Some(PlexProfile {
+                id: 9,
+                uuid: "profile-uuid-1".into(),
+                title: "Guest Name".into(),
+                protected: true,
+                restricted: false,
+                token: "profile-secret".into(),
+            }),
+            hidden_sections: vec!["3".into()],
+            ..Default::default()
+        };
+        assert_eq!(config.account_key().as_deref(), Some("account-uuid-1"));
+        assert_eq!(PlexConfig::default().account_key(), None);
+        let shown = format!("{config:?}");
+        for secret in ["Owner Name", "Guest Name", "uuid", "secret"] {
+            assert!(!shown.contains(secret), "{secret} in {shown}");
+        }
+        let saved = serde_json::to_string(&SourceConfig::Plex(config.clone())).unwrap();
+        let SourceConfig::Plex(again) = serde_json::from_str(&saved).unwrap() else {
+            panic!("a Plex source");
+        };
+        assert_eq!(again, config);
+    }
+
+    #[test]
+    fn linked_source_ids_are_stable_and_differ_per_profile() {
+        let id = linked_source_id("account-uuid-1", "machine-1", None);
+        assert_eq!(id, linked_source_id("account-uuid-1", "machine-1", None));
+        let hex = id.strip_prefix("plex-").expect("a plex- prefix");
+        assert_eq!(hex.len(), 16);
+        assert!(hex.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(!id.contains("uuid") && !id.contains("machine"));
+        let profile = |uuid| linked_source_id("account-uuid-1", "machine-1", Some(uuid));
+        assert_ne!(id, profile("profile-uuid-1"));
+        assert_ne!(profile("profile-uuid-1"), profile("profile-uuid-2"));
+        assert_ne!(id, linked_source_id("account-uuid-1", "machine-2", None));
+        assert_ne!(id, linked_source_id("account-uuid-2", "machine-1", None));
+        // Where one part ends and the next begins matters.
+        assert_ne!(
+            linked_source_id("ab", "c", None),
+            linked_source_id("a", "bc", None)
+        );
+    }
+
+    #[test]
+    fn write_private_is_usable_by_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a/b/private.json");
+        write_private(&path, b"{}").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"{}");
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }
