@@ -14,6 +14,7 @@ use crate::mem::{self, Buffer, Image};
 use crate::params::{self, Quality, SceneParams, VideoParams};
 use crate::peak::PeakPass;
 use crate::pipeline::{self, Depth, PipelineDesc};
+use crate::place_builder::{Built, PlaceBuilder, build_timed};
 use crate::q10c::Converter;
 use crate::timing::{FrameTimer, GpuTimes, Mark, Series};
 use crate::tp10_eyes::Tp10Eyes;
@@ -207,6 +208,13 @@ pub struct Renderer {
     /// Making the place pass or loading a place failed: places aren't shown
     /// (the picture is, as without one), and it is not tried again.
     env_failed: bool,
+    /// Makes places on a worker thread: the render thread asks for one, shows
+    /// Plain until it is built, and uploads it.
+    builds: PlaceBuilder,
+    /// Builds a place on the render thread instead, the frame that wants it
+    /// (for tests and the preview, which draw frames one by one and want the
+    /// place in the first).
+    inline_places: bool,
     /// Times each frame's parts on the GPU, where it has timestamps.
     timer: Option<FrameTimer>,
     /// The parts of the last frame the GPU finished.
@@ -422,6 +430,8 @@ impl Renderer {
                 hdr_peak: PeakDetector::default(),
                 env: None,
                 env_failed: false,
+                builds: PlaceBuilder::new(),
+                inline_places: false,
                 timer: FrameTimer::new(&gpu, SLOTS),
                 gpu_times: None,
                 imports: Default::default(),
@@ -1731,9 +1741,13 @@ impl Renderer {
     }
 
     /// Makes the place pass the first time it is wanted. False when places
-    /// can't be shown (it failed to start, now or before).
+    /// can't be shown (it, or a place's load, failed, now or before: it is
+    /// not tried again, whether or not the pass was made).
     fn ensure_env(&mut self) -> bool {
-        if self.env.is_none() && !self.env_failed {
+        if self.env_failed {
+            return false;
+        }
+        if self.env.is_none() {
             match EnvPass::new(&self.gpu, self.color_format, self.depth_format, SLOTS) {
                 Ok(pass) => self.env = Some(pass),
                 Err(e) => {
@@ -1742,13 +1756,20 @@ impl Renderer {
                 }
             }
         }
-        self.env.is_some()
+        self.env.is_some() && !self.env_failed
+    }
+
+    /// Builds places on the render thread, in the frame that wants them,
+    /// instead of on a worker while Plain shows. For tests and the preview.
+    pub fn set_inline_places(&mut self, inline: bool) {
+        self.inline_places = inline;
     }
 
     /// Gets the place this frame draws around the picture ready, if it draws
-    /// one: loads its meshes when it is a new one, and writes the slot's
-    /// uniform. False when the eye passes draw no place. A spherical or
-    /// fisheye picture fills the view and hides it.
+    /// one: uploads its meshes when it is a new one and they are built (the
+    /// frames before that draw none), and writes the slot's uniform. False
+    /// when the eye passes draw no place. A spherical or fisheye picture
+    /// fills the view and hides it.
     fn prepare_env(
         &mut self,
         slot_idx: usize,
@@ -1760,17 +1781,41 @@ impl Renderer {
         let Some(frame) = video.env.filter(|_| flat) else {
             return false;
         };
+        if self.env_failed {
+            return false;
+        }
+        // A place not loaded yet is built off this thread, while the pass's
+        // pipelines are made here, and drawn from the frame it is ready.
+        let loaded = self.env.as_ref().is_some_and(|e| e.has(frame.place));
+        if !loaded && !self.inline_places {
+            self.builds.request(frame.place);
+        }
         if !self.ensure_env() {
             return false;
         }
         let Some(env) = self.env.as_mut() else {
             return false;
         };
-        let garbage = &mut self.slots[slot_idx].garbage_buffers;
-        if let Err(e) = env.prepare(&self.gpu, frame.place, garbage) {
-            log::warn!("places aren't shown: {e}");
-            self.env_failed = true;
-            return false;
+        if !env.has(frame.place) {
+            let data = if self.inline_places {
+                build_timed(Place::build, frame.place)
+            } else {
+                match self.builds.take(frame.place) {
+                    Built::Ready(data) => data,
+                    Built::Pending => return false,
+                    Built::Failed => {
+                        log::warn!("places aren't shown: one wasn't built");
+                        self.env_failed = true;
+                        return false;
+                    }
+                }
+            };
+            let garbage = &mut self.slots[slot_idx].garbage_buffers;
+            if let Err(e) = env.load(&self.gpu, frame.place, data, garbage) {
+                log::warn!("places aren't shown: {e}");
+                self.env_failed = true;
+                return false;
+            }
         }
         let Some((kind, built_floor)) = env.floor() else {
             return false;
@@ -2308,5 +2353,57 @@ impl Drop for Renderer {
             d.destroy_descriptor_pool(self.dpool, None);
             d.destroy_command_pool(self.pool, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A renderer on a software device, or `None` where there is none (the
+    /// test then skips).
+    fn renderer() -> Option<Renderer> {
+        let gpu = match Gpu::headless() {
+            Ok(g) => Arc::new(g),
+            Err(e) => {
+                eprintln!("skipping: no Vulkan device ({e})");
+                return None;
+            }
+        };
+        Some(Renderer::new(gpu, vk::Format::R8G8B8A8_SRGB).expect("renderer"))
+    }
+
+    fn floor(r: &Renderer) -> Option<(PlaceKind, f32)> {
+        r.env.as_ref().and_then(|e| e.floor())
+    }
+
+    #[test]
+    fn a_failed_place_pass_is_not_tried_again() {
+        let Some(mut r) = renderer() else {
+            return;
+        };
+        // Working: the pass is made and a load goes through.
+        assert!(r.ensure_env());
+        r.set_place_data(Place::Cinema, Place::Cinema.build());
+        assert!(floor(&r).is_some(), "the control loaded");
+        // A load that failed marks places failed while the pass is still
+        // there: nothing more is loaded, so nothing more can fail and say so
+        // every frame.
+        r.env_failed = true;
+        assert!(!r.ensure_env());
+        r.set_place_data(Place::Studio, Place::Studio.build());
+        let loaded = r.env.as_ref().map(|e| e.has(Place::Studio));
+        assert_eq!(loaded, Some(false), "the studio was not loaded");
+        assert!(r.env.as_ref().is_some_and(|e| e.has(Place::Cinema)));
+    }
+
+    #[test]
+    fn no_pass_is_made_once_places_have_failed() {
+        let Some(mut r) = renderer() else {
+            return;
+        };
+        r.env_failed = true;
+        assert!(!r.ensure_env());
+        assert!(r.env.is_none());
     }
 }

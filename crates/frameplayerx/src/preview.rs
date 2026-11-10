@@ -947,7 +947,9 @@ impl Sim {
 pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
     std::fs::create_dir_all(out)?;
     let gpu = Arc::new(Gpu::headless()?);
-    let renderer = Renderer::new(gpu.clone(), ash::vk::Format::R8G8B8A8_SRGB)?;
+    let mut renderer = Renderer::new(gpu.clone(), ash::vk::Format::R8G8B8A8_SRGB)?;
+    // A screenshot of a place has the place in it, not Plain while it builds.
+    renderer.set_inline_places(true);
     fp_media::set_hevc_10bit_hardware(renderer.shows_q10c());
     fp_media::set_shared_frames(renderer.reads_decoder_buffers());
     let size = args.size.unwrap_or(1024);

@@ -303,19 +303,17 @@ impl EnvPass {
         Ok(())
     }
 
-    /// Builds and uploads `place` if it is not the one loaded. The meshes it
-    /// replaces may still be read by a frame in flight: they go to `garbage`,
-    /// the recording slot's, which is emptied when that slot's fence has
-    /// signalled again.
-    pub fn prepare(&mut self, gpu: &Gpu, place: Place, garbage: &mut Vec<Buffer>) -> Result<()> {
-        if self.loaded.as_ref().is_some_and(|l| l.place == place) {
-            return Ok(());
-        }
-        self.load(gpu, place, place.build(), garbage)
+    /// Whether `place` is the one loaded. (The renderer gets it built off the
+    /// render thread and `load`s it when it is ready.)
+    pub fn has(&self, place: Place) -> bool {
+        self.loaded.as_ref().is_some_and(|l| l.place == place)
     }
 
-    /// Loads `data` as `place`, whatever `place.build()` would make: for
-    /// tests that draw their own geometry.
+    /// Uploads `data`, which is what `place.build()` makes (or, for tests
+    /// that draw their own geometry, whatever they like), as `place`. The
+    /// meshes it replaces may still be read by a frame in flight: they go to
+    /// `garbage`, the recording slot's, which is emptied when that slot's
+    /// fence has signalled again.
     pub fn load(
         &mut self,
         gpu: &Gpu,
