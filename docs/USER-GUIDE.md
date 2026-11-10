@@ -202,6 +202,9 @@ watched, rating, length). Remove one video from its details with *Remove
 from history*, or everything with *Clear history*; favorites and ratings
 stay. Browsing a network source never adds anything here. Removing a source
 forgets its videos, except those you watched, marked or put in a playlist.
+With a Plex server linked, a button for each server sits under the title: pick
+one to see what was watched on that server, newest first, whatever app played
+it. Pick a card to play it from where you left off.
 
 A video you stopped part way shows the frame where you left off, made
 shortly after it stops. Past 90 % it counts as watched: its card gets a ✓,
@@ -258,6 +261,11 @@ for a new one. A playlist can hold videos from any source. Its page plays
 them all from the top or from the one you pick, moves them up or down,
 takes them out, and renames or deletes the playlist (*Delete* asks again).
 Videos of a source locked with a PIN are left out until it is unlocked.
+
+Under your own, each linked Plex server has its video playlists in a section
+called *On* and the server's name. Pick one to see its videos in the server's
+order and play them from there. These playlists are read-only: change them in
+Plex.
 
 | Source | What browsing it offers |
 |---|---|

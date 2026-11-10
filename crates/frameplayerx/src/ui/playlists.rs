@@ -4,11 +4,50 @@
 use super::page::{self, Card};
 use super::theme::{self, Weight};
 use super::widgets::{self, Kind};
-use super::{Action, View, icons};
+use super::{Action, Screen, View, icons};
 use egui::RichText;
 use fp_library::{MediaRecord, Playlist, PlaylistId};
+use fp_sources::CatalogItem;
 
-/// The Playlists tab: your playlists, or the one open.
+/// How many videos a server's watch history lists.
+pub const HISTORY_LIMIT: usize = 60;
+
+/// What a server answered to a list a job asked it for.
+#[derive(Clone, Debug)]
+pub enum Asked {
+    Loading,
+    Got(Vec<CatalogItem>),
+    Failed(String),
+}
+
+/// One server's video playlists on the Playlists tab.
+#[derive(Clone, Debug)]
+pub struct ServerPlaylists {
+    pub source: String,
+    pub name: String,
+    pub lists: Asked,
+}
+
+/// What a server's watch history lists on the History screen.
+#[derive(Clone, Debug)]
+pub struct ServerHistory {
+    pub source: String,
+    pub items: Asked,
+}
+
+/// The servers that keep playlists and watch history of their own, as their
+/// id and name: the Plex sources that are not locked.
+pub fn servers(v: &View) -> Vec<(String, String)> {
+    v.services
+        .source_configs
+        .iter()
+        .filter(|c| c.kind() == fp_sources::SourceKind::Plex)
+        .filter(|c| !crate::pin::locked(&v.settings.source_pins, &v.state.unlocked_sources, c.id()))
+        .map(|c| (c.id().to_string(), c.name().to_string()))
+        .collect()
+}
+
+/// The Playlists tab: your playlists, those of each server, or the one open.
 pub fn page(ui: &mut egui::Ui, v: &mut View) {
     if let Some(id) = v.state.playlist {
         playlist(ui, v, id);
@@ -24,7 +63,14 @@ pub fn page(ui: &mut egui::Ui, v: &mut View) {
     new_playlist(ui, v, &[]);
     ui.add_space(14.0);
     let lists = playlists(v);
-    if lists.is_empty() {
+    let sections = server_sections(v);
+    // A server that is still being asked, or could not answer, has a section;
+    // one with no playlists has none.
+    let any_server = sections.iter().any(|s| match &s.lists {
+        Asked::Got(found) => !found.is_empty(),
+        _ => true,
+    });
+    if lists.is_empty() && !any_server {
         page::empty_state(
             ui,
             icons::PLAYLIST,
@@ -32,12 +78,179 @@ pub fn page(ui: &mut egui::Ui, v: &mut View) {
             tr!("playlists-none-desc"),
             |_| {},
         );
+        v.state.server_playlists.get_or_insert(sections);
         return;
     }
-    if let Some(id) = cards(ui, v, &lists) {
+    let mut picked = None;
+    let mut opened = None;
+    page::scroll(ui, |ui| {
+        if !lists.is_empty() {
+            picked = grid_of(ui, v, &lists);
+        }
+        for section in &sections {
+            if matches!(&section.lists, Asked::Got(found) if found.is_empty()) {
+                continue;
+            }
+            widgets::section_label(
+                ui,
+                &tr!("playlists-on-server", server = section.name.as_str()),
+            );
+            ui.add_space(6.0);
+            match &section.lists {
+                Asked::Loading => {
+                    ui.label(
+                        RichText::new(tr!("common-loading"))
+                            .font(theme::font(Weight::Regular, 16.0))
+                            .color(theme::TEXT_2),
+                    );
+                    ui.add_space(14.0);
+                }
+                Asked::Failed(error) => {
+                    ui.label(
+                        RichText::new(tr!("playlists-server-failed", error = error.as_str()))
+                            .font(theme::font(Weight::Regular, 16.0))
+                            .color(theme::TEXT_2),
+                    );
+                    ui.add_space(14.0);
+                }
+                Asked::Got(found) => {
+                    page::grid(ui, found.len(), page::LANDSCAPE.x, |ui, i| {
+                        let c = super::catalog::item_card(ui, v, &found[i], false);
+                        if c.open {
+                            opened = Some((section.source.clone(), found[i].clone()));
+                        }
+                    });
+                }
+            }
+        }
+    });
+    // The answers that arrived while the page was drawn are not lost.
+    v.state.server_playlists.get_or_insert(sections);
+    if let Some(id) = picked {
         v.state.playlist = Some(id);
         v.state.renaming = false;
     }
+    if let Some((source, item)) = opened {
+        v.actions.push(Action::OpenSourceAt {
+            source,
+            item: Box::new(item),
+            back_to: Screen::Playlists,
+        });
+    }
+}
+
+/// Each server's playlists as last asked for; the servers are asked, once,
+/// the first time the tab shows after a change to the library. The state is
+/// taken: the caller puts it back.
+fn server_sections(v: &mut View) -> Vec<ServerPlaylists> {
+    if let Some(sections) = v.state.server_playlists.take() {
+        return sections;
+    }
+    let sections: Vec<ServerPlaylists> = servers(v)
+        .into_iter()
+        .map(|(source, name)| ServerPlaylists {
+            source,
+            name,
+            lists: Asked::Loading,
+        })
+        .collect();
+    for section in &sections {
+        v.actions.push(Action::ServerPlaylists {
+            source: section.source.clone(),
+        });
+    }
+    sections
+}
+
+/// The History screen's choice between this headset and each server.
+pub fn history_chips(ui: &mut egui::Ui, v: &mut View, servers: &[(String, String)]) {
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        let on_headset = v.state.history_source.is_none();
+        if widgets::chip(ui, tr!("history-this-headset"), on_headset).clicked() {
+            v.state.history_source = None;
+        }
+        for (id, name) in servers {
+            let on = v.state.history_source.as_deref() == Some(id.as_str());
+            if widgets::chip(ui, name, on).clicked() && !on {
+                v.state.history_source = Some(id.clone());
+                v.state.server_history = None;
+            }
+        }
+    });
+    ui.add_space(8.0);
+}
+
+/// What the server chosen on the History screen watched, newest first; a card
+/// plays that video alone, from where it was left.
+pub fn server_history(ui: &mut egui::Ui, v: &mut View) {
+    let Some(source) = v.state.history_source.clone() else {
+        return;
+    };
+    let history = match v.state.server_history.take() {
+        Some(h) if h.source == source => h,
+        _ => {
+            v.actions.push(Action::ServerHistory {
+                source: source.clone(),
+            });
+            ServerHistory {
+                source: source.clone(),
+                items: Asked::Loading,
+            }
+        }
+    };
+    let mut play = None;
+    let mut more = None;
+    match &history.items {
+        Asked::Loading => {
+            ui.add_space(24.0);
+            ui.label(
+                RichText::new(tr!("common-loading"))
+                    .font(theme::font(Weight::Regular, 18.0))
+                    .color(theme::TEXT_2),
+            );
+        }
+        Asked::Failed(error) => page::empty_state(
+            ui,
+            icons::CLOCK,
+            tr!("history-server-failed"),
+            error,
+            |_| {},
+        ),
+        Asked::Got(items) if items.is_empty() => page::empty_state(
+            ui,
+            icons::CLOCK,
+            tr!("library-nothing-watched"),
+            tr!("history-server-empty-desc"),
+            |_| {},
+        ),
+        Asked::Got(items) => page::scroll(ui, |ui| {
+            ui.add_space(4.0);
+            page::grid(ui, items.len(), page::LANDSCAPE.x, |ui, i| {
+                let c = super::catalog::item_card(ui, v, &items[i], false);
+                if c.more {
+                    more = Some(items[i].clone());
+                } else if c.open {
+                    play = Some(items[i].clone());
+                }
+            });
+        }),
+    }
+    if let Some(item) = play {
+        v.actions.push(Action::OpenList(
+            vec![super::catalog::request(&source, &item, false)],
+            0,
+        ));
+    }
+    if let Some(item) = more {
+        v.actions.push(Action::OpenSourceAt {
+            source,
+            item: Box::new(item),
+            back_to: Screen::History,
+        });
+    }
+    v.state.server_history = Some(history);
 }
 
 /// The playlists, read again after a change.
@@ -48,31 +261,34 @@ fn playlists(v: &mut View) -> Vec<Playlist> {
         .clone()
 }
 
-/// A grid of playlists; the one clicked.
+/// A grid of playlists on a scrolling page of its own; the one clicked.
 fn cards(ui: &mut egui::Ui, v: &mut View, lists: &[Playlist]) -> Option<PlaylistId> {
+    page::scroll(ui, |ui| grid_of(ui, v, lists))
+}
+
+/// A grid of playlists; the one clicked.
+fn grid_of(ui: &mut egui::Ui, v: &mut View, lists: &[Playlist]) -> Option<PlaylistId> {
     let mut picked = None;
-    page::scroll(ui, |ui| {
-        page::grid(ui, lists.len(), page::LANDSCAPE.x, |ui, i| {
-            let p = &lists[i];
-            let thumb = p.first.as_ref().and_then(MediaRecord::picture);
-            let facts = tr!("count-videos", count = p.item_count);
-            let c = page::card(
-                ui,
-                v.thumbs,
-                &Card {
-                    thumb: thumb.as_deref(),
-                    placeholder: icons::PLAYLIST,
-                    tint: theme::ACCENT_HOVER,
-                    title: &p.name,
-                    facts: &facts,
-                    play: false,
-                    ..Card::default()
-                },
-            );
-            if c.open {
-                picked = Some(p.id);
-            }
-        });
+    page::grid(ui, lists.len(), page::LANDSCAPE.x, |ui, i| {
+        let p = &lists[i];
+        let thumb = p.first.as_ref().and_then(MediaRecord::picture);
+        let facts = tr!("count-videos", count = p.item_count);
+        let c = page::card(
+            ui,
+            v.thumbs,
+            &Card {
+                thumb: thumb.as_deref(),
+                placeholder: icons::PLAYLIST,
+                tint: theme::ACCENT_HOVER,
+                title: &p.name,
+                facts: &facts,
+                play: false,
+                ..Card::default()
+            },
+        );
+        if c.open {
+            picked = Some(p.id);
+        }
     });
     picked
 }

@@ -235,6 +235,102 @@ impl App {
         }
     }
 
+    /// Opens a media server on `item`: a playlist's videos, or a video's
+    /// details. Backing out of it leaves through the server's front page.
+    pub(super) fn open_source_at(
+        &mut self,
+        source: String,
+        item: fp_sources::CatalogItem,
+        back_to: Screen,
+    ) {
+        self.open_source(source.clone(), back_to);
+        let caps = self
+            .services
+            .opener
+            .source(&source)
+            .and_then(|src| src.as_catalog().map(fp_sources::Catalog::capabilities));
+        let Some(caps) = caps else {
+            return;
+        };
+        let seq = self.ui.next_seq();
+        let (load, body) = ui::catalog::open_page(item, caps);
+        let Some(j) = self.ui.catalog_page(&source) else {
+            return;
+        };
+        ui::catalog::push_page(j, seq, body);
+        self.apply(Action::Catalog { source, seq, load });
+    }
+
+    /// Asks a server for its video playlists, for the Playlists tab.
+    pub(super) fn server_playlists(&mut self, source: String) {
+        let found = self.services.opener.source(&source);
+        self.jobs.spawn("server-playlists", move || {
+            let result = found
+                .as_ref()
+                .and_then(|src| src.as_catalog())
+                .ok_or_else(|| tr!("source-not-available").to_string())
+                .and_then(|catalog| catalog.playlists().map_err(|e| ui::errors::source(&e)));
+            Job::ServerPlaylists { source, result }
+        });
+    }
+
+    /// Asks a server for what was watched on it, for the History tab.
+    pub(super) fn server_history(&mut self, source: String) {
+        let found = self.services.opener.source(&source);
+        self.jobs.spawn("server-history", move || {
+            let result = found
+                .as_ref()
+                .and_then(|src| src.as_catalog())
+                .ok_or_else(|| tr!("source-not-available").to_string())
+                .and_then(|catalog| {
+                    catalog
+                        .history(ui::playlists::HISTORY_LIMIT)
+                        .map_err(|e| ui::errors::source(&e))
+                });
+            Job::ServerHistory { source, result }
+        });
+    }
+
+    pub(super) fn server_playlists_loaded(
+        &mut self,
+        source: &str,
+        result: Result<Vec<fp_sources::CatalogItem>, String>,
+    ) {
+        let Some(list) = self
+            .ui
+            .server_playlists
+            .as_mut()
+            .and_then(|lists| lists.iter_mut().find(|l| l.source == source))
+        else {
+            return;
+        };
+        list.lists = match result {
+            Ok(items) => ui::playlists::Asked::Got(items),
+            Err(e) => ui::playlists::Asked::Failed(e),
+        };
+        self.panels[MAIN].request_repaint();
+    }
+
+    pub(super) fn server_history_loaded(
+        &mut self,
+        source: &str,
+        result: Result<Vec<fp_sources::CatalogItem>, String>,
+    ) {
+        let Some(history) = self
+            .ui
+            .server_history
+            .as_mut()
+            .filter(|h| h.source == source)
+        else {
+            return;
+        };
+        history.items = match result {
+            Ok(items) => ui::playlists::Asked::Got(items),
+            Err(e) => ui::playlists::Asked::Failed(e),
+        };
+        self.panels[MAIN].request_repaint();
+    }
+
     /// Fetches waiting feed scenes' details, a few at a time.
     pub(super) fn pump_feed(&mut self) {
         const WORKERS: usize = 6;
