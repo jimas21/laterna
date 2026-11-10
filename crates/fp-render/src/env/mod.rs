@@ -21,6 +21,7 @@
 
 pub mod cinema;
 pub mod kit;
+pub mod ktx2;
 pub mod light;
 pub mod pack;
 pub mod studio;

@@ -99,6 +99,10 @@ pub struct Gpu {
     /// where the device has `samplerAnisotropy` and it was enabled; with
     /// `None` samplers must not ask for it.
     pub max_anisotropy: Option<f32>,
+    /// The device can sample ASTC LDR textures and the feature is enabled:
+    /// place packs' ASTC data is uploaded as it is (see
+    /// [`crate::env::pack::astc_on_gpu`]).
+    pub astc: bool,
     /// The sample counts a colour attachment and a depth attachment can both
     /// have (`framebuffer_color_sample_counts` and
     /// `framebuffer_depth_sample_counts`): what multisampling the eye passes
@@ -181,6 +185,29 @@ pub(crate) fn pick_depth_format(supported: impl Fn(vk::Format) -> bool) -> vk::F
 /// limit above 1 (a limit of 1 filters nothing extra).
 fn anisotropy_limit(supported: bool, max: f32) -> Option<f32> {
     (supported && max > 1.0).then_some(max)
+}
+
+/// Whether place packs' ASTC textures can be used as they are: the device
+/// has `textureCompressionASTC_LDR` and every ASTC LDR format a pack may use
+/// can be sampled with linear filtering in optimal tiling (`features_of` says
+/// what a format can do). `env` is `FRAMEPLAYERX_ASTC`, where 0 turns it off
+/// (the textures are then decoded on the CPU, which is how to compare the
+/// two paths).
+fn astc_usable(
+    feature: bool,
+    env: Option<&str>,
+    mut features_of: impl FnMut(vk::Format) -> vk::FormatFeatureFlags,
+) -> bool {
+    let need =
+        vk::FormatFeatureFlags::SAMPLED_IMAGE | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR;
+    feature
+        && env != Some("0")
+        && crate::env::ktx2::ASTC_BLOCKS.iter().all(|&block| {
+            [false, true].into_iter().all(|srgb| {
+                crate::env::ktx2::astc_vk_format(block, srgb)
+                    .is_some_and(|f| features_of(vk::Format::from_raw(f as i32)).contains(need))
+            })
+        })
 }
 
 /// The sample count to render the eyes with: `wanted` (1, 2, 4 or 8) when
@@ -279,11 +306,22 @@ impl Gpu {
             supported.sampler_anisotropy == vk::TRUE,
             props.limits.max_sampler_anisotropy,
         );
+        let astc = astc_usable(
+            supported.texture_compression_astc_ldr == vk::TRUE,
+            std::env::var("FRAMEPLAYERX_ASTC").ok().as_deref(),
+            |f| {
+                // SAFETY: valid physical device.
+                unsafe { instance.get_physical_device_format_properties(pdev, f) }
+                    .optimal_tiling_features
+            },
+        );
         // Always passed: the video's anisotropic sampler needs
-        // `samplerAnisotropy`, the Q10C converter the extended storage formats.
+        // `samplerAnisotropy`, the Q10C converter the extended storage formats;
+        // ASTC only where the device has it.
         let features = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(max_anisotropy.is_some())
-            .shader_storage_image_extended_formats(q10c_features);
+            .shader_storage_image_extended_formats(q10c_features)
+            .texture_compression_astc_ldr(astc);
         let mut dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&qci)
             .enabled_features(&features)
@@ -308,7 +346,15 @@ impl Gpu {
             allocation_sizes: Default::default(),
         })
         .map_err(|e| Error::Alloc(e.to_string()))?;
-        log::info!("GPU: {device_name} ({driver})");
+        log::info!(
+            "GPU: {device_name} ({driver}); place ASTC textures {}",
+            if astc {
+                "are sampled as they are"
+            } else {
+                "are decoded on the CPU"
+            }
+        );
+        crate::env::pack::set_astc_on_gpu(astc);
         let memory_fd =
             shared.then(|| ash::khr::external_memory_fd::Device::new(&instance, &device));
         if shared {
@@ -332,6 +378,7 @@ impl Gpu {
                 vk::QUEUE_FAMILY_EXTERNAL
             },
             max_anisotropy,
+            astc,
             framebuffer_samples: props.limits.framebuffer_color_sample_counts
                 & props.limits.framebuffer_depth_sample_counts,
         })
@@ -407,6 +454,33 @@ mod tests {
         assert_eq!(anisotropy_limit(false, 16.0), None);
         assert_eq!(anisotropy_limit(true, 1.0), None);
         assert_eq!(anisotropy_limit(true, 0.0), None);
+    }
+
+    #[test]
+    fn astc_needs_the_feature_every_format_and_no_switch_off() {
+        let all = vk::FormatFeatureFlags::SAMPLED_IMAGE
+            | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR;
+        assert!(astc_usable(true, None, |_| all));
+        assert!(astc_usable(true, Some("1"), |_| all));
+        assert!(!astc_usable(true, Some("0"), |_| all));
+        assert!(!astc_usable(false, None, |_| all));
+        // One format that cannot be filtered, or sampled, is enough.
+        let no_linear = |f: vk::Format| {
+            if f == vk::Format::ASTC_10X10_SRGB_BLOCK {
+                vk::FormatFeatureFlags::SAMPLED_IMAGE
+            } else {
+                all
+            }
+        };
+        assert!(!astc_usable(true, None, no_linear));
+        assert!(!astc_usable(true, None, |_| vk::FormatFeatureFlags::empty()));
+        let mut asked = Vec::new();
+        astc_usable(true, None, |f| {
+            asked.push(f);
+            all
+        });
+        assert_eq!(asked.len(), 28);
+        assert!(asked.contains(&vk::Format::ASTC_12X12_UNORM_BLOCK));
     }
 
     #[test]

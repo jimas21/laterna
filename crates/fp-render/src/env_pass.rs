@@ -654,13 +654,16 @@ mod tests {
     fn a_packs_basis_gain_reaches_the_uniform_and_a_built_in_room_has_none() {
         let data = Place::Cinema.build_builtin();
         assert_eq!(Look::new(&data).uniform(&input(1.0)).baked, Vec4::ZERO);
+        let none = || crate::env::pack::TextureArray {
+            size: 4,
+            encoding: crate::env::ktx2::Encoding::Rgba8,
+            layers: Vec::new(),
+        };
         let baked = crate::env::pack::Baked {
             vertices: Vec::new(),
             indices: Vec::new(),
-            size: 4,
-            house: Vec::new(),
-            dark: Vec::new(),
-            basis: Vec::new(),
+            colors: none(),
+            basis: none(),
             basis_gain: 2.5,
         };
         let mut data = data;

@@ -1,24 +1,30 @@
 //! Place packs: a room made elsewhere (modelled and lit in Blender, baked to
 //! textures) that replaces one of the built-in rooms.
 //!
-//! A pack is a folder: `manifest.json`, `mesh.bin` and a set of PNGs, all
-//! described in the format notes kept with the exporter. This module reads
-//! one and checks every limit before anything is allocated or drawn: a pack
-//! that breaks any of them is refused with a message (the caller logs a
-//! warning and shows the built-in room), and nothing in here panics on any
-//! bytes.
+//! A pack is a folder: `manifest.json`, `mesh.bin` and a set of textures,
+//! all described in the format notes kept with the exporter. Format 1 has
+//! PNGs; format 2 (the one packs are shipped in) has KTX2 files, ASTC
+//! compressed, with their mip chains made offline (see [`super::ktx2`]). This
+//! module reads one and checks every limit before anything is allocated or
+//! drawn: a pack that breaks any of them is refused with a message (the
+//! caller logs a warning and shows the built-in room), and nothing in here
+//! panics on any bytes.
 //!
 //! Three steps, none of them touching the GPU:
 //! - [`scan`] reads only the manifests (and file sizes) in a folder of packs,
 //!   which is cheap enough for [`Place::layout`] to ask on any frame;
 //! - [`load`] reads and decodes a whole pack, which takes a moment, so
-//!   [`Place::build`] does it on the place builder's worker thread;
+//!   [`Place::build`] does it on the place builder's worker thread. A format 2
+//!   pack's ASTC textures are kept as they are when the device can sample
+//!   them ([`astc_on_gpu`]) and decoded to RGBA8 here, off the render thread,
+//!   when it cannot;
 //! - the renderer uploads the result ([`Baked`]) and draws it with
 //!   shaders/env_baked.wgsl.
 //!
 //! A pack replaces the built-in place its id names: `cinema` or `cinema-v2`
 //! (any number) replaces the Cinema. Without a pack nothing changes.
 
+use super::ktx2::{self, Encoding};
 use super::{Layout, Lighting, Place, PlaceData, PlaceKind, ScreenFrame, Seat, SeatName, Sky};
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
@@ -26,8 +32,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufReader, Read};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 /// The most triangles a pack's mesh has.
 pub const MAX_TRIANGLES: u32 = 100_000;
@@ -38,8 +47,10 @@ pub const MAX_TEXTURE: u32 = 4096;
 /// Light patches of the screen, one basis texture each (`PATCHES` in
 /// [`super::light`]).
 pub const BASIS: usize = 8;
-/// The format number this build reads.
-pub const FORMAT: u32 = 1;
+/// The newest format number this build reads (1 to this).
+pub const FORMAT: u32 = 2;
+/// The most bytes a format 2 pack's texture files may add up to.
+pub const MAX_TEXTURE_BYTES: u64 = 32 << 20;
 
 /// A PNG file bigger than this is refused unread: an 8-bit RGB texture of
 /// the largest size is 48 MiB before compression.
@@ -93,10 +104,17 @@ pub struct MeshSpec {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TextureSpec {
+    /// Side of the house and dark textures (and of every texture, format 1).
     pub size: u32,
+    /// Side of the basis textures. Format 2 only.
+    #[serde(default)]
+    pub basis_size: Option<u32>,
     pub house: String,
     pub dark: String,
     pub basis: Vec<String>,
+    /// The sizes of the texture files added up. Format 2 only.
+    #[serde(default)]
+    pub bytes: Option<u64>,
 }
 
 fn one() -> f32 {
@@ -152,9 +170,9 @@ impl Manifest {
 
     /// Every limit that can be checked without the other files.
     pub fn check(&self) -> Result<(), PackError> {
-        if self.format != FORMAT {
+        if !(1..=FORMAT).contains(&self.format) {
             return bad(format!(
-                "format {} (this build reads {FORMAT})",
+                "format {} (this build reads 1 to {FORMAT})",
                 self.format
             ));
         }
@@ -224,6 +242,27 @@ impl Manifest {
                 t.size
             ));
         }
+        if self.format >= 2 {
+            let Some(basis) = t.basis_size else {
+                return bad("textures.basis_size is missing (format 2 needs it)");
+            };
+            if basis == 0 || basis > t.size || !basis.is_power_of_two() {
+                return bad(format!(
+                    "basis size {basis} (a power of two up to the texture size {} wanted)",
+                    t.size
+                ));
+            }
+            match t.bytes {
+                None => return bad("textures.bytes is missing (format 2 needs it)"),
+                Some(0) => return bad("textures.bytes is 0"),
+                Some(n) if n > MAX_TEXTURE_BYTES => {
+                    return bad(format!(
+                        "textures.bytes is {n} (at most {MAX_TEXTURE_BYTES} allowed)"
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
         if t.basis.len() != BASIS {
             return bad(format!("{} basis textures ({BASIS} wanted)", t.basis.len()));
         }
@@ -269,6 +308,14 @@ impl Manifest {
             + 4 * 3 * u64::from(self.mesh.triangles)
     }
 
+    /// Side of the basis textures.
+    fn basis_size(&self) -> u32 {
+        match self.format {
+            1 => self.textures.size,
+            _ => self.textures.basis_size.unwrap_or(self.textures.size),
+        }
+    }
+
     fn texture_files(&self) -> impl Iterator<Item = &String> {
         [&self.textures.house, &self.textures.dark]
             .into_iter()
@@ -285,18 +332,55 @@ pub struct BakedVertex {
     pub uv: [f32; 2],
 }
 
+/// One set of same-sized textures that become one GPU array image.
+pub struct TextureArray {
+    /// Side of every texture, texels.
+    pub size: u32,
+    pub encoding: Encoding,
+    /// Per texture (array layer), its mip levels' bytes, level 0 first.
+    /// RGBA8 rows are tightly packed; ASTC levels are whole 16-byte blocks.
+    /// One level only (format 1) means the GPU makes the others.
+    pub layers: Vec<Vec<Vec<u8>>>,
+}
+
+impl TextureArray {
+    /// Mip levels each texture has here.
+    pub fn levels(&self) -> usize {
+        self.layers.first().map_or(0, Vec::len)
+    }
+
+    /// Bytes the textures take on the GPU, counting the mips it makes.
+    pub fn gpu_bytes(&self) -> u64 {
+        let held: u64 = self.layers.iter().flatten().map(|l| l.len() as u64).sum();
+        if self.levels() == 1 && self.size > 1 {
+            held + held / 3
+        } else {
+            held
+        }
+    }
+}
+
+impl fmt::Debug for TextureArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextureArray")
+            .field("size", &self.size)
+            .field("encoding", &self.encoding)
+            .field("layers", &self.layers.len())
+            .finish()
+    }
+}
+
 /// A pack's mesh and decoded textures, ready to upload.
 pub struct Baked {
     pub vertices: Vec<BakedVertex>,
     /// Triangles.
     pub indices: Vec<u32>,
-    /// Side of every texture, texels.
-    pub size: u32,
-    /// RGBA8, `size` x `size`, the colour as stored (sRGB for the house and
-    /// dark textures, square-root coded for the basis ones).
-    pub house: Vec<u8>,
-    pub dark: Vec<u8>,
-    pub basis: Vec<Vec<u8>>,
+    /// The house texture (layer 0) and the dark one (layer 1), as stored:
+    /// sRGB.
+    pub colors: TextureArray,
+    /// The light of each patch of the screen, [`BASIS`] textures, as stored:
+    /// square-root coded.
+    pub basis: TextureArray,
     pub basis_gain: f32,
 }
 
@@ -305,8 +389,35 @@ impl fmt::Debug for Baked {
         f.debug_struct("Baked")
             .field("vertices", &self.vertices.len())
             .field("indices", &self.indices.len())
-            .field("size", &self.size)
+            .field("colors", &self.colors)
+            .field("basis", &self.basis)
             .finish_non_exhaustive()
+    }
+}
+
+/// How a pack's textures got to the form the GPU takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TexturePath {
+    /// PNG files, decoded; the GPU makes the mip chains.
+    Png,
+    /// Uncompressed KTX2 files, uploaded as they are.
+    Rgba,
+    /// ASTC blocks, uploaded as they are.
+    AstcOnGpu,
+    /// ASTC decoded to RGBA8 on the CPU, in this many milliseconds.
+    AstcDecoded { ms: f64 },
+}
+
+impl fmt::Display for TexturePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TexturePath::Png => f.write_str("PNG"),
+            TexturePath::Rgba => f.write_str("uncompressed KTX2"),
+            TexturePath::AstcOnGpu => f.write_str("ASTC on the GPU"),
+            TexturePath::AstcDecoded { ms } => {
+                write!(f, "ASTC decoded on the CPU in {ms:.0} ms")
+            }
+        }
     }
 }
 
@@ -315,6 +426,21 @@ impl fmt::Debug for Baked {
 pub struct Pack {
     pub manifest: Manifest,
     pub baked: Baked,
+    pub path: TexturePath,
+}
+
+static ASTC_ON_GPU: AtomicBool = AtomicBool::new(false);
+
+/// Whether the device can sample ASTC textures, so that packs' ASTC data is
+/// kept as it is. Set by [`crate::gpu::Gpu`] when it makes the device; false
+/// until then (a pack loaded without a device is decoded).
+pub fn astc_on_gpu() -> bool {
+    ASTC_ON_GPU.load(Ordering::Relaxed)
+}
+
+/// Records what the device can do; see [`astc_on_gpu`].
+pub fn set_astc_on_gpu(on: bool) {
+    ASTC_ON_GPU.store(on, Ordering::Relaxed);
 }
 
 impl Pack {
@@ -490,31 +616,261 @@ fn read_manifest(dir: &Path) -> Result<Manifest, PackError> {
 
 /// Reads the whole pack in `dir`, or says what is wrong with it. Takes a
 /// moment (the textures are decoded): not for the render thread.
+///
+/// A format 2 pack's ASTC textures are kept as blocks when the device can
+/// sample them ([`astc_on_gpu`]) and decoded to RGBA8 when it cannot.
 pub fn load(dir: &Path) -> Result<Pack, PackError> {
+    load_with(dir, astc_on_gpu())
+}
+
+/// [`load`], with `keep_astc` saying whether ASTC textures stay compressed.
+pub fn load_with(dir: &Path, keep_astc: bool) -> Result<Pack, PackError> {
     let manifest = read_manifest(dir)?;
     let mesh_path = dir.join(&manifest.mesh.file);
     let bytes = read_capped(&mesh_path, manifest.mesh_len(), "mesh")?;
     let (vertices, indices) = parse_mesh(&bytes, &manifest)?;
     drop(bytes);
-    let t = &manifest.textures;
-    let decode = |name: &String| decode_png(&dir.join(name), t.size);
-    let house = decode(&t.house)?;
-    let dark = decode(&t.dark)?;
-    let basis = t.basis.iter().map(decode).collect::<Result<Vec<_>, _>>()?;
+    let (colors, basis, path) = if manifest.format == 1 {
+        load_png_textures(dir, &manifest)?
+    } else {
+        load_ktx2_textures(dir, &manifest, keep_astc)?
+    };
     let baked = Baked {
         vertices,
         indices,
-        size: t.size,
-        house,
-        dark,
+        colors,
         basis,
         basis_gain: manifest.basis_gain,
     };
-    Ok(Pack { manifest, baked })
+    Ok(Pack {
+        manifest,
+        baked,
+        path,
+    })
+}
+
+/// Format 1: PNGs, one level each.
+fn load_png_textures(
+    dir: &Path,
+    manifest: &Manifest,
+) -> Result<(TextureArray, TextureArray, TexturePath), PackError> {
+    let t = &manifest.textures;
+    let decode = |name: &String| decode_png(&dir.join(name), t.size).map(|texels| vec![texels]);
+    let colors = vec![decode(&t.house)?, decode(&t.dark)?];
+    let basis = t.basis.iter().map(decode).collect::<Result<Vec<_>, _>>()?;
+    let array = |size, layers| TextureArray {
+        size,
+        encoding: Encoding::Rgba8,
+        layers,
+    };
+    Ok((
+        array(t.size, colors),
+        array(manifest.basis_size(), basis),
+        TexturePath::Png,
+    ))
+}
+
+/// A format 2 texture file read and checked.
+struct Texture {
+    name: String,
+    file_len: u64,
+    header: ktx2::Header,
+    levels: Vec<Vec<u8>>,
+}
+
+/// Checks that the textures of one kind agree in format (and are the sRGB
+/// ones where `srgb`, UNORM where not, when they are ASTC), and says which
+/// format that is.
+fn same_format(
+    kind: &str,
+    files: &[(&str, &ktx2::Header)],
+    srgb: bool,
+) -> Result<Encoding, PackError> {
+    let (first_name, first) = files[0];
+    for (name, h) in files {
+        if (h.encoding, h.srgb) != (first.encoding, first.srgb) {
+            return bad(format!(
+                "textures {first_name} and {name} are not in the same format"
+            ));
+        }
+    }
+    if matches!(first.encoding, Encoding::Astc { .. }) && first.srgb != srgb {
+        let (want, got) = if srgb {
+            ("sRGB", "UNORM")
+        } else {
+            ("UNORM", "sRGB")
+        };
+        return bad(format!(
+            "{kind} texture {first_name} is ASTC {got} ({want} wanted)"
+        ));
+    }
+    Ok(first.encoding)
+}
+
+/// Reads one texture file whole: capped, then every limit of [`ktx2::parse`].
+fn read_texture(dir: &Path, name: &str, size: u32) -> Result<Texture, PackError> {
+    let path = dir.join(name);
+    let bytes = read_capped(&path, MAX_TEXTURE_BYTES, "texture")?;
+    let head = &bytes[..bytes.len().min(ktx2::HEAD_BYTES)];
+    let header = ktx2::parse(head, bytes.len() as u64, size)
+        .map_err(|e| PackError(format!("texture {name} {e}")))?;
+    let levels = ktx2::level_bytes(&bytes, &header);
+    Ok(Texture {
+        name: name.to_owned(),
+        file_len: bytes.len() as u64,
+        header,
+        levels,
+    })
+}
+
+/// Format 2: KTX2 files with their mips. ASTC ones are decoded (on all the
+/// cores there are) unless `keep_astc`.
+fn load_ktx2_textures(
+    dir: &Path,
+    manifest: &Manifest,
+    keep_astc: bool,
+) -> Result<(TextureArray, TextureArray, TexturePath), PackError> {
+    let t = &manifest.textures;
+    let (size, basis_size) = (t.size, manifest.basis_size());
+    let mut colors = Vec::new();
+    for name in [&t.house, &t.dark] {
+        colors.push(read_texture(dir, name, size)?);
+    }
+    let mut basis = Vec::new();
+    for name in &t.basis {
+        basis.push(read_texture(dir, name, basis_size)?);
+    }
+    let total: u64 = colors.iter().chain(&basis).map(|x| x.file_len).sum();
+    if t.bytes != Some(total) {
+        return bad(format!(
+            "textures are {total} bytes, the manifest says {:?}",
+            t.bytes
+        ));
+    }
+    let color_format = same_format(
+        "house and dark",
+        &colors
+            .iter()
+            .map(|x| (x.name.as_str(), &x.header))
+            .collect::<Vec<_>>(),
+        true,
+    )?;
+    let basis_format = same_format(
+        "basis",
+        &basis
+            .iter()
+            .map(|x| (x.name.as_str(), &x.header))
+            .collect::<Vec<_>>(),
+        false,
+    )?;
+    let compressed = [color_format, basis_format]
+        .iter()
+        .any(|e| matches!(e, Encoding::Astc { .. }));
+    let decode = compressed && !keep_astc;
+    let start = Instant::now();
+    let mut all: Vec<Texture> = colors.into_iter().chain(basis).collect();
+    if decode {
+        decode_textures(&mut all)?;
+    }
+    let path = if decode {
+        TexturePath::AstcDecoded {
+            ms: start.elapsed().as_secs_f64() * 1e3,
+        }
+    } else if compressed {
+        TexturePath::AstcOnGpu
+    } else {
+        TexturePath::Rgba
+    };
+    let basis = all.split_off(2);
+    let array = |size: u32, encoding: Encoding, textures: Vec<Texture>| TextureArray {
+        size,
+        encoding: if decode { Encoding::Rgba8 } else { encoding },
+        layers: textures.into_iter().map(|x| x.levels).collect(),
+    };
+    Ok((
+        array(size, color_format, all),
+        array(basis_size, basis_format, basis),
+        path,
+    ))
+}
+
+/// Decodes every ASTC texture in `textures` to RGBA8, level by level, spread
+/// over the available cores.
+fn decode_textures(textures: &mut [Texture]) -> Result<(), PackError> {
+    let jobs: Vec<usize> = (0..textures.len()).collect();
+    let results = par_map(&jobs, |&i| {
+        let x = &textures[i];
+        let Encoding::Astc { block } = x.header.encoding else {
+            return Ok(None);
+        };
+        let mut levels = Vec::with_capacity(x.levels.len());
+        let mut bad_blocks = 0;
+        for (n, data) in x.levels.iter().enumerate() {
+            let edge = (x.header.size >> n).max(1);
+            let (texels, bad) = ktx2::decode_astc(data, edge, edge, block)
+                .map_err(|e| PackError(format!("texture {} level {n}: {e}", x.name)))?;
+            bad_blocks += bad;
+            levels.push(texels);
+        }
+        if bad_blocks > 0 {
+            log::warn!(
+                "place texture {} has {bad_blocks} blocks that are not valid ASTC",
+                x.name
+            );
+        }
+        Ok(Some(levels))
+    });
+    for (x, decoded) in textures.iter_mut().zip(results) {
+        if let Some(levels) = decoded? {
+            x.levels = levels;
+        }
+    }
+    Ok(())
+}
+
+/// `f` over `items`, on up to eight threads (this one among them), results in
+/// order.
+fn par_map<T: Sync, R: Send>(
+    items: &[T],
+    f: impl Fn(&T) -> Result<R, PackError> + Sync,
+) -> Vec<Result<R, PackError>> {
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<Result<R, PackError>>>> =
+        items.iter().map(|_| Mutex::new(None)).collect();
+    let work = || {
+        loop {
+            let i = next.fetch_add(1, Ordering::Relaxed);
+            let Some(item) = items.get(i) else { break };
+            *fp_core::sync::lock(&slots[i]) = Some(f(item));
+        }
+    };
+    let helpers = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, 8)
+        .min(items.len())
+        .saturating_sub(1);
+    std::thread::scope(|s| {
+        for _ in 0..helpers {
+            // No thread to be had: the others (and this one) do the work.
+            let _ = std::thread::Builder::new()
+                .name("place-decode".into())
+                .spawn_scoped(s, work);
+        }
+        work();
+    });
+    slots
+        .into_iter()
+        .map(|m| {
+            m.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(|| bad("a texture was not decoded"))
+        })
+        .collect()
 }
 
 /// What [`scan`] needs of a pack to offer it: the manifest is sound and the
-/// files are there at the sizes it names. The pixels are not read.
+/// files are there at the sizes it names. The pixels are not read; a format
+/// 2 pack's texture headers and level tables are.
 fn preflight(dir: &Path, m: &Manifest) -> Result<(), PackError> {
     let mesh = dir.join(&m.mesh.file);
     let len = std::fs::metadata(&mesh)
@@ -526,6 +882,9 @@ fn preflight(dir: &Path, m: &Manifest) -> Result<(), PackError> {
             m.mesh_len()
         ));
     }
+    if m.format >= 2 {
+        return preflight_ktx2(dir, m);
+    }
     for name in m.texture_files() {
         let path = dir.join(name);
         let (w, h) = png_size(&path)?;
@@ -533,6 +892,45 @@ fn preflight(dir: &Path, m: &Manifest) -> Result<(), PackError> {
             return bad(format!("texture {name} is {w} x {h}"));
         }
     }
+    Ok(())
+}
+
+fn preflight_ktx2(dir: &Path, m: &Manifest) -> Result<(), PackError> {
+    let t = &m.textures;
+    let mut total = 0u64;
+    let mut headers = Vec::new();
+    for (i, name) in m.texture_files().enumerate() {
+        let path = dir.join(name);
+        let len = std::fs::metadata(&path)
+            .map_err(|e| io("texture", &path, &e))?
+            .len();
+        if len > MAX_TEXTURE_BYTES {
+            return bad(format!("texture {name} is {len} bytes"));
+        }
+        let mut head = Vec::new();
+        File::open(&path)
+            .and_then(|f| f.take(ktx2::HEAD_BYTES as u64).read_to_end(&mut head))
+            .map_err(|e| io("texture", &path, &e))?;
+        let size = if i < 2 { t.size } else { m.basis_size() };
+        let header =
+            ktx2::parse(&head, len, size).map_err(|e| PackError(format!("texture {name} {e}")))?;
+        headers.push((name.as_str(), header));
+        total += len;
+    }
+    if t.bytes != Some(total) {
+        return bad(format!(
+            "textures are {total} bytes, the manifest says {:?}",
+            t.bytes
+        ));
+    }
+    let refs = |range: Range<usize>| {
+        headers[range]
+            .iter()
+            .map(|(n, h)| (*n, h))
+            .collect::<Vec<_>>()
+    };
+    same_format("house and dark", &refs(0..2), true)?;
+    same_format("basis", &refs(2..headers.len()), false)?;
     Ok(())
 }
 
@@ -671,11 +1069,17 @@ pub fn load_replacement(place: Place) -> Option<PlaceData> {
     let r = replacement(place)?;
     match load(&r.dir) {
         Ok(pack) => {
+            let b = &pack.baked;
             log::info!(
-                "loaded place pack {}: {} triangles, {} px textures",
+                "loaded place pack {} (format {}): {} triangles; textures {} \
+                 ({} px colours, {} px basis, {:.1} MB)",
                 r.manifest.id,
-                pack.baked.indices.len() / 3,
-                pack.baked.size
+                r.manifest.format,
+                b.indices.len() / 3,
+                pack.path,
+                b.colors.size,
+                b.basis.size,
+                (b.colors.gpu_bytes() + b.basis.gpu_bytes()) as f64 / (1 << 20) as f64
             );
             Some(pack.into_place_data())
         }
@@ -792,14 +1196,17 @@ mod tests {
         let pack = load(&dir).expect("loads");
         assert_eq!(pack.manifest.id, "cinema-v2");
         let b = &pack.baked;
-        assert_eq!((b.vertices.len(), b.indices.len(), b.size), (5, 12, 4));
+        assert_eq!(
+            (b.vertices.len(), b.indices.len(), b.colors.size),
+            (5, 12, 4)
+        );
         assert_eq!(b.vertices[4].pos, [0.0, 1.0, -3.0]);
         assert_eq!(b.indices, INDICES);
-        assert_eq!(b.house.len(), 4 * 4 * 4);
-        assert_eq!(&b.house[..4], &[200, 120, 40, 255]);
-        assert_eq!(b.basis.len(), BASIS);
-        assert_eq!(&b.basis[0][..4], &[255, 255, 255, 255]);
-        assert_eq!(&b.basis[3][..4], &[0, 0, 0, 255]);
+        assert_eq!(b.colors.layers[0][0].len(), 4 * 4 * 4);
+        assert_eq!(&b.colors.layers[0][0][..4], &[200, 120, 40, 255]);
+        assert_eq!(b.basis.layers.len(), BASIS);
+        assert_eq!(&b.basis.layers[0][0][..4], &[255, 255, 255, 255]);
+        assert_eq!(&b.basis.layers[3][0][..4], &[0, 0, 0, 255]);
         let layout = pack.manifest.layout();
         assert_eq!(layout.seats.len(), 3);
         assert_eq!(layout.seats[2].name, SeatName::Back);
@@ -823,7 +1230,7 @@ mod tests {
             .write_image_data(&data)
             .expect("data");
         let pack = load(&dir).expect("loads");
-        assert_eq!(&pack.baked.dark[..4], &[9, 8, 7, 255]);
+        assert_eq!(&pack.baked.colors.layers[1][0][..4], &[9, 8, 7, 255]);
     }
 
     #[test]
@@ -957,7 +1364,7 @@ mod tests {
             "[]".into(),
             "null".into(),
             "{\"format\": 1}".into(),
-            good.replace("\"format\": 1", "\"format\": 2"),
+            good.replace("\"format\": 1", "\"format\": 3"),
             good.replace("cinema-v2", "Cinema V2"),
             good.replace("cinema-v2", ""),
             good.replace("\"front\"", "\"couch\""),
@@ -1066,5 +1473,409 @@ mod tests {
     #[test]
     fn the_basis_count_is_the_screens_patch_count() {
         assert_eq!(BASIS, super::super::light::PATCHES);
+    }
+
+    // ---- Format 2: KTX2 textures, ASTC or plain ----
+
+    const HOUSE: [u8; 4] = [200, 120, 40, 255];
+    const DARK: [u8; 4] = [10, 20, 30, 255];
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+    const BLACK: [u8; 4] = [0, 0, 0, 255];
+    /// The format 2 fixture's sizes: the colours 16 texels square, the basis
+    /// 8, ASTC 4 x 4 for the colours and 6 x 6 for the basis.
+    const COLOR_SIZE: u32 = 16;
+    const BASIS_SIZE: u32 = 8;
+
+    /// A texture file of one colour: ASTC blocks of `block` (sRGB or not),
+    /// or, with no block, RGBA8 in `vk_format`.
+    fn solid(
+        size: u32,
+        format: Option<((u32, u32), bool)>,
+        vk_format: u32,
+        rgba: [u8; 4],
+    ) -> Vec<u8> {
+        let (encoding, vk) = match format {
+            Some((block, srgb)) => (
+                Encoding::Astc { block },
+                ktx2::astc_vk_format(block, srgb).unwrap(),
+            ),
+            None => (Encoding::Rgba8, vk_format),
+        };
+        let levels: Vec<Vec<u8>> = (0..ktx2::full_chain(size))
+            .map(|i| {
+                let edge = (size >> i).max(1);
+                match encoding {
+                    Encoding::Rgba8 => (0..edge * edge).flat_map(|_| rgba).collect(),
+                    Encoding::Astc { .. } => {
+                        let blocks = encoding.level_bytes(edge, edge) / 16;
+                        (0..blocks).flat_map(|_| ktx2::void_block(rgba)).collect()
+                    }
+                }
+            })
+            .collect();
+        ktx2::build(vk, size, &levels)
+    }
+
+    fn manifest2_json(id: &str, bytes: u64) -> String {
+        let basis: Vec<String> = (0..8).map(|i| format!("\"basis{i}.ktx2\"")).collect();
+        format!(
+            r#"{{
+  "format": 2, "id": "{id}", "name": "Test", "version": "1",
+  "screen": {{ "centre": [0.0, 3.5, 0.0], "max": [9.0, 3.8] }},
+  "seats": [ {{ "name": "middle", "eye": [0, 3.2, 9.0] }} ],
+  "mesh": {{ "file": "mesh.bin", "vertices": 5, "triangles": 4 }},
+  "textures": {{ "size": {COLOR_SIZE}, "basis_size": {BASIS_SIZE}, "bytes": {bytes},
+                 "house": "house.ktx2", "dark": "dark.ktx2", "basis": [{}] }},
+  "basis_gain": 1.0
+}}"#,
+            basis.join(", ")
+        )
+    }
+
+    /// Rewrites `manifest.json` with the bytes the texture files add up to.
+    fn fix_bytes(dir: &Path, id: &str) {
+        let mut total = 0;
+        for name in [
+            "house", "dark", "basis0", "basis1", "basis2", "basis3", "basis4", "basis5", "basis6",
+            "basis7",
+        ] {
+            total += std::fs::metadata(dir.join(format!("{name}.ktx2"))).map_or(0, |m| m.len());
+        }
+        std::fs::write(dir.join("manifest.json"), manifest2_json(id, total)).expect("manifest");
+    }
+
+    fn write_fixture2(dir: &Path, id: &str) {
+        std::fs::create_dir_all(dir).expect("pack dir");
+        std::fs::write(dir.join("mesh.bin"), mesh_bytes(&VERTICES, &INDICES)).expect("mesh");
+        let colour = Some(((4, 4), true));
+        let light = Some(((6, 6), false));
+        std::fs::write(dir.join("house.ktx2"), solid(COLOR_SIZE, colour, 0, HOUSE)).unwrap();
+        std::fs::write(dir.join("dark.ktx2"), solid(COLOR_SIZE, colour, 0, DARK)).unwrap();
+        for i in 0..8 {
+            let rgba = if i == 0 { WHITE } else { BLACK };
+            std::fs::write(
+                dir.join(format!("basis{i}.ktx2")),
+                solid(BASIS_SIZE, light, 0, rgba),
+            )
+            .unwrap();
+        }
+        fix_bytes(dir, id);
+    }
+
+    fn fixture2(name: &str) -> PathBuf {
+        let dir = temp(name);
+        write_fixture2(&dir, "cinema-v2");
+        dir
+    }
+
+    fn refused_with(dir: &Path, keep_astc: bool) -> String {
+        match load_with(dir, keep_astc) {
+            Ok(_) => panic!("the pack was accepted"),
+            Err(e) => e.0,
+        }
+    }
+
+    #[test]
+    fn a_format_2_pack_is_decoded_on_the_cpu_when_the_device_cannot_sample_astc() {
+        let dir = fixture2("f2cpu");
+        let pack = load_with(&dir, false).expect("loads");
+        assert_eq!(pack.manifest.format, 2);
+        assert!(matches!(pack.path, TexturePath::AstcDecoded { .. }));
+        let b = &pack.baked;
+        assert_eq!((b.colors.size, b.basis.size), (COLOR_SIZE, BASIS_SIZE));
+        assert_eq!(
+            (b.colors.encoding, b.basis.encoding),
+            (Encoding::Rgba8, Encoding::Rgba8)
+        );
+        assert_eq!((b.colors.layers.len(), b.basis.layers.len()), (2, BASIS));
+        // Every level is there, at its own size, the colour the file had.
+        assert_eq!((b.colors.levels(), b.basis.levels()), (5, 4));
+        for (layer, want) in [(0, HOUSE), (1, DARK)] {
+            for (mip, level) in b.colors.layers[layer].iter().enumerate() {
+                let edge = (COLOR_SIZE as usize >> mip).max(1);
+                assert_eq!(level.len(), edge * edge * 4);
+                assert!(
+                    level.chunks_exact(4).all(|p| p == want),
+                    "layer {layer} level {mip}"
+                );
+            }
+        }
+        assert_eq!(&b.basis.layers[0][3], &WHITE);
+        assert_eq!(&b.basis.layers[5][0][..4], &BLACK);
+        assert_eq!(b.basis.layers[5][0].len(), 8 * 8 * 4);
+    }
+
+    #[test]
+    fn a_format_2_pack_keeps_its_astc_blocks_when_the_device_can_sample_them() {
+        let dir = fixture2("f2gpu");
+        let pack = load_with(&dir, true).expect("loads");
+        assert_eq!(pack.path, TexturePath::AstcOnGpu);
+        let b = &pack.baked;
+        assert_eq!(b.colors.encoding, Encoding::Astc { block: (4, 4) });
+        assert_eq!(b.basis.encoding, Encoding::Astc { block: (6, 6) });
+        // 16 -> 4 x 4 blocks, then 2 x 2, 1, 1, 1; 8 (6 x 6 blocks) -> 2 x 2, 1, 1, 1.
+        let lens: Vec<usize> = b.colors.layers[0].iter().map(Vec::len).collect();
+        assert_eq!(lens, [256, 64, 16, 16, 16]);
+        let lens: Vec<usize> = b.basis.layers[0].iter().map(Vec::len).collect();
+        assert_eq!(lens, [64, 16, 16, 16]);
+        assert_eq!(b.colors.layers[0][4], ktx2::void_block(HOUSE));
+        // The texture MB the log reports: all of it, nothing made up.
+        assert_eq!(b.colors.gpu_bytes(), 2 * (256 + 64 + 48));
+        assert_eq!(b.basis.gpu_bytes(), 8 * (64 + 48));
+    }
+
+    #[test]
+    fn the_cpu_path_and_the_gpu_path_hold_the_same_picture() {
+        let dir = fixture2("f2same");
+        let kept = load_with(&dir, true).expect("kept");
+        let decoded = load_with(&dir, false).expect("decoded");
+        let Encoding::Astc { block } = kept.baked.colors.encoding else {
+            panic!("not kept as ASTC");
+        };
+        for (l, layer) in kept.baked.colors.layers.iter().enumerate() {
+            for (m, level) in layer.iter().enumerate() {
+                let edge = (COLOR_SIZE >> m).max(1);
+                let (texels, bad) = ktx2::decode_astc(level, edge, edge, block).unwrap();
+                assert_eq!(bad, 0);
+                assert_eq!(texels, decoded.baked.colors.layers[l][m]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_format_2_pack_of_plain_rgba_textures_loads_whatever_the_device() {
+        let dir = temp("f2rgba");
+        write_fixture2(&dir, "cinema-v2");
+        let plain = |size, rgba| solid(size, None, 43, rgba);
+        std::fs::write(dir.join("house.ktx2"), plain(COLOR_SIZE, HOUSE)).unwrap();
+        std::fs::write(dir.join("dark.ktx2"), plain(COLOR_SIZE, DARK)).unwrap();
+        for i in 0..8 {
+            // UNORM, for the basis.
+            std::fs::write(
+                dir.join(format!("basis{i}.ktx2")),
+                solid(BASIS_SIZE, None, 37, if i == 0 { WHITE } else { BLACK }),
+            )
+            .unwrap();
+        }
+        fix_bytes(&dir, "cinema-v2");
+        for keep in [true, false] {
+            let pack = load_with(&dir, keep).expect("loads");
+            assert_eq!(pack.path, TexturePath::Rgba);
+            assert_eq!(pack.baked.colors.levels(), 5);
+            assert_eq!(&pack.baked.colors.layers[0][4], &HOUSE);
+            assert_eq!(&pack.baked.basis.layers[0][0][..4], &WHITE);
+        }
+        // Colours ASTC, the basis plain: each array in its own format.
+        std::fs::write(
+            dir.join("house.ktx2"),
+            solid(COLOR_SIZE, Some(((8, 8), true)), 0, HOUSE),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("dark.ktx2"),
+            solid(COLOR_SIZE, Some(((8, 8), true)), 0, DARK),
+        )
+        .unwrap();
+        fix_bytes(&dir, "cinema-v2");
+        let pack = load_with(&dir, true).expect("loads");
+        assert_eq!(pack.baked.colors.encoding, Encoding::Astc { block: (8, 8) });
+        assert_eq!(pack.baked.basis.encoding, Encoding::Rgba8);
+    }
+
+    #[test]
+    fn a_format_2_pack_that_breaks_a_limit_is_refused_on_either_path() {
+        let id = "cinema-v2";
+        let colour = Some(((4, 4), true));
+        let light = Some(((6, 6), false));
+        let write = |dir: &Path, name: &str, bytes: Vec<u8>| {
+            std::fs::write(dir.join(name), bytes).unwrap();
+            fix_bytes(dir, id);
+        };
+        for keep in [false, true] {
+            let case = |what: &str| fixture2(&format!("f2bad-{what}-{keep}"));
+            // The sum of the files is not what the manifest says.
+            let dir = case("bytes");
+            let json = std::fs::read_to_string(dir.join("manifest.json")).unwrap();
+            let total: u64 = json
+                .split("\"bytes\": ")
+                .nth(1)
+                .and_then(|r| r.split(',').next())
+                .and_then(|n| n.parse().ok())
+                .expect("bytes");
+            std::fs::write(dir.join("manifest.json"), manifest2_json(id, total + 1)).unwrap();
+            assert!(refused_with(&dir, keep).contains("bytes"), "{keep}");
+            // Over the budget (a manifest that says so is refused unread).
+            std::fs::write(
+                dir.join("manifest.json"),
+                manifest2_json(id, MAX_TEXTURE_BYTES + 1),
+            )
+            .unwrap();
+            assert!(refused_with(&dir, keep).contains("at most"));
+            // House and dark not alike.
+            let dir = case("alike");
+            write(
+                &dir,
+                "dark.ktx2",
+                solid(COLOR_SIZE, Some(((5, 5), true)), 0, DARK),
+            );
+            assert!(refused_with(&dir, keep).contains("same format"));
+            let dir = case("alike2");
+            write(
+                &dir,
+                "basis4.ktx2",
+                solid(BASIS_SIZE, Some(((8, 8), false)), 0, BLACK),
+            );
+            assert!(refused_with(&dir, keep).contains("same format"));
+            // ASTC the wrong way round: UNORM colours, sRGB basis.
+            let dir = case("unorm");
+            write(
+                &dir,
+                "house.ktx2",
+                solid(COLOR_SIZE, Some(((4, 4), false)), 0, HOUSE),
+            );
+            write(
+                &dir,
+                "dark.ktx2",
+                solid(COLOR_SIZE, Some(((4, 4), false)), 0, DARK),
+            );
+            assert!(refused_with(&dir, keep).contains("sRGB wanted"));
+            let dir = case("srgb");
+            for i in 0..8 {
+                write(
+                    &dir,
+                    &format!("basis{i}.ktx2"),
+                    solid(BASIS_SIZE, Some(((6, 6), true)), 0, BLACK),
+                );
+            }
+            assert!(refused_with(&dir, keep).contains("UNORM wanted"));
+            // A texture of the other size, or not a texture at all.
+            let dir = case("size");
+            write(&dir, "basis2.ktx2", solid(COLOR_SIZE, light, 0, BLACK));
+            assert!(refused_with(&dir, keep).contains("basis2.ktx2"));
+            let dir = case("notktx");
+            write(
+                &dir,
+                "house.ktx2",
+                b"hello, not a texture at all, no".to_vec(),
+            );
+            assert!(refused_with(&dir, keep).contains("house.ktx2"));
+            let dir = case("empty");
+            write(&dir, "dark.ktx2", Vec::new());
+            assert!(refused_with(&dir, keep).contains("dark.ktx2"));
+            let dir = case("gone");
+            std::fs::remove_file(dir.join("basis7.ktx2")).unwrap();
+            assert!(refused_with(&dir, keep).contains("basis7.ktx2"));
+            // Cut short: the last level runs off the end.
+            let dir = case("cut");
+            let whole = solid(COLOR_SIZE, colour, 0, HOUSE);
+            write(&dir, "house.ktx2", whole[..whole.len() - 1].to_vec());
+            assert!(refused_with(&dir, keep).contains("house.ktx2"));
+            // Supercompressed; a format packs do not use; no mips.
+            let dir = case("zstd");
+            let mut bytes = solid(COLOR_SIZE, colour, 0, HOUSE);
+            bytes[44..48].copy_from_slice(&2u32.to_le_bytes());
+            write(&dir, "house.ktx2", bytes);
+            assert!(refused_with(&dir, keep).contains("supercompressed"));
+            let dir = case("format");
+            write(&dir, "house.ktx2", solid(COLOR_SIZE, None, 100, HOUSE));
+            assert!(refused_with(&dir, keep).contains("vkFormat 100"));
+            let dir = case("mips");
+            let mut bytes = solid(COLOR_SIZE, colour, 0, HOUSE);
+            bytes[40..44].copy_from_slice(&1u32.to_le_bytes());
+            write(&dir, "house.ktx2", bytes);
+            assert!(refused_with(&dir, keep).contains("full chain"));
+        }
+    }
+
+    #[test]
+    fn a_format_2_manifest_must_say_its_sizes_and_stay_within_them() {
+        let dir = fixture2("f2manifest");
+        let good = std::fs::read_to_string(dir.join("manifest.json")).unwrap();
+        let cases = [
+            good.replace("\"basis_size\": 8, ", ""),
+            good.replace("\"basis_size\": 8", "\"basis_size\": 32"),
+            good.replace("\"basis_size\": 8", "\"basis_size\": 6"),
+            good.replace("\"basis_size\": 8", "\"basis_size\": 0"),
+            good.replace("\"size\": 16", "\"size\": 8192"),
+            good.replace("\"bytes\": ", "\"bytes_\": "),
+            good.replace("\"format\": 2", "\"format\": 0"),
+            good.replace("\"format\": 2", "\"format\": 3"),
+        ];
+        for (i, json) in cases.iter().enumerate() {
+            std::fs::write(dir.join("manifest.json"), json).unwrap();
+            assert!(
+                load_with(&dir, false).is_err(),
+                "case {i} was accepted: {json}"
+            );
+        }
+        // The same manifest is fine as it was.
+        std::fs::write(dir.join("manifest.json"), &good).unwrap();
+        assert!(load_with(&dir, false).is_ok());
+        // Format 1 ignores the format 2 fields.
+        let dir = fixture("f1extra", "cinema-v2");
+        let json = manifest_json("cinema-v2", 4).replace(
+            "\"size\": 4,",
+            "\"size\": 4, \"basis_size\": 2, \"bytes\": 7,",
+        );
+        std::fs::write(dir.join("manifest.json"), json).unwrap();
+        let pack = load(&dir).expect("loads");
+        assert_eq!((pack.baked.basis.size, pack.path), (4, TexturePath::Png));
+    }
+
+    #[test]
+    fn a_format_1_pack_still_loads_as_one_level_per_texture() {
+        let dir = fixture("f1", "cinema-v2");
+        let pack = load_with(&dir, true).expect("loads");
+        assert_eq!(pack.path, TexturePath::Png);
+        let b = &pack.baked;
+        assert_eq!((b.colors.levels(), b.basis.levels()), (1, 1));
+        assert_eq!(b.colors.encoding, Encoding::Rgba8);
+        // The GPU makes the other levels: 4 x 4 + 2 x 2 + 1 texels, about.
+        assert_eq!(b.colors.gpu_bytes(), 2 * (64 + 64 / 3));
+    }
+
+    #[test]
+    fn scan_offers_a_good_format_2_pack_and_leaves_out_a_broken_one() {
+        let root = temp("f2scan");
+        write_fixture2(&root.join("cinema-v2"), "cinema-v2");
+        write_fixture2(&root.join("cinema-v3"), "cinema-v3");
+        // Newer but broken in three ways, each caught without reading pixels.
+        let broken = |name: &str| {
+            write_fixture2(&root.join(name), name);
+            root.join(name)
+        };
+        let dir = broken("cinema-v4");
+        std::fs::write(dir.join("house.ktx2"), b"nope").unwrap();
+        let dir = broken("cinema-v5");
+        let mut bytes = solid(COLOR_SIZE, Some(((4, 4), true)), 0, DARK);
+        bytes[44..48].copy_from_slice(&1u32.to_le_bytes());
+        std::fs::write(dir.join("dark.ktx2"), bytes).unwrap();
+        let dir = broken("cinema-v6");
+        std::fs::write(
+            dir.join("basis1.ktx2"),
+            solid(BASIS_SIZE, Some(((6, 6), true)), 0, BLACK),
+        )
+        .unwrap();
+        // The sizes of the files no longer add up to the manifest's bytes.
+        let dir = broken("cinema-v7");
+        std::fs::write(
+            dir.join("basis1.ktx2"),
+            solid(BASIS_SIZE, Some(((8, 8), false)), 0, BLACK),
+        )
+        .unwrap();
+        let found = scan(&root);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[&Place::Cinema].manifest.id, "cinema-v3");
+        assert_eq!(found[&Place::Cinema].manifest.format, 2);
+    }
+
+    #[test]
+    fn the_log_names_the_path_taken() {
+        assert_eq!(TexturePath::Png.to_string(), "PNG");
+        assert_eq!(TexturePath::AstcOnGpu.to_string(), "ASTC on the GPU");
+        assert_eq!(
+            TexturePath::AstcDecoded { ms: 1234.4 }.to_string(),
+            "ASTC decoded on the CPU in 1234 ms"
+        );
     }
 }

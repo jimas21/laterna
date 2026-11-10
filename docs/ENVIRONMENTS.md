@@ -248,6 +248,25 @@ for now: they are copied by hand, and nothing downloads or signs them yet.
   of two up to 4096 pixels across; every number a real number; every file the
   size its counts say. A pack that breaks one is not used: the app writes a
   warning to its log and shows the built-in room.
+- **Format 1 and format 2.** Format 1 (`"format": 1`) is the PNG pack above.
+  Format 2 is the same pack made small enough to ship: the textures are KTX2
+  files (`house.ktx2`, `dark.ktx2`, `basis0.ktx2` to `basis7.ktx2`), each with
+  all its smaller sizes already made, compressed as ASTC. The manifest adds
+  `textures.basis_size` (the eight light pictures may be smaller than the room
+  pictures) and `textures.bytes` (the files' sizes added up, at most 32 MiB; it
+  must match). A pack can be written in either format, and both are read.
+  What a format 2 file must be: one 2D picture, not compressed again (no
+  zstd), a full set of smaller sizes down to one texel, every size exactly the
+  bytes its texels need. The room pictures are all one ASTC sRGB format, the
+  light pictures all one ASTC UNORM format, any block size from 4x4 to 12x12;
+  plain RGBA8 files are also accepted. A file that breaks this is not used.
+- **How it reaches the screen.** If the device can sample ASTC, the blocks go
+  to the GPU as they are. If not (the desktop preview on software Vulkan, for
+  instance) the app decodes them to plain pixels once, while it builds the
+  place on its worker thread, so the picture never stalls. The decode is
+  within a level or so of the GPU's own. `FRAMEPLAYERX_ASTC=0` forces the
+  decode path on any device. The log says which path was taken, the sizes and
+  how much texture memory the place uses.
 - **In the code.** `fp-render`'s `env::pack` reads and checks a pack on the
   place builder's worker thread; `env_baked` uploads the textures; the shader
   is `env_baked.wgsl`.

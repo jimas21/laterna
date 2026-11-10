@@ -819,6 +819,27 @@ fn msaa_smooths_a_room_edge() {
 
 // ---- Place packs: baked rooms (a mesh and an atlas of baked light) ----
 
+/// `mesh.bin` of the wall the test packs hold: an 8 m square 2 m in front of
+/// the viewer.
+fn write_wall_mesh(dir: &std::path::Path) {
+    let corners = [
+        [-4.0f32, -4.0, -2.0, 0.0, 1.0],
+        [4.0, -4.0, -2.0, 1.0, 1.0],
+        [4.0, 4.0, -2.0, 1.0, 0.0],
+        [-4.0, 4.0, -2.0, 0.0, 0.0],
+    ];
+    let mut mesh = b"LPM1".to_vec();
+    mesh.extend(4u32.to_le_bytes());
+    mesh.extend(6u32.to_le_bytes());
+    for f in corners.iter().flatten() {
+        mesh.extend(f.to_le_bytes());
+    }
+    for i in [0u32, 1, 2, 0, 2, 3] {
+        mesh.extend(i.to_le_bytes());
+    }
+    std::fs::write(dir.join("mesh.bin"), mesh).expect("mesh");
+}
+
 /// A pack folder holding one wall, an 8 m square 2 m in front of the viewer
 /// at the origin: its house texture `house`, its lights-off texture `dark`,
 /// the light of patch 0 white and the other seven patches black. All the
@@ -844,22 +865,7 @@ fn wall_pack(name: &str, house: [u8; 3], dark: [u8; 3]) -> std::path::PathBuf {
     for i in 0..8 {
         png(&format!("basis{i}.png"), [255 * u8::from(i == 0); 3]);
     }
-    let corners = [
-        [-4.0f32, -4.0, -2.0, 0.0, 1.0],
-        [4.0, -4.0, -2.0, 1.0, 1.0],
-        [4.0, 4.0, -2.0, 1.0, 0.0],
-        [-4.0, 4.0, -2.0, 0.0, 0.0],
-    ];
-    let mut mesh = b"LPM1".to_vec();
-    mesh.extend(4u32.to_le_bytes());
-    mesh.extend(6u32.to_le_bytes());
-    for f in corners.iter().flatten() {
-        mesh.extend(f.to_le_bytes());
-    }
-    for i in [0u32, 1, 2, 0, 2, 3] {
-        mesh.extend(i.to_le_bytes());
-    }
-    std::fs::write(dir.join("mesh.bin"), mesh).expect("mesh");
+    write_wall_mesh(&dir);
     let basis: Vec<String> = (0..8).map(|i| format!("\"basis{i}.png\"")).collect();
     let manifest = format!(
         r#"{{ "format": 1, "id": "cinema-v2", "name": "Cinema", "version": "test",
@@ -1011,5 +1017,146 @@ fn a_baked_place_replaced_by_another_shows_the_new_one() {
     load_wall(&mut r, "third", [20, 200, 20], [0; 3]);
     let third = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
     assert!(third[1] > 150 && third[0] < 80, "{third:?}");
+    e.destroy(&r);
+}
+
+// ---- Place packs, format 2: KTX2 textures, ASTC compressed ----
+
+/// One ASTC block that is one colour (a void-extent block).
+fn void_block(rgba: [u8; 4]) -> [u8; 16] {
+    let mut bits: u128 = 0x1FC | (0b11 << 10);
+    bits |= ((1u128 << 52) - 1) << 12;
+    for (k, c) in rgba.iter().enumerate() {
+        bits |= u128::from(u16::from(*c) * 257) << (64 + 16 * k);
+    }
+    bits.to_le_bytes()
+}
+
+/// A KTX2 file: `size` texels square, ASTC 4 x 4, one colour, a full mip
+/// chain (levels stored smallest first, as the format says).
+fn ktx2_solid(size: u32, srgb: bool, rgba: [u8; 4]) -> Vec<u8> {
+    let levels: Vec<Vec<u8>> = (0..=size.ilog2())
+        .map(|i| {
+            let blocks = (size >> i).max(1).div_ceil(4).pow(2);
+            (0..blocks).flat_map(|_| void_block(rgba)).collect()
+        })
+        .collect();
+    // VK_FORMAT_ASTC_4x4_UNORM_BLOCK is 157, the sRGB one 158.
+    let mut out = vec![
+        0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+    ];
+    let words = [
+        157 + u32::from(srgb),
+        1,
+        size,
+        size,
+        0,
+        0,
+        1,
+        levels.len() as u32,
+        0,
+    ];
+    for w in words {
+        out.extend(w.to_le_bytes());
+    }
+    out.extend([0u8; 32]);
+    let mut at = (80 + 24 * levels.len() as u64).next_multiple_of(16);
+    let mut offsets = vec![0; levels.len()];
+    for i in (0..levels.len()).rev() {
+        offsets[i] = at;
+        at = (at + levels[i].len() as u64).next_multiple_of(16);
+    }
+    for (i, level) in levels.iter().enumerate() {
+        out.extend(offsets[i].to_le_bytes());
+        out.extend((level.len() as u64).to_le_bytes());
+        out.extend((level.len() as u64).to_le_bytes());
+    }
+    for i in (0..levels.len()).rev() {
+        out.resize(offsets[i] as usize, 0);
+        out.extend(&levels[i]);
+    }
+    out
+}
+
+/// [`wall_pack`] as a format 2 pack: the colours 8 texels square, the basis
+/// 4 (they need not match), every texture ASTC with its own mip levels.
+fn wall_pack_v2(name: &str, house: [u8; 3], dark: [u8; 3]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("fp-gpu-pack2-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("pack dir");
+    let opaque = |c: [u8; 3]| [c[0], c[1], c[2], 255];
+    let mut files = vec![
+        ("house.ktx2".to_string(), ktx2_solid(8, true, opaque(house))),
+        ("dark.ktx2".to_string(), ktx2_solid(8, true, opaque(dark))),
+    ];
+    for i in 0..8 {
+        let light = opaque([255 * u8::from(i == 0); 3]);
+        files.push((format!("basis{i}.ktx2"), ktx2_solid(4, false, light)));
+    }
+    let bytes: usize = files.iter().map(|(_, b)| b.len()).sum();
+    for (file, data) in &files {
+        std::fs::write(dir.join(file), data).expect("texture");
+    }
+    write_wall_mesh(&dir);
+    let basis: Vec<String> = (0..8).map(|i| format!("\"basis{i}.ktx2\"")).collect();
+    let manifest = format!(
+        r#"{{ "format": 2, "id": "cinema-v2", "name": "Cinema", "version": "test",
+  "screen": {{ "centre": [0.0, 3.5, 0.0], "max": [9.0, 3.8] }},
+  "seats": [ {{ "name": "middle", "eye": [0, 3.2, 9.0] }} ],
+  "mesh": {{ "file": "mesh.bin", "vertices": 4, "triangles": 2 }},
+  "textures": {{ "size": 8, "basis_size": 4, "bytes": {bytes},
+                 "house": "house.ktx2", "dark": "dark.ktx2", "basis": [{}] }},
+  "basis_gain": 1.0 }}"#,
+        basis.join(", ")
+    );
+    std::fs::write(dir.join("manifest.json"), manifest).expect("manifest");
+    dir
+}
+
+#[test]
+fn a_format_2_baked_place_draws_whichever_way_its_textures_reach_the_gpu() {
+    use fp_render::env::pack::{self, TexturePath};
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let (house, dark) = ([180, 90, 30], [12, 24, 36]);
+    // Decoded on the CPU always (every device takes that); as blocks too
+    // where the device samples ASTC.
+    let mut ways = vec![false];
+    if pack::astc_on_gpu() {
+        ways.push(true);
+    }
+    eprintln!("ASTC on the GPU: {}", pack::astc_on_gpu());
+    for keep in ways {
+        let dir = wall_pack_v2(&format!("draw-{keep}"), house, dark);
+        let loaded = pack::load_with(&dir, keep).expect("the format 2 pack loads");
+        assert_eq!(loaded.path == TexturePath::AstcOnGpu, keep);
+        r.set_place_data(Place::Cinema, loaded.into_place_data());
+        let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+        assert!(near(up, house, 4), "keep {keep}, lights up: {up:?}");
+        let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
+        assert!(near(down, dark, 4), "keep {keep}, lights down: {down:?}");
+        // The basis (a different size from the colours) lights the wall
+        // with the picture's colour in its top left cell.
+        let red = frame(160, 90, |u, v| {
+            if u < 0.25 && v < 0.5 {
+                [230, 20, 20]
+            } else {
+                [0, 0, 0]
+            }
+        });
+        let lit = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+        assert!(
+            lit[0] > 150 && lit[1] < 90 && lit[2] < 90,
+            "keep {keep}, red light: {lit:?}"
+        );
+    }
+    // And the way the app loads it, whatever that is on this device.
+    let dir = wall_pack_v2("natural", house, dark);
+    let natural = pack::load(&dir).expect("loads");
+    assert_eq!(natural.path == TexturePath::AstcOnGpu, pack::astc_on_gpu());
+    r.set_place_data(Place::Cinema, natural.into_place_data());
+    let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    assert!(near(up, house, 4), "natural, lights up: {up:?}");
     e.destroy(&r);
 }

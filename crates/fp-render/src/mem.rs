@@ -128,8 +128,10 @@ impl Image {
     }
 
     /// A 2D array image of `layers` layers and `mips` levels in `format`,
-    /// to be sampled and filled by transfers (and mip blits). Its one view
-    /// (`views[0]`) is a 2D array view of everything.
+    /// to be sampled and filled by transfers (and, with `blit`, mip blits:
+    /// compressed formats are only copied into). Its one view (`views[0]`) is
+    /// a 2D array view of everything.
+    #[allow(clippy::too_many_arguments)]
     pub fn array(
         gpu: &Gpu,
         width: u32,
@@ -137,11 +139,13 @@ impl Image {
         layers: u32,
         format: vk::Format,
         mips: u32,
+        blit: bool,
         name: &str,
     ) -> Result<Image> {
-        let usage = vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::TRANSFER_DST
-            | vk::ImageUsageFlags::TRANSFER_SRC;
+        let mut usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
+        if blit {
+            usage |= vk::ImageUsageFlags::TRANSFER_SRC;
+        }
         let info = image_info(
             format,
             width,
