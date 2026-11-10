@@ -10,6 +10,7 @@ mod input;
 pub mod places;
 mod plex;
 mod remote;
+pub mod server_home;
 mod sources;
 mod tasks;
 
@@ -195,6 +196,9 @@ pub struct App {
     open_seq: u64,
     /// When the video being opened was asked for.
     open_started: Instant,
+    /// When the servers' front pages are first asked for, a moment after start so
+    /// the start itself is not slowed; `None` once done.
+    server_homes_at: Option<Instant>,
     jobs: Jobs<Job>,
     anchor: Option<Mat4>,
     reanchor: bool,
@@ -362,6 +366,7 @@ impl App {
             playback: None,
             open_seq: 0,
             open_started: Instant::now(),
+            server_homes_at: Some(Instant::now() + Duration::from_secs(3)),
             jobs: Jobs::new(),
             anchor: None,
             reanchor: true,
@@ -407,6 +412,7 @@ impl App {
         app.scan_libraries(|_| true, false, false);
         app.connect_devices();
         app.plex_name_accounts();
+        app.load_server_homes();
         if app.settings.check_updates && fp_updater::RELEASE_PUBLIC_KEY.is_some() {
             app.check_updates();
             app.start_check = Some(app.update_check);

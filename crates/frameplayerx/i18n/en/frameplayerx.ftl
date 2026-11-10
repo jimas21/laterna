@@ -859,6 +859,8 @@ library-dashboard = Dashboard
 # Short: a button.
 library-dismiss = Dismiss
 library-watch-again = Watch again
+home-continue-on-server = Continue watching on { $server }
+home-row-on-server = { $row } · { $server }
 # Short: a button.
 library-resume = Resume
 # Short: a button.

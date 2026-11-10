@@ -320,6 +320,8 @@ pub enum Action {
         item: Box<fp_sources::CatalogItem>,
         back_to: Screen,
     },
+    /// Asks the servers whose front page on Home is out of date for it.
+    RefreshServerHomes,
     /// Asks a server for its video playlists, for the Playlists tab.
     ServerPlaylists {
         source: String,
@@ -870,6 +872,8 @@ pub struct UiState {
     /// The front pages of the servers last seen, shown at once when one is
     /// opened again.
     pub catalog_cache: catalog::HomeCache,
+    /// The start of each media server's front page, for the app's Home.
+    pub server_homes: crate::app::server_home::ServerHomes,
     /// Counts requests to sources, so answers reach the page that asked.
     pub seq: u64,
     pub source_form: Option<SourceForm>,
@@ -923,6 +927,9 @@ pub struct HomeRows {
     /// The last video watched, for the banner when nothing is half-watched.
     pub last_watched: Option<fp_library::MediaRecord>,
     pub favorites: Vec<fp_library::MediaRecord>,
+    /// What these were built from: the generation of the servers' front pages
+    /// and the servers shown. Home is built again when it changes.
+    pub key: (u64, Vec<String>),
 }
 
 impl Default for UiState {
@@ -954,6 +961,7 @@ impl Default for UiState {
             up_next: None,
             source: None,
             catalog_cache: Default::default(),
+            server_homes: Default::default(),
             seq: 0,
             source_form: None,
             pin_form: None,

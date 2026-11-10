@@ -237,6 +237,7 @@ impl App {
             .set_worker_busy(self.playback.is_some() || self.ui.opening.is_some());
         self.sync_locks();
         self.check_mounts();
+        self.start_server_homes();
         self.remote_events();
         if let Some(p) = &mut self.playback {
             p.save_progress(&self.services.library, &self.services.writer, false);

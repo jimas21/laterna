@@ -289,6 +289,76 @@ impl App {
         self.apply(Action::Catalog { source, seq, load });
     }
 
+    /// The media servers Home shows rows of.
+    fn home_servers(&self) -> Vec<(String, String)> {
+        server_home::shown(
+            &self.services.source_configs,
+            &self.settings.plex_profiles,
+            &self.settings.source_pins,
+            &self.ui.unlocked_sources,
+        )
+    }
+
+    /// Reads the front pages kept from last time, so Home has them at once.
+    pub(super) fn load_server_homes(&mut self) {
+        let servers = self.home_servers();
+        self.ui.server_homes.load(&servers);
+    }
+
+    /// A moment after start, asks every media server for its front page.
+    pub(super) fn start_server_homes(&mut self) {
+        if self.server_homes_at.is_some_and(|t| Instant::now() >= t) {
+            self.server_homes_at = None;
+            self.refresh_server_homes();
+        }
+    }
+
+    /// Asks the media servers whose front page is out of date for it, in the
+    /// background. One that does not answer keeps the page it had.
+    pub(super) fn refresh_server_homes(&mut self) {
+        for (source, _) in self.home_servers() {
+            if !self.ui.server_homes.due(&source) {
+                continue;
+            }
+            self.ui.server_homes.asking(&source);
+            let Some(found) = self.services.opener.source(&source) else {
+                self.ui.server_homes.failed(&source);
+                continue;
+            };
+            self.jobs.spawn("server-home", move || {
+                // After the server has heard that playback stopped.
+                std::thread::sleep(Duration::from_millis(800));
+                let result = found
+                    .as_catalog()
+                    .ok_or_else(|| tr!("source-not-available").to_string())
+                    .and_then(|catalog| catalog.home().map_err(|e| ui::errors::source(&e)))
+                    .map(server_home::cut);
+                if let Ok(home) = &result {
+                    server_home::save(&source, home);
+                }
+                Job::ServerHome { source, result }
+            });
+        }
+    }
+
+    pub(super) fn server_home_loaded(
+        &mut self,
+        source: &str,
+        result: Result<fp_sources::CatalogHome, String>,
+    ) {
+        // A server forgotten or hidden since it was asked has no page.
+        let shown = self.home_servers().iter().any(|(id, _)| id == source);
+        match result {
+            Ok(home) if shown => self.ui.server_homes.put(source, home),
+            Ok(_) => {}
+            Err(e) => {
+                log::info!("front page of {source}: {e}");
+                self.ui.server_homes.failed(source);
+            }
+        }
+        self.panels[MAIN].request_repaint();
+    }
+
     /// Asks a server for its video playlists, for the Playlists tab.
     pub(super) fn server_playlists(&mut self, source: String) {
         let found = self.services.opener.source(&source);
@@ -498,6 +568,7 @@ impl App {
         // A source that is replaced may be another profile's or server's now.
         for id in &ids {
             self.ui.catalog_cache.forget(id);
+            self.ui.server_homes.forget(id);
         }
         let change = self.services.replace_sources(|list| {
             for cfg in new {
@@ -554,6 +625,7 @@ impl App {
         // Its browser and saved listing were made with the old details.
         self.close_source_view(&id);
         self.ui.catalog_cache.forget(&id);
+        self.ui.server_homes.forget(&id);
         let _ = std::fs::remove_file(fp_sources::FeedLibrary::cache_path(&id));
         self.ui.home = None;
     }
@@ -577,6 +649,7 @@ impl App {
             self.ui.unlocked_sources.remove(id);
             self.close_source_view(id);
             self.ui.catalog_cache.forget(id);
+            self.ui.server_homes.forget(id);
             let _ = std::fs::remove_file(fp_sources::FeedLibrary::cache_path(id));
             // Its videos go with it, except what was watched or marked.
             match self.services.library.forget_unwatched(id) {
