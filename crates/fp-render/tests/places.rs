@@ -525,34 +525,34 @@ fn region_mean(img: &[u8], cols: std::ops::Range<u32>, rows: std::ops::Range<u32
     sum.map(|s| s as f32 / n)
 }
 
-/// What the middle seat sees either side of the screen (the side walls and
-/// the front wall's corners, rows 40 to 90) and on the stage below it (rows
-/// 84 to 90, between the screen's sides): the places the picture's light is
-/// meant to show in. The screen and its panel fill the columns between.
-fn side_and_stage(img: &[u8]) -> ([f32; 3], [f32; 3]) {
-    let sides = [
-        region_mean(img, 0..22, 40..90),
-        region_mean(img, 106..128, 40..90),
-    ];
-    let side = [0, 1, 2].map(|c| (sides[0][c] + sides[1][c]) / 2.0);
-    (side, region_mean(img, 36..92, 84..90))
+/// The first row below the picture and its edge from the middle seat: from
+/// here down the eye sees only the seats in front (the picture spans 72
+/// degrees, so it reaches row 91 and hides the stage behind the rows).
+const BELOW: u32 = 94;
+
+/// What the middle seat sees of the room the picture lights: the ceiling
+/// above it (rows 0 to 30, every column) and the seats in front below it
+/// (rows from `BELOW`). Neither holds any of the picture itself.
+fn ceiling_and_seats(img: &[u8]) -> ([f32; 3], [f32; 3]) {
+    (region_mean(img, 0..SIZE, 0..30), region_mean(img, 0..SIZE, BELOW..SIZE))
 }
 
 #[test]
-fn the_walls_and_stage_visibly_take_the_pictures_colour() {
+fn the_ceiling_and_seats_visibly_take_the_pictures_colour() {
     let Some((mut r, mut e)) = setup() else {
         return;
     };
     let red = frame(160, 90, |_, _| [230, 20, 20]);
     let blue = frame(160, 90, |_, _| [20, 20, 230]);
-    let (wall_red, stage_red) = side_and_stage(&watch(&mut r, &mut e, &red, 1, true));
-    let (wall_blue, stage_blue) = side_and_stage(&watch(&mut r, &mut e, &blue, 5, true));
-    // Red then blue turns the walls and the stage from one colour to the
+    let (ceiling_red, seats_red) = ceiling_and_seats(&watch(&mut r, &mut e, &red, 1, true));
+    let (ceiling_blue, seats_blue) = ceiling_and_seats(&watch(&mut r, &mut e, &blue, 5, true));
+    // Red then blue turns the ceiling and the seats from one colour to the
     // other by several codes in 255, clearly and not by a rounding error
-    // (beta.6's light moved the room by about one).
+    // (beta.6's light moved the room by about one; on lavapipe the ceiling
+    // moves by about 28 and the seats by 8 to 14).
     for (name, in_red, in_blue) in [
-        ("walls", wall_red, wall_blue),
-        ("stage", stage_red, stage_blue),
+        ("ceiling", ceiling_red, ceiling_blue),
+        ("seats", seats_red, seats_blue),
     ] {
         let red_up = in_red[0] - in_blue[0];
         let blue_up = in_blue[2] - in_red[2];
@@ -574,10 +574,11 @@ fn a_dark_scene_does_not_black_the_room_out() {
         return;
     };
     let black = frame(160, 90, |_, _| [0, 0, 0]);
-    let (_, off) = side_and_stage(&watch(&mut r, &mut e, &black, 1, false));
-    let (_, on) = side_and_stage(&watch(&mut r, &mut e, &black, 5, true));
-    // The light's floor keeps some of it on the stage even with nothing on
-    // the screen, and never takes any away.
+    let (off, _) = ceiling_and_seats(&watch(&mut r, &mut e, &black, 1, false));
+    let (on, _) = ceiling_and_seats(&watch(&mut r, &mut e, &black, 5, true));
+    // The light's floor keeps some of it on the ceiling even with nothing on
+    // the screen (about 2 codes a channel on lavapipe), and never takes any
+    // away.
     let lifted: f32 = (0..3).map(|c| on[c] - off[c]).sum();
     assert!(lifted > 1.0, "off {off:?}, on {on:?}");
     for c in 0..3 {
@@ -636,8 +637,8 @@ fn the_room_takes_the_pictures_colour() {
     };
     let red = frame(160, 90, |_, _| [230, 20, 20]);
     let blue = frame(160, 90, |_, _| [20, 20, 230]);
-    let in_red = lower_mean(&watch(&mut r, &mut e, &red, 1, true), 90);
-    let in_blue = lower_mean(&watch(&mut r, &mut e, &blue, 5, true), 90);
+    let in_red = lower_mean(&watch(&mut r, &mut e, &red, 1, true), BELOW);
+    let in_blue = lower_mean(&watch(&mut r, &mut e, &blue, 5, true), BELOW);
     // The light follows the film: red then blue turns the room from one to
     // the other, in the colour channel it was lit by. The rows measured are
     // mostly the backs of the seats in front, which face away from the screen
@@ -726,14 +727,14 @@ fn screen_light_off_leaves_the_room_unlit_by_the_picture() {
     let off_blue = watch(&mut r, &mut e, &blue, 5, false);
     // Below the picture the room is the same whatever it shows.
     assert!(
-        rows_from(&off_red, 90) == rows_from(&off_blue, 90),
+        rows_from(&off_red, BELOW) == rows_from(&off_blue, BELOW),
         "the room changed with the picture while its light was off"
     );
     // And it is the same room, lit by the picture or not, in the dark: only
     // the light on the floor and treads differs (a code or so in 255 over
     // these rows, see the_room_takes_the_pictures_colour).
     let on_red = watch(&mut r, &mut e, &red, 9, true);
-    let (dark, lit) = (lower_mean(&off_red, 90), lower_mean(&on_red, 90));
+    let (dark, lit) = (lower_mean(&off_red, BELOW), lower_mean(&on_red, BELOW));
     assert!(lit[0] > dark[0] + 0.25, "off {dark:?}, on {lit:?}");
     e.destroy(&r);
 }
