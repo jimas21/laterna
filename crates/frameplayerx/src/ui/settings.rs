@@ -447,7 +447,7 @@ fn video_position(ui: &mut egui::Ui, v: &mut View) {
             tr!("settings-screen-distance"),
             None,
             &mut d.screen_distance,
-            1.0..=20.0,
+            fp_core::view::SCREEN_DISTANCE,
             4.0,
             " m",
             1,

@@ -119,7 +119,8 @@ pub struct Settings {
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,
     /// Where the library and adjust panels were moved to: yaw and pitch in
-    /// degrees from their usual places (left and up positive).
+    /// degrees from their usual places (left and up positive), and how much
+    /// nearer or further.
     pub panel_offsets: PanelOffsets,
     /// How folders are ordered when browsing a source.
     pub browse_sort: fp_sources::EntrySort,
@@ -140,6 +141,19 @@ pub struct PanelOffsets {
     pub bar: [f32; 2],
     /// The performance overlay, from where it starts.
     pub perf: [f32; 2],
+    /// How much nearer or further than usual each of them was moved.
+    pub depth: PanelDepths,
+}
+
+/// Metres each panel that moves was pulled in (negative) or pushed out from
+/// its usual distance from the viewer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelDepths {
+    pub main: f32,
+    pub adjust: f32,
+    pub bar: f32,
+    pub perf: f32,
 }
 
 /// The fisheye presets to start with: a plain 180° lens, the Canon RF 5.2 mm,
@@ -406,5 +420,19 @@ mod tests {
         s.fisheye_presets = vec![170.0, 180.0, 190.0];
         s.remove_fisheye_preset(1);
         assert_eq!(s.fisheye_start, 170.0);
+    }
+
+    #[test]
+    fn panels_saved_before_depth_stay_at_their_usual_distance() {
+        let old = r#"{"panel_offsets": {"main": [10.0, -5.0], "bar": [0.0, 3.0]}}"#;
+        let p: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(p.panel_offsets.main, [10.0, -5.0]);
+        assert_eq!(p.panel_offsets.depth, PanelDepths::default());
+        let mut s = Settings::default();
+        s.panel_offsets.depth.bar = -0.25;
+        s.panel_offsets.depth.main = 0.5;
+        let json = serde_json::to_string(&s).unwrap();
+        let again: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.panel_offsets, s.panel_offsets);
     }
 }

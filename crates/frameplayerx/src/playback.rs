@@ -97,6 +97,9 @@ pub struct Playback {
     pub keyframes: Keyframes,
     /// Adjustments differ from what is saved for this video.
     pub settings_dirty: bool,
+    /// Nothing has been saved for this video, so Settings > Video position
+    /// moves it as it changes (see [`Self::follow_defaults`]).
+    follows_defaults: bool,
     /// What is saved for this video (the Passthrough tab saves its part
     /// at once, the rest only with Save).
     saved_settings: ViewSettings,
@@ -161,6 +164,27 @@ fn kept_with_video(mut s: ViewSettings, format: VideoFormat) -> ViewSettings {
         s.pitch = 0.0;
     }
     s
+}
+
+/// `view` after Settings > Video position went from `old` to `new`: each
+/// setting that page changes moves too, unless this video was adjusted away
+/// from the old default.
+fn follow_default_view(view: &mut ViewSettings, old: &ViewSettings, new: &ViewSettings) {
+    if view.screen_distance == old.screen_distance {
+        view.screen_distance = new.screen_distance;
+    }
+    if view.screen_width == old.screen_width {
+        view.screen_width = new.screen_width;
+    }
+    if view.screen_curvature == old.screen_curvature {
+        view.screen_curvature = new.screen_curvature;
+    }
+    if view.height == old.height {
+        view.height = new.height;
+    }
+    if view.background == old.background {
+        view.background = new.background;
+    }
 }
 
 /// Opens media; blocking (network probing), so run it on a job thread.
@@ -515,6 +539,7 @@ pub fn open(
         _ => None,
     };
 
+    let follows_defaults = record.as_ref().is_none_or(|r| r.view_settings.is_none());
     let settings_v = record
         .as_ref()
         .and_then(|r| r.view_settings)
@@ -565,6 +590,7 @@ pub fn open(
             key_saved_at: Instant::now(),
             keyframes,
             settings_dirty: false,
+            follows_defaults,
             heatmap,
             markers,
             subtitle_files: subs,
@@ -1014,7 +1040,20 @@ impl Playback {
             .inspect_err(|e| log::warn!("saving adjustments: {e}"))?;
         self.settings_dirty = false;
         self.saved_settings = self.settings;
+        self.follows_defaults = false;
         Ok(true)
+    }
+
+    /// Settings > Video position went from `old` to `new`. A video that has
+    /// nothing saved of its own (not saved, and not touched on the
+    /// Passthrough tab, which saves it all) follows at once, but only the
+    /// settings it has not been adjusted away from the old default on; one
+    /// with a saved adjustment keeps it.
+    pub fn follow_defaults(&mut self, old: &ViewSettings, new: &ViewSettings) {
+        if self.follows_defaults {
+            follow_default_view(&mut self.settings, old, new);
+            follow_default_view(&mut self.saved_settings, old, new);
+        }
     }
 
     /// Saves the audio and subtitles picked in the player, which the video
@@ -1049,6 +1088,7 @@ impl Playback {
             Ok(()) => {
                 self.saved_settings = saved;
                 self.settings_dirty = self.settings != saved;
+                self.follows_defaults = false;
             }
             Err(e) => log::warn!("saving the background removal: {e}"),
         }
@@ -1969,5 +2009,48 @@ mod tests {
         };
         use_saved_source_tracks(&mut asked, &PickedTracks::default(), &tracks);
         assert_eq!(asked.source_audio.as_deref(), Some("201"));
+    }
+
+    #[test]
+    fn a_video_follows_the_new_defaults_only_where_it_was_at_the_old_ones() {
+        let old = ViewSettings::default();
+        let new = ViewSettings {
+            screen_distance: 7.0,
+            screen_width: 9.0,
+            height: 0.25,
+            background: [0.2, 0.2, 0.2],
+            ..old
+        };
+        let mut untouched = old;
+        follow_default_view(&mut untouched, &old, &new);
+        assert_eq!(untouched, new, "all of it follows");
+        // Pushed out by hand: that one stays, the rest follows.
+        let mut moved = ViewSettings {
+            screen_distance: 12.0,
+            ..old
+        };
+        follow_default_view(&mut moved, &old, &new);
+        assert_eq!(moved.screen_distance, 12.0);
+        assert_eq!(moved.screen_width, 9.0);
+        // What the page does not set is never touched.
+        let mut other = ViewSettings {
+            zoom: 1.5,
+            yaw: 30.0,
+            ..old
+        };
+        follow_default_view(&mut other, &old, &new);
+        assert_eq!((other.zoom, other.yaw), (1.5, 30.0));
+        // Following the slider step by step ends where dragging it went.
+        let mut v = old;
+        let mut was = old;
+        for d in [2.0, 3.5, 6.0, 5.0] {
+            let now = ViewSettings {
+                screen_distance: d,
+                ..old
+            };
+            follow_default_view(&mut v, &was, &now);
+            was = now;
+        }
+        assert_eq!(v.screen_distance, 5.0);
     }
 }

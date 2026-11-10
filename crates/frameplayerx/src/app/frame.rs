@@ -13,6 +13,7 @@ impl App {
         self.reanchor = true;
         self.panel_drag = None;
         self.offsets.main = [0.0, 0.0];
+        self.offsets.depth.main = 0.0;
         self.settings.panel_offsets = self.offsets;
         if let Some(p) = &mut self.playback
             && p.format.projection == Projection::Flat
@@ -53,7 +54,8 @@ impl App {
 
     /// Squeezing a grip on the library panel, the control bar, the adjust
     /// panel or the performance overlay moves it round the viewer with that
-    /// hand; where it is let go is saved: the bar's relative to a flat screen,
+    /// hand, and nearer or further as the hand comes towards or goes away
+    /// from the head; where it is let go is saved: the bar's relative to a flat screen,
     /// the adjust panel's relative to the bar, so each goes along when what it
     /// is placed from moves. Squeezing one on the keyboard moves the panel it
     /// types into, and the keyboard with it; on the audio and subtitles
@@ -62,11 +64,13 @@ impl App {
     pub(super) fn move_panels(
         &mut self,
         grab: Option<(usize, usize)>,
-        hands: &[Hand; 2],
+        input: &FrameInput,
         anchor: Mat4,
         buzz: &mut Vec<(usize, f32, i64)>,
     ) {
-        use crate::controls::{GRIP, angles, wrap};
+        use crate::controls::{DRAG_TAU, Damped, GRIP, angles, pushed_distance, reach, wrap};
+        let hands = &input.hands;
+        let head = input.head.map(|(pos, _)| pos);
         // The adjust panel sits beside the control bar, turned with the
         // picture; the library panel and the overlay are placed in the room.
         let room = anchor.to_scale_rotation_translation().1;
@@ -95,7 +99,7 @@ impl App {
             _ => None,
         });
         if let Some((panel, hand)) = grab
-            && let Some((_, rot)) = hands[hand].aim
+            && let Some((pos, rot)) = hands[hand].aim
         {
             let start = match panel {
                 MAIN => self.offsets.main,
@@ -107,7 +111,10 @@ impl App {
                 panel,
                 hand,
                 start: angles(rot, frame_of(panel)),
+                reach: head.map(|head| reach(head, pos)),
                 from: start,
+                depth: *self.depth_of(panel),
+                follow: Damped::at([0.0; 3]),
             });
             buzz.push((hand, 0.3, 14));
         }
@@ -115,17 +122,32 @@ impl App {
             panel,
             hand,
             start: (y0, p0),
+            reach: reach0,
             from: [oy, op],
+            depth: z0,
+            mut follow,
         }) = self.panel_drag
         else {
             return;
         };
         let h = &hands[hand];
         if h.squeeze > GRIP * 0.6 {
-            if let Some((_, rot)) = h.aim {
+            if let Some((pos, rot)) = h.aim {
                 let (y, p) = angles(rot, frame_of(panel));
-                let yaw = wrap(oy + wrap(y - y0));
-                let to = [yaw, (op + p - p0).clamp(-45.0, 45.0)];
+                // Without the head (then or now) the depth holds where it is.
+                let moved = match (head, reach0) {
+                    (Some(head), Some(r)) => reach(head, pos) - r,
+                    _ => follow.value()[2],
+                };
+                // Where the hand is, a moment behind it: a hand's tremor would
+                // otherwise be magnified at the panel's distance.
+                let [dy, dp, dz] = follow.step([wrap(y - y0), p - p0, moved], DRAG_TAU, input.dt);
+                if let Some(drag) = &mut self.panel_drag {
+                    drag.follow = follow;
+                }
+                let to = [wrap(oy + dy), (op + dp).clamp(-45.0, 45.0)];
+                let usual = usual_distance(panel);
+                *self.depth_of(panel) = pushed_distance(usual + z0, dz, PANEL_RANGE) - usual;
                 match panel {
                     MAIN => self.offsets.main = to,
                     ADJUST => self.offsets.adjust = to,
@@ -137,6 +159,18 @@ impl App {
         } else {
             self.panel_drag = None;
             self.settings.panel_offsets = self.offsets;
+        }
+    }
+
+    /// How much nearer (negative) or further than usual `panel` was moved,
+    /// metres.
+    fn depth_of(&mut self, panel: usize) -> &mut f32 {
+        let depth = &mut self.offsets.depth;
+        match panel {
+            MAIN => &mut depth.main,
+            ADJUST => &mut depth.adjust,
+            PERF => &mut depth.perf,
+            _ => &mut depth.bar,
         }
     }
 
@@ -152,6 +186,10 @@ impl App {
         self.panels[KEYBOARD].visible = kb_target.is_some();
         self.place_panels(anchor, kb_target);
         let buzz = self.route_input(&input, anchor);
+        // Routing the input moved the panels, the picture or both: place the
+        // panels again, so they are drawn where the hands just put them rather
+        // than a frame behind.
+        self.place_panels(anchor, kb_target);
         self.paint_panels(renderer, &input, kb_target);
         self.perf_overlay(renderer, &input);
         let (frame, video, passthrough) = self.video(renderer, &input, anchor);
@@ -394,15 +432,22 @@ impl App {
                 bar_anchor
             }
         };
+        let moved = self.offsets.depth;
+        let main_d = panel_distance(MAIN_DISTANCE, moved.main);
+        let bar_d = panel_distance(BAR_DISTANCE, moved.bar);
+        let adjust_d = panel_distance(ADJUST_DISTANCE, moved.adjust);
         // To the right, clear of the control bar's end as it grows with the
-        // interface size.
-        let half_angle = |w: f32| (w / 2.0 / 1.05).atan().to_degrees();
+        // interface size, and as it comes nearer.
+        let half_angle = |w: f32, d: f32| (w / 2.0 / d).atan().to_degrees();
         let bar = &self.panels[BAR];
-        let beside = -52.0 - (half_angle(bar.size.x) - half_angle(bar.base_size().x));
+        let growth = half_angle(bar.size.x, bar_d) - half_angle(bar.base_size().x, BAR_DISTANCE);
+        let aw = self.panels[ADJUST].size.x;
+        let adj_growth = half_angle(aw, adjust_d) - half_angle(aw, ADJUST_DISTANCE);
+        let beside = -52.0 - growth - adj_growth;
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
-        self.panels[MAIN].pose = place_below(anchor, my, mp, 1.5, BELOW_DEG);
-        self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.32, 22.0);
+        self.panels[MAIN].pose = place_below(anchor, my, mp, main_d, BELOW_DEG);
+        self.panels[BAR].pose = place(bar_anchor, 0.0, bar_d, -0.32 * bar_d / BAR_DISTANCE, 22.0);
         self.panels[TRACKS].pose = above_bar(&self.panels[BAR], &self.panels[TRACKS]);
         self.panels[TOAST].pose = toast_pose(
             &self.panels[BAR],
@@ -411,25 +456,30 @@ impl App {
                 .then(|| self.panels[TRACKS].size.y),
             &self.panels[TOAST],
         );
-        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, 1.15, 0.0);
-        // The keyboard sits below the panel it types into, turned with it, so
-        // it is where that panel was moved to.
-        let (kb_from, [ky, kp]) = match kb_target {
-            Some(ADJUST) => (adjust_anchor, [beside + ay, ap]),
-            Some(_) => (anchor, [my, mp - BELOW_DEG]),
-            None => (anchor, [0.0, 0.0]),
+        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, adjust_d, 0.0);
+        // The keyboard sits below the panel it types into, turned with it and
+        // as much nearer or further, so it is where that panel was moved to.
+        let (kb_from, [ky, kp], kb_moved) = match kb_target {
+            Some(ADJUST) => (adjust_anchor, [beside + ay, ap], moved.adjust),
+            Some(_) => (anchor, [my, mp - BELOW_DEG], moved.main),
+            None => (anchor, [0.0, 0.0], 0.0),
         };
         let kb_anchor = place_around(kb_from, ky, kp, 0.0, 0.0);
-        self.panels[KEYBOARD].pose = place(kb_anchor, 0.0, 0.95, -0.55, 35.0);
+        let kb_d = panel_distance(KEYBOARD_DISTANCE, kb_moved);
+        let kb_drop = -0.55 * kb_d / KEYBOARD_DISTANCE;
+        self.panels[KEYBOARD].pose = place(kb_anchor, 0.0, kb_d, kb_drop, 35.0);
         // From the same point as the library panel, so it stays in the room or
         // follows along with the menus.
         let start = perf_start_yaw(
             self.panels[MAIN].size.x,
+            main_d,
             self.panels[BAR].size.x,
+            bar_d,
             self.perf.size.x,
         );
         let [py, pp] = self.offsets.perf;
-        self.perf.pose = place_around(anchor, start + py, pp, PERF_DISTANCE, 0.0);
+        let perf_d = panel_distance(PERF_DISTANCE, moved.perf);
+        self.perf.pose = place_around(anchor, start + py, pp, perf_d, 0.0);
     }
 
     /// Pointer rays to panel events, grips moving panels, and controller
@@ -442,7 +492,7 @@ impl App {
                 .route(&mut [a, b, c, d, e, &mut self.perf], &input.hands, input.dt)
         };
         let mut buzz = Vec::new();
-        self.move_panels(routed.grab, &input.hands, anchor, &mut buzz);
+        self.move_panels(routed.grab, input, anchor, &mut buzz);
         if let Some(hand) = routed.pressed {
             buzz.push((hand, 0.2, 8));
         }
@@ -759,11 +809,28 @@ fn toast_pose(bar: &Panel, above: Option<f32>, toast: &Panel) -> Mat4 {
     bar.pose * Mat4::from_translation(Vec3::new(0.0, y, 0.0))
 }
 
+/// Metres away `panel` starts.
+fn usual_distance(panel: usize) -> f32 {
+    match panel {
+        MAIN => MAIN_DISTANCE,
+        ADJUST => ADJUST_DISTANCE,
+        PERF => PERF_DISTANCE,
+        _ => BAR_DISTANCE,
+    }
+}
+
+/// How far a panel is from the viewer: where it usually is, `moved` metres
+/// nearer (negative) or further, kept within [`PANEL_RANGE`] (a settings file
+/// can hold anything).
+fn panel_distance(usual: f32, moved: f32) -> f32 {
+    (usual + moved).clamp(*PANEL_RANGE.start(), *PANEL_RANGE.end())
+}
+
 /// Degrees left of forward where the performance overlay starts: just clear of
 /// the library panel and the control bar, given their widths and its own.
-fn perf_start_yaw(library: f32, bar: f32, perf: f32) -> f32 {
+fn perf_start_yaw(library: f32, library_d: f32, bar: f32, bar_d: f32, perf: f32) -> f32 {
     let half = |width: f32, distance: f32| (width / 2.0 / distance).atan().to_degrees();
-    half(library, 1.5).max(half(bar, 1.05)) + 2.0 + half(perf, PERF_DISTANCE)
+    half(library, library_d).max(half(bar, bar_d)) + 2.0 + half(perf, PERF_DISTANCE)
 }
 
 /// The overlay's rows for the open video; none without a picture.
@@ -815,7 +882,7 @@ mod tests {
     fn a_toast_sits_above_the_bar_and_any_picker() {
         let mut bar = growing_panel(BAR_PX, BAR_PX[0] as f32 * BAR_M_PER_PX, 1.25);
         let mut toast = growing_panel([1100, 90], 1100.0 * BAR_M_PER_PX, 1.25);
-        bar.pose = place(Mat4::IDENTITY, 0.0, 1.05, -0.32, 22.0);
+        bar.pose = place(Mat4::IDENTITY, 0.0, BAR_DISTANCE, -0.32, 22.0);
         let height = |pose: Mat4| bar.pose.inverse().transform_point3(pose.w_axis.truncate());
         toast.pose = toast_pose(&bar, None, &toast);
         let alone = height(toast.pose);
@@ -837,10 +904,19 @@ mod tests {
             let mut perf = perf_panel();
             bar.set_scale(scale);
             perf.set_scale(scale);
-            let yaw = perf_start_yaw(library.size.x, bar.size.x, perf.size.x);
+            let yaw = perf_start_yaw(
+                library.size.x,
+                MAIN_DISTANCE,
+                bar.size.x,
+                BAR_DISTANCE,
+                perf.size.x,
+            );
             let inner = yaw - half(perf.size.x, PERF_DISTANCE);
-            assert!(inner > half(library.size.x, 1.5), "{scale}: {inner}");
-            assert!(inner > half(bar.size.x, 1.05), "{scale}: {inner}");
+            assert!(
+                inner > half(library.size.x, MAIN_DISTANCE),
+                "{scale}: {inner}"
+            );
+            assert!(inner > half(bar.size.x, BAR_DISTANCE), "{scale}: {inner}");
             if scale == 1.0 {
                 let outer = yaw + half(perf.size.x, PERF_DISTANCE);
                 assert!(outer < 55.0, "{outer}° is beyond the edge of the view");
@@ -855,7 +931,7 @@ mod tests {
             let mut picker = growing_panel([850, 560], 850.0 * BAR_M_PER_PX, 1.25);
             bar.set_scale(scale);
             picker.set_scale(scale);
-            bar.pose = place(Mat4::IDENTITY, 0.0, 1.05, -0.32, 22.0);
+            bar.pose = place(Mat4::IDENTITY, 0.0, BAR_DISTANCE, -0.32, 22.0);
             picker.pose = above_bar(&bar, &picker);
             let room = ui::widgets::SHADOW_ROOM;
             let pts = bar.points();

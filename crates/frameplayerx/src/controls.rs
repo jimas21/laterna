@@ -20,13 +20,15 @@
 //!
 //! With a hand's grip held, a button runs its grip action, or its own when
 //! it has none. Fixed: the trigger clicks (on empty space it shows or hides the
-//! controls), grip + trigger drags the picture, both grips recenter, and a
-//! thumbstick pointed at a list pages it left / right (at a slider, steps
-//! it).
+//! controls), grip + trigger drags the picture (turning with the hand, and
+//! nearer or further as the hand comes towards or away from the head), both
+//! grips recenter, and a thumbstick pointed at a list pages it left / right
+//! (at a slider, steps it).
 
 use crate::bindings::{Axis, AxisAction, Bindings, Button, ButtonAction};
 use fp_xr::Hand;
 use glam::{Quat, Vec3};
+use std::ops::RangeInclusive;
 
 /// What the bindings asked for this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -57,10 +59,14 @@ pub enum Cmd {
     ToggleSubtitles,
     ResetImage,
     DragBegin,
-    /// Degrees moved since the drag began (yaw left-positive, pitch up-positive).
+    /// Where the hand is since the drag began, smoothed: degrees (yaw
+    /// left-positive, pitch up-positive) and metres the hand is further from
+    /// the head (`distance`; 0 when the head isn't tracked). Scale
+    /// `distance` with [`pushed_distance`].
     DragTo {
         yaw: f32,
         pitch: f32,
+        distance: f32,
     },
     DragEnd,
     Recenter,
@@ -80,6 +86,9 @@ pub struct Context {
     pub click_outside: bool,
     /// A video is open.
     pub playing: bool,
+    /// Where the head is, in the same space as the hands (for dragging in and
+    /// out).
+    pub head: Option<Vec3>,
     pub dt: f32,
 }
 
@@ -99,10 +108,80 @@ const STICK_HOLD: f32 = 0.5;
 const REPEAT_DELAY: f32 = 0.5;
 const REPEAT_EVERY: f32 = 0.35;
 
+/// How closely a dragged thing trails the hand: with this time constant
+/// (seconds) it has covered about a quarter of a step after one time constant,
+/// nine tenths after four (see [`Damped`]). Short enough to follow at once,
+/// long enough that a hand's tremor, which is magnified at a panel's distance,
+/// doesn't show.
+pub(crate) const DRAG_TAU: f32 = 0.05;
+
+/// Metres a dragged thing goes in or out for each metre the hand does.
+pub(crate) const DEPTH_GAIN: f32 = 2.0;
+
+/// How far `hand` is from `head`, metres.
+pub(crate) fn reach(head: Vec3, hand: Vec3) -> f32 {
+    (hand - head).length()
+}
+
+/// Where a dragged thing `start` metres away goes when the hand moves
+/// `hand_moved` metres further from the head (negative: nearer), kept within
+/// `range` metres.
+pub(crate) fn pushed_distance(start: f32, hand_moved: f32, range: RangeInclusive<f32>) -> f32 {
+    (start + DEPTH_GAIN * hand_moved).clamp(*range.start(), *range.end())
+}
+
+/// Values that follow a target critically damped (no overshoot, the quickest
+/// way there without it). Each step solves the motion exactly for the time
+/// that passed, so it feels the same at 72 Hz as at 120 Hz.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Damped<const N: usize> {
+    value: [f32; N],
+    velocity: [f32; N],
+}
+
+impl<const N: usize> Damped<N> {
+    /// Holding still at `value`.
+    pub fn at(value: [f32; N]) -> Self {
+        Damped {
+            value,
+            velocity: [0.0; N],
+        }
+    }
+
+    /// Where it is.
+    pub fn value(&self) -> [f32; N] {
+        self.value
+    }
+
+    /// Moves `dt` seconds towards `target` with time constant `tau`, and
+    /// returns where it is.
+    pub fn step(&mut self, target: [f32; N], tau: f32, dt: f32) -> [f32; N] {
+        if tau <= 0.0 {
+            *self = Damped::at(target);
+            return self.value;
+        }
+        let dt = dt.max(0.0);
+        let w = 1.0 / tau;
+        let decay = (-w * dt).exp();
+        for ((x, v), to) in self.value.iter_mut().zip(&mut self.velocity).zip(target) {
+            let gap = *x - to;
+            let carried = (*v + w * gap) * dt;
+            *v = (*v - w * carried) * decay;
+            *x = to + (gap + carried) * decay;
+        }
+        self.value
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Drag {
     hand: usize,
     start: (f32, f32),
+    /// How far the hand was from the head when the drag began, if the head
+    /// was known.
+    reach: Option<f32>,
+    /// The picture's yaw, pitch and distance deltas, following the hand.
+    follow: Damped<3>,
 }
 
 #[derive(Default)]
@@ -140,40 +219,49 @@ impl Controls {
         let gripping = |h: &Hand| h.squeeze > GRIP;
 
         // Dome drag: grip held, then trigger, on a hand not pointing at a panel.
-        match self.drag {
-            Some(d) => {
-                let h = &hands[d.hand];
-                if gripping(h) && h.trigger > TRIGGER * 0.5 {
-                    if let Some((_, rot)) = h.aim {
-                        let (yaw, pitch) = angles(rot, anchor);
-                        out.push(Cmd::DragTo {
-                            yaw: wrap(yaw - d.start.0),
-                            pitch: pitch - d.start.1,
-                        });
-                    }
-                } else {
-                    self.drag = None;
-                    out.push(Cmd::DragEnd);
+        if let Some(d) = &mut self.drag {
+            let h = &hands[d.hand];
+            if gripping(h) && h.trigger > TRIGGER * 0.5 {
+                if let Some((pos, rot)) = h.aim {
+                    let (yaw, pitch) = angles(rot, anchor);
+                    // Without the head (then or now) the depth holds where it is.
+                    let moved = match (ctx.head, d.reach) {
+                        (Some(head), Some(r)) => reach(head, pos) - r,
+                        _ => d.follow.value()[2],
+                    };
+                    let [yaw, pitch, distance] = d.follow.step(
+                        [wrap(yaw - d.start.0), pitch - d.start.1, moved],
+                        DRAG_TAU,
+                        ctx.dt,
+                    );
+                    out.push(Cmd::DragTo {
+                        yaw,
+                        pitch,
+                        distance,
+                    });
+                }
+            } else {
+                self.drag = None;
+                out.push(Cmd::DragEnd);
+            }
+        } else if ctx.playing && !ctx.over_ui {
+            for i in 0..2 {
+                let h = &hands[i];
+                if gripping(h)
+                    && h.trigger > TRIGGER
+                    && prev[i].trigger <= TRIGGER
+                    && let Some((pos, rot)) = h.aim
+                {
+                    self.drag = Some(Drag {
+                        hand: i,
+                        start: angles(rot, anchor),
+                        reach: ctx.head.map(|head| reach(head, pos)),
+                        follow: Damped::at([0.0; 3]),
+                    });
+                    out.push(Cmd::DragBegin);
+                    break;
                 }
             }
-            None if ctx.playing && !ctx.over_ui => {
-                for i in 0..2 {
-                    let h = &hands[i];
-                    if gripping(h)
-                        && h.trigger > TRIGGER
-                        && prev[i].trigger <= TRIGGER
-                        && let Some((_, rot)) = h.aim
-                    {
-                        self.drag = Some(Drag {
-                            hand: i,
-                            start: angles(rot, anchor),
-                        });
-                        out.push(Cmd::DragBegin);
-                        break;
-                    }
-                }
-            }
-            None => {}
         }
         let any_grip = hands.iter().any(gripping);
 
@@ -537,15 +625,25 @@ mod tests {
                 0.0,
             ),
         ));
-        match run(&mut c, &h, ctx(true))[..] {
-            [Cmd::DragTo { yaw, pitch }] => {
-                assert!(
-                    (yaw + 20.0).abs() < 0.01 && (pitch - 10.0).abs() < 0.01,
-                    "{yaw} {pitch}"
-                );
+        // It follows the hand without overshooting, and settles on it.
+        let mut last = (0.0, 0.0);
+        for frame in 0..40 {
+            match run(&mut c, &h, ctx(true))[..] {
+                [Cmd::DragTo { yaw, pitch, .. }] => {
+                    assert!((-20.01..=0.0).contains(&yaw), "{frame}: {yaw}");
+                    assert!((0.0..=10.01).contains(&pitch), "{frame}: {pitch}");
+                    if frame == 0 {
+                        assert!(yaw > -19.0, "smoothed, not a jump: {yaw}");
+                    }
+                    last = (yaw, pitch);
+                }
+                ref o => panic!("{o:?}"),
             }
-            ref o => panic!("{o:?}"),
         }
+        assert!(
+            (last.0 + 20.0).abs() < 0.01 && (last.1 - 10.0).abs() < 0.01,
+            "{last:?}"
+        );
         h[1].trigger = 0.0;
         assert_eq!(run(&mut c, &h, ctx(true)), vec![Cmd::DragEnd]);
     }
@@ -564,5 +662,160 @@ mod tests {
             ..ctx(true)
         };
         assert_eq!(run(&mut c, &h, click), vec![Cmd::ToggleUi]);
+    }
+
+    /// A hand at `pos`, aiming straight ahead, with its grip and trigger held.
+    fn dragging_at(pos: Vec3) -> [Hand; 2] {
+        let mut h = hands();
+        h[1].squeeze = 1.0;
+        h[1].trigger = 1.0;
+        h[1].aim = Some((pos, Quat::IDENTITY));
+        h
+    }
+
+    #[test]
+    fn a_hand_moving_from_the_head_drags_the_picture_out() {
+        let head = Vec3::new(0.0, 1.6, 0.0);
+        let cx = Context {
+            head: Some(head),
+            ..ctx(true)
+        };
+        let at = |z: f32| head + Vec3::new(0.0, -0.2, -z);
+        // Holds the hand at `z` metres ahead of the head until the drag settles.
+        let settle = |c: &mut Controls, h: &mut [Hand; 2], z: f32| {
+            h[1].aim = Some((at(z), Quat::IDENTITY));
+            let mut last = 0.0;
+            for _ in 0..40 {
+                if let [Cmd::DragTo { distance, .. }] = run(c, h, cx)[..] {
+                    last = distance;
+                }
+            }
+            last
+        };
+        let mut c = Controls::default();
+        let mut h = dragging_at(at(0.3));
+        assert_eq!(run(&mut c, &h, cx), vec![Cmd::DragBegin]);
+        // Arm out 0.4 m further, then back in 0.2 m.
+        let out = settle(&mut c, &mut h, 0.7);
+        let reach_at = |z: f32| 0.2f32.hypot(z);
+        let gap = reach_at(0.7) - reach_at(0.3);
+        assert!((out - gap).abs() < 1e-3, "{out}");
+        let back = settle(&mut c, &mut h, 0.5);
+        assert!(back > 0.0 && back < out, "{back}");
+        // Without a head there is no depth, only the turn.
+        let mut c = Controls::default();
+        let mut h = dragging_at(Vec3::new(0.0, 0.0, -0.3));
+        run(&mut c, &h, ctx(true));
+        h[1].aim = Some((Vec3::new(0.0, 0.0, -0.9), Quat::IDENTITY));
+        let out = run(&mut c, &h, ctx(true));
+        assert!(matches!(out[..], [Cmd::DragTo { distance: 0.0, .. }]));
+    }
+
+    #[test]
+    fn losing_the_head_mid_drag_holds_the_depth() {
+        let head = Vec3::new(0.0, 1.6, 0.0);
+        let cx = Context {
+            head: Some(head),
+            ..ctx(true)
+        };
+        let at = |z: f32| head + Vec3::new(0.0, -0.2, -z);
+        let mut c = Controls::default();
+        let mut h = dragging_at(at(0.3));
+        run(&mut c, &h, cx);
+        h[1].aim = Some((at(0.7), Quat::IDENTITY));
+        let mut before = 0.0;
+        for _ in 0..40 {
+            if let [Cmd::DragTo { distance, .. }] = run(&mut c, &h, cx)[..] {
+                before = distance;
+            }
+        }
+        assert!(before > 0.3, "{before}");
+        // The head drops out and the hand moves on: the depth stays put.
+        h[1].aim = Some((at(0.4), Quat::IDENTITY));
+        for _ in 0..40 {
+            if let [Cmd::DragTo { distance, .. }] = run(&mut c, &h, ctx(true))[..] {
+                assert!((distance - before).abs() < 1e-4, "{distance} vs {before}");
+            }
+        }
+    }
+
+    #[test]
+    fn pushing_the_hand_out_moves_the_picture_two_for_one_within_the_range() {
+        let push = |moved: f32| pushed_distance(4.0, moved, 1.0..=20.0);
+        assert_eq!(push(0.0), 4.0);
+        assert_eq!(push(0.5), 4.0 + DEPTH_GAIN * 0.5);
+        assert_eq!(push(-0.5), 4.0 - DEPTH_GAIN * 0.5);
+        assert_eq!(push(-5.0), 1.0);
+        assert_eq!(push(50.0), 20.0);
+        assert_eq!(
+            reach(Vec3::new(1.0, 1.0, 1.0), Vec3::new(1.0, 1.0, -2.0)),
+            3.0
+        );
+    }
+
+    #[test]
+    fn a_damped_follower_settles_without_overshooting() {
+        let mut d = Damped::at([0.0, 10.0]);
+        // No time, no movement; no smoothing, straight there.
+        assert_eq!(d.step([1.0, 0.0], DRAG_TAU, 0.0), [0.0, 10.0]);
+        assert_eq!(Damped::at([0.0]).step([3.0], 0.0, 0.01), [3.0]);
+        // One time constant covers 1 - 2/e of the way from rest.
+        let mut d = Damped::at([0.0]);
+        let x = d.step([1.0], DRAG_TAU, DRAG_TAU)[0];
+        assert!((x - (1.0 - 2.0 / std::f32::consts::E)).abs() < 1e-5, "{x}");
+        let mut last = x;
+        for _ in 0..200 {
+            let x = d.step([1.0], DRAG_TAU, 0.01)[0];
+            assert!(x >= last - 1e-6 && x <= 1.0 + 1e-6, "monotone: {x}");
+            last = x;
+        }
+        assert!((last - 1.0).abs() < 1e-4, "{last}");
+    }
+
+    #[test]
+    fn the_follower_feels_the_same_at_any_frame_rate() {
+        let mut slow = Damped::at([0.0, 0.0]);
+        let mut fast = slow;
+        // A moving target, sampled at 72 Hz and at 144 Hz.
+        let target = |t: f32| [t.sin(), t * 0.5];
+        let mut t = 0.0;
+        for _ in 0..72 {
+            slow.step(target(t), DRAG_TAU, 1.0 / 72.0);
+            t += 1.0 / 72.0;
+        }
+        let (mut t, mut from_fast) = (0.0, [0.0; 2]);
+        for _ in 0..144 {
+            from_fast = fast.step(target(t), DRAG_TAU, 1.0 / 144.0);
+            t += 1.0 / 144.0;
+        }
+        // Both end a second in, trailing the target by about the same.
+        let from_slow = slow.value;
+        for (s, f) in from_slow.into_iter().zip(from_fast) {
+            assert!((s - f).abs() < 0.05, "{from_slow:?} {from_fast:?}");
+        }
+        // A constant target is exact: one big step equals many small ones.
+        let (mut one, mut many) = (Damped::at([2.0]), Damped::at([2.0]));
+        let a = one.step([-1.0], DRAG_TAU, 0.12)[0];
+        let mut b = 0.0;
+        for _ in 0..12 {
+            b = many.step([-1.0], DRAG_TAU, 0.01)[0];
+        }
+        assert!((a - b).abs() < 1e-4, "{a} {b}");
+    }
+
+    #[test]
+    fn tremor_is_smaller_after_following() {
+        // A hand shaking +-1 at 10 Hz about a fixed point.
+        let mut d = Damped::at([0.0]);
+        let mut peak = 0.0f32;
+        for frame in 0..720 {
+            let t = frame as f32 / 144.0;
+            let shake = (t * std::f32::consts::TAU * 10.0).sin();
+            let x = d.step([shake], DRAG_TAU, 1.0 / 144.0)[0];
+            if t > 1.0 {
+                peak = peak.max(x.abs());
+            }
+        }
+        assert!(peak < 0.25, "{peak}");
     }
 }

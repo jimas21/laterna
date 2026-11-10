@@ -113,6 +113,18 @@ const PERF: usize = TOAST;
 /// Metres away: far enough to sit beside the picture rather than fill the view,
 /// and just nearer than the library panel, so it shows over that.
 const PERF_DISTANCE: f32 = 1.45;
+/// Metres away each other panel starts: the library panel, the control bar,
+/// the adjust panel, and the keyboard below the one it types into. Holding a
+/// grip on a panel and moving the hand towards or away from the head moves
+/// it nearer or further (see [`PANEL_RANGE`]).
+const MAIN_DISTANCE: f32 = 1.5;
+const BAR_DISTANCE: f32 = 1.05;
+const ADJUST_DISTANCE: f32 = 1.15;
+const KEYBOARD_DISTANCE: f32 = 0.95;
+/// How near and how far a panel may be moved, metres: close enough to read
+/// from a lean, far enough to sit beside a flat screen without leaving reach
+/// of the pointer.
+const PANEL_RANGE: std::ops::RangeInclusive<f32> = 0.5..=3.5;
 const PERF_WIDTH_M: f32 = 0.47;
 /// How far below where you face the browse panel sits, degrees: what is in
 /// front of you is a little below eye level (the panel's top bar, Quit
@@ -168,8 +180,8 @@ pub struct App {
     /// Each hand's ray direction when it last counted as moving.
     activity_aim: [Option<Vec3>; 2],
     controls: crate::controls::Controls,
-    /// Yaw/pitch when a dome drag began.
-    drag_start: Option<(f32, f32)>,
+    /// Yaw, pitch and screen distance when a picture drag began.
+    drag_start: Option<(f32, f32, f32)>,
     panel_drag: Option<PanelDrag>,
     /// Where the adjust panel was placed from when the trigger went down on
     /// it (see `place_panels`).
@@ -208,14 +220,18 @@ pub struct App {
     restart: bool,
 }
 
-/// A panel held by a grip: which panel and hand, and the hand's aim angles
-/// and the panel's offset when it was grabbed.
+/// A panel held by a grip: which panel and hand, the hand's aim angles and
+/// how far it was from the head, and the panel's offset and depth when it
+/// was grabbed; and the hand's movement since, following the hand smoothly.
 #[derive(Clone, Copy)]
 struct PanelDrag {
     panel: usize,
     hand: usize,
     start: (f32, f32),
+    reach: Option<f32>,
     from: [f32; 2],
+    depth: f32,
+    follow: crate::controls::Damped<3>,
 }
 
 fn panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
@@ -446,6 +462,13 @@ impl App {
                 self.save_settings();
             }
             return;
+        }
+        // Settings > Video position moves the open video too (see
+        // `Playback::follow_defaults`).
+        if self.settings.default_view != self.saved.default_view
+            && let Some(p) = &mut self.playback
+        {
+            p.follow_defaults(&self.saved.default_view, &self.settings.default_view);
         }
         if self.settings.remote != self.saved.remote {
             self.services.apply_remote(&self.settings.remote);

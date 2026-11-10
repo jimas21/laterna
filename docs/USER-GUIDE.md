@@ -492,7 +492,17 @@ rest of its adjustments. Your room replaces it while it shows.
 A flat screen's **Distance**, **Width** and **Curvature** are on the adjust
 panel's Position tab too. Its size is its width, so zooming a flat screen
 with the controller makes it wider or narrower, and **Zoom** shows only for
-180°, 360° and fisheye videos.
+180°, 360° and fisheye videos. Dragging a flat screen (grip + trigger) also
+changes its distance: it moves about two metres for each metre your hand
+moves towards or away from your head, within the Distance slider's range
+(1 to 20 m). It keeps its width, so a screen pushed away looks smaller; the
+thumbstick press that resets the picture brings the distance back too.
+
+Settings › Video position (distance, width, curvature, the VR height and the
+background) also moves the video that is open, right away, as long as you
+haven't saved adjustments for it (a video you saved, or touched the
+Passthrough tab of, keeps its own; its Position tab changes it). Anything
+you changed by hand on the open video stays as it is.
 
 3D Blu-rays play as full 3D, each eye at full 1080p, on the Frame's
 hardware decoder: disc images (`.iso`), MKV rips (MakeMKV), and from a
@@ -761,7 +771,7 @@ picture. Play/pause and seeking are under either thumb.
 | Grip + X / Y | Previous / next chapter or bookmark (back within 3 s of one's start goes to the one before) | As without the grip |
 | Grip + A | Bookmark where you are | As without the grip |
 | Grip + thumbstick press | Subtitles off, or back on: the ones you had, else those in your language | As without the grip |
-| Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand) | The same |
+| Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand); moving your hand towards your head brings a flat screen nearer, away from it pushes the screen further | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
 On the control bar, point at the speaker for the volume slider above it;
@@ -786,7 +796,16 @@ to move it about the screen: the adjust panel goes with it. Hold grip on
 the adjust panel to move it about the bar. During a 180° or 360° video,
 Yaw, Pitch and dragging turn only the picture; the control bar and adjust
 panel stay where they are. The browse panel (or the keyboard under it)
-moves the same way, with grip, and stays where you leave it. To put them all back where they start, press **Put back** at the top
+moves the same way, with grip, and stays where you leave it.
+
+The same grip also moves them nearer or further: with a grip held on a panel
+(the browse panel, control bar, adjust panel or performance overlay), move
+your hand towards your head to bring it closer, or away from it to push it
+back, about two metres for each metre your hand moves, between half a metre
+and three and a half metres away. The keyboard under a panel goes with it,
+and the distance is kept with the panel's place. A panel follows your hand a
+moment behind it (about a tenth of a second), which keeps a trembling
+hand from shaking it. To put them all back where they start, press **Put back** at the top
 of the adjust panel's Position tab: a flat screen, the control bar, the
 adjust panel and the browse panel return (a 180° or 360° picture keeps
 its turn; the panel's **Reset** puts the picture's own adjustments back). The format on the control bar

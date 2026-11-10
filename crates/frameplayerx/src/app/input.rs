@@ -1,7 +1,8 @@
 //! Controller commands that are not pointing at a panel.
 
 use super::*;
-use crate::controls::{Cmd, Context};
+use crate::controls::{Cmd, Context, pushed_distance};
+use fp_core::view::SCREEN_DISTANCE;
 
 impl App {
     /// DeoVR-style controller bindings (see controls.rs).
@@ -23,6 +24,7 @@ impl App {
                 over_ui,
                 click_outside,
                 playing,
+                head: input.head.map(|(pos, _)| pos),
                 dt: input.dt,
             },
             &self.settings.controls,
@@ -175,23 +177,31 @@ impl App {
                     ) = (d.yaw, d.pitch, d.roll, d.zoom, d.height, d.forward);
                     if p.format.projection == Projection::Flat {
                         p.settings.screen_width = d.screen_width;
+                        p.settings.screen_distance = d.screen_distance;
                     }
                     p.settings_dirty = true;
                     self.ui.toast(tr!("toast-view-reset"));
                 }
             }
             Cmd::DragBegin => {
-                self.drag_start = self
-                    .playback
-                    .as_ref()
-                    .map(|p| (p.settings.yaw, p.settings.pitch));
+                let view = self.playback.as_ref().map(|p| p.settings);
+                self.drag_start = view.map(|s| (s.yaw, s.pitch, s.screen_distance));
                 buzz.push((self.pointer.active, 0.25, 12));
             }
-            Cmd::DragTo { yaw, pitch } => {
-                if let (Some(p), Some((y0, p0))) = (&mut self.playback, self.drag_start) {
-                    // The picture follows the hand.
+            Cmd::DragTo {
+                yaw,
+                pitch,
+                distance,
+            } => {
+                if let (Some(p), Some((y0, p0, d0))) = (&mut self.playback, self.drag_start) {
+                    // The picture follows the hand; a flat screen comes nearer
+                    // as the hand does, and goes further as it goes away (a
+                    // 180°/360° picture has no distance).
                     p.settings.yaw = y0 + yaw;
                     p.settings.pitch = (p0 + pitch).clamp(-90.0, 90.0);
+                    if p.format.projection == Projection::Flat {
+                        p.settings.screen_distance = pushed_distance(d0, distance, SCREEN_DISTANCE);
+                    }
                     p.settings_dirty = true;
                 }
             }
