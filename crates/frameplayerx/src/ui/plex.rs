@@ -623,9 +623,7 @@ fn server_list(
         })
         .inner
         .clicked();
-    if add
-        && let Some(action) = start_batch(f, configs, fp_core::playback::now_ms())
-    {
+    if add && let Some(action) = start_batch(f, configs, fp_core::playback::now_ms()) {
         actions.push(action);
     }
 }

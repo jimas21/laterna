@@ -324,7 +324,8 @@ impl App {
             } else {
                 let title = credentials.account.as_ref().map(|a| a.title.as_str());
                 let account = title.filter(|t| !t.is_empty()).unwrap_or("Plex");
-                self.ui.toast(tr!("plex-signed-in-again", account = account));
+                let text = tr!("plex-signed-in-again", account = account);
+                self.ui.toast(text);
             }
             self.ui.invalidate();
         }
