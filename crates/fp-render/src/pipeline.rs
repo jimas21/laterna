@@ -15,6 +15,31 @@ pub(crate) enum Depth {
     /// A depth attachment of this format is there; the pipeline neither tests
     /// against it nor writes it.
     Ignore(vk::Format),
+    /// Tests against the attachment (nearer or equal passes) and writes what
+    /// passes: opaque geometry.
+    TestWrite(vk::Format),
+    /// Tests against the attachment but leaves it as it is: a backdrop drawn
+    /// at the far plane after the geometry.
+    Test(vk::Format),
+}
+
+impl Depth {
+    /// The format of the depth attachment the pipeline is bound with, if any.
+    fn format(self) -> Option<vk::Format> {
+        match self {
+            Depth::None => None,
+            Depth::Ignore(f) | Depth::TestWrite(f) | Depth::Test(f) => Some(f),
+        }
+    }
+
+    /// Whether the pipeline tests, and whether it writes.
+    fn test_write(self) -> (bool, bool) {
+        match self {
+            Depth::None | Depth::Ignore(_) => (false, false),
+            Depth::TestWrite(_) => (true, true),
+            Depth::Test(_) => (true, false),
+        }
+    }
 }
 
 pub(crate) struct PipelineDesc<'a> {
@@ -85,13 +110,15 @@ pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
     let formats = [d.color_format];
     let mut rendering =
         vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
-    if let Depth::Ignore(format) = d.depth {
+    if let Some(format) = d.depth.format() {
         rendering = rendering.depth_attachment_format(format);
     }
-    // Testing and writing stay off.
+    // Standard depth: the buffer is cleared to 1.0 and nearer is smaller.
+    let (test, write) = d.depth.test_write();
     let depth_state = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false);
+        .depth_test_enable(test)
+        .depth_write_enable(write)
+        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
     let flags = if d.descriptor_buffer {
         vk::PipelineCreateFlags::DESCRIPTOR_BUFFER_EXT
     } else {
@@ -169,4 +196,27 @@ pub(crate) fn layout(
         )
     }
     .ctx("pipeline layout")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_geometry_writes_depth_and_only_depth_users_test() {
+        let f = vk::Format::D32_SFLOAT;
+        assert_eq!(Depth::None.test_write(), (false, false));
+        assert_eq!(Depth::Ignore(f).test_write(), (false, false));
+        assert_eq!(Depth::TestWrite(f).test_write(), (true, true));
+        assert_eq!(Depth::Test(f).test_write(), (true, false));
+    }
+
+    #[test]
+    fn every_pipeline_in_an_instance_names_its_depth_format() {
+        let f = vk::Format::D16_UNORM;
+        assert_eq!(Depth::None.format(), None);
+        for depth in [Depth::Ignore(f), Depth::TestWrite(f), Depth::Test(f)] {
+            assert_eq!(depth.format(), Some(f));
+        }
+    }
 }

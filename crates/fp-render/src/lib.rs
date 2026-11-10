@@ -14,6 +14,8 @@
 //! - `q10c`: shows the Steam Frame decoder's 10-bit (Q10C) pictures.
 //! - [`mod@env`]: the places the picture can be shown in (a cinema, a studio):
 //!   catalogue, seats, meshes and lighting as plain data, no GPU.
+//! - `env_pass`: draws a place (its meshes, then its sky) inside each eye's
+//!   pass, behind the picture.
 //! - [`testcard`]: a generated test card and test patterns, with their mip
 //!   chains.
 //! - [`hdr`]: HDR on the SDR screen: tone curve, gamut compression and the
@@ -21,6 +23,7 @@
 
 pub mod capture;
 pub mod env;
+mod env_pass;
 pub mod gpu;
 pub mod hdr;
 pub mod math;
@@ -75,5 +78,7 @@ pub(crate) const QUAD_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/qua
 pub(crate) const EGUI_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/egui.spv"));
 pub(crate) const Q10C_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q10c.spv"));
 pub(crate) const PEAK_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/peak.spv"));
+pub(crate) const ENV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/env.spv"));
+pub(crate) const SKY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sky.spv"));
 pub(crate) const SCENE_TP10_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/scene_tp10.spv"));

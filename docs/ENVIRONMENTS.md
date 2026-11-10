@@ -9,9 +9,13 @@ video fills the view and hides the environment, as now.
 ## What exists today
 
 - `fp-render/src/renderer.rs`: each eye pass clears to
-  `VideoParams::background`, draws `scene.wgsl` as one full-screen triangle
-  (it ray-casts onto the flat or curved screen and returns `bg_color`
-  outside it), then egui panels as quads. No depth buffer, no meshes.
+  `VideoParams::background` (and a depth image), draws the chosen place when
+  there is one (`env_pass.rs`: its meshes with depth, then its sky at the far
+  plane), draws `scene.wgsl` as one full-screen triangle over it (it
+  ray-casts onto the flat or curved screen and blends the picture in, so
+  the background or the place shows outside it), then egui panels as quads.
+  The first places are the cinema (a room) and the studio (a sky), built in
+  `fp-render/src/env/`. A 180/360/fisheye picture hides the place.
 - Passthrough already works (background alpha 0).
 - Plex is done upstream: linking, catalog, Continue Watching, search,
   direct play with transcode fallback, watch-state reports.
