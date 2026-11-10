@@ -709,15 +709,14 @@ impl App {
                 let rel = anchor_rot.inverse() * rot;
                 p.player.set_head_orientation(rel.to_array());
             }
-            // In a room the subtitles hang at the screen, not at the distance
+            // In a room the subtitles hang on the screen, not at the distance
             // set for a screen of your own.
-            let distance = room.map(|r| r.distance);
             self.subtitles(
                 renderer,
                 input.time,
                 player,
                 &s,
-                distance,
+                room.as_ref(),
                 input.eye_px_per_tan,
             );
         } else {
@@ -804,7 +803,7 @@ impl App {
         time: f64,
         anchor: Mat4,
         s: &fp_core::view::ViewSettings,
-        screen_distance: Option<f32>,
+        room: Option<&places::RoomFrame>,
         px_per_tan: Option<f32>,
     ) {
         if self.sub_shaper.is_none() {
@@ -825,12 +824,19 @@ impl App {
             .chain(stereo.map(|s| format!("{s:?}")))
             .collect();
         self.subs.visible = !cues.is_empty();
-        let d = screen_distance
-            .unwrap_or(s.subtitle_distance)
+        let aspect = SUBTITLE_POINTS[1] / SUBTITLE_POINTS[0];
+        let d = room
+            .map_or(s.subtitle_distance, |r| r.distance)
             .clamp(0.5, 20.0);
-        let w = 0.9 * d;
-        self.subs.size = Vec2::new(w, w * SUBTITLE_POINTS[1] / SUBTITLE_POINTS[0]);
-        self.subs.pose = place(anchor, 0.0, d, -0.2 * d, 0.0);
+        if let Some(r) = room {
+            let spot = places::subtitle_spot(r, d, aspect);
+            self.subs.size = spot.size;
+            self.subs.pose = spot.pose;
+        } else {
+            let w = 0.9 * d;
+            self.subs.size = Vec2::new(w, w * aspect);
+            self.subs.pose = place(anchor, 0.0, d, -0.2 * d, 0.0);
+        }
         // Painted at the size the eyes show it, so the glyphs are drawn
         // sharp rather than drawn big and minified.
         // The last size the eyes were known to have stands in while the runtime

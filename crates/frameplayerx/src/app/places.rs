@@ -6,7 +6,7 @@
 use crate::settings::{HOUSE_PLAYING, HOUSE_PLAYING_START, Settings};
 use fp_media::PlayerState;
 use fp_render::env::{Layout, Place};
-use glam::{Mat4, Vec2};
+use glam::{Mat4, Vec2, Vec3};
 
 /// The kill switch: `FRAMEPLAYERX_PLACES=0` makes the app never ask for a
 /// place, so the renderer never makes the pipelines for one. It does not
@@ -171,11 +171,40 @@ pub fn room_frame(picture_anchor: Mat4, layout: &Layout, seat: usize) -> Option<
     })
 }
 
+/// How far below the middle of a room's screen the subtitle line hangs, as a
+/// fraction of the screen's height.
+const SUBTITLE_DROP: f32 = 0.2;
+/// How far in front of the screen the subtitles float, metres, so the
+/// picture does not swallow them.
+const SUBTITLE_LIFT: f32 = 0.05;
+
+/// Where the subtitles go in a room: a panel on the screen's own plane.
+#[derive(Clone, Copy, Debug)]
+pub struct SubtitleSpot {
+    /// The panel's centre, facing the seat like the screen.
+    pub pose: Mat4,
+    /// Width and height, metres.
+    pub size: Vec2,
+}
+
+/// The subtitle panel for a room's screen. It hangs below the middle of the
+/// screen by a fraction of the screen's height, not at a fraction of the
+/// distance below the eye (a room's screen is not at eye height), and is as
+/// wide as `distance` allows but never wider than the screen. `aspect` is the
+/// panel's height over its width.
+pub fn subtitle_spot(room: &RoomFrame, distance: f32, aspect: f32) -> SubtitleSpot {
+    let width = 0.9 * distance.min(room.fit.x);
+    let offset = Vec3::new(0.0, -SUBTITLE_DROP * room.fit.y, SUBTITLE_LIFT);
+    SubtitleSpot {
+        pose: room.screen_pose * Mat4::from_translation(offset),
+        size: Vec2::new(width, width * aspect),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use fp_render::env::SeatName;
-    use glam::Vec3;
 
     fn no_vars(_: &str) -> Option<String> {
         None
@@ -386,6 +415,63 @@ mod tests {
         let stale = room_frame(anchor, &layout, 99).unwrap();
         let usual = room_frame(anchor, &layout, layout.default_seat).unwrap();
         assert_eq!(stale.room_to_world, usual.room_to_world);
+    }
+
+    /// The subtitle panel's shape in the app: 1600 x 320.
+    const ASPECT: f32 = 0.2;
+
+    #[test]
+    fn subtitles_hang_on_the_screen_from_every_seat() {
+        let layout = Place::Cinema.layout();
+        for name in [SeatName::Front, SeatName::Middle, SeatName::Back] {
+            let seat = layout.seat_index(name).unwrap();
+            let room = room_frame(Mat4::IDENTITY, &layout, seat).unwrap();
+            let d = room.distance.clamp(0.5, 20.0);
+            let spot = subtitle_spot(&room, d, ASPECT);
+            let centre = room.screen_pose.transform_point3(Vec3::ZERO);
+            let line = spot.pose.transform_point3(Vec3::ZERO);
+            // The line is between the middle of the screen and its bottom
+            // edge, whatever height the seat's eye is at.
+            let drop = centre.y - line.y;
+            assert!(drop > 0.0 && drop < room.fit.y / 2.0, "{name:?}: {drop}");
+            // The whole panel is on the screen, and no wider than it.
+            let half = spot.size.y / 2.0;
+            assert!(drop + half <= room.fit.y / 2.0, "{name:?}: {drop} {half}");
+            assert!(spot.size.x <= room.fit.x, "{name:?}: {}", spot.size.x);
+            assert!((spot.size.y - spot.size.x * ASPECT).abs() < 1e-5);
+            // In front of the screen, straight ahead of it.
+            assert!(line.z > centre.z && line.z - centre.z < 0.1, "{name:?}");
+            assert!((line.x - centre.x).abs() < 1e-5, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn subtitles_are_not_wider_than_the_distance_allows() {
+        let layout = Place::Cinema.layout();
+        let front = layout.seat_index(SeatName::Front).unwrap();
+        let room = room_frame(Mat4::IDENTITY, &layout, front).unwrap();
+        // Near the screen the distance is the limit, as with a screen of one's own.
+        let near = subtitle_spot(&room, 3.0, ASPECT);
+        assert!((near.size.x - 2.7).abs() < 1e-5, "{}", near.size.x);
+        // Far from it the screen is.
+        let far = subtitle_spot(&room, 20.0, ASPECT);
+        let wide = 0.9 * room.fit.x;
+        assert!((far.size.x - wide).abs() < 1e-5, "{}", far.size.x);
+    }
+
+    #[test]
+    fn subtitles_turn_with_the_screen() {
+        let layout = Place::Cinema.layout();
+        let anchor = Mat4::from_translation(Vec3::new(0.5, 1.2, -0.3))
+            * Mat4::from_rotation_y(0.7)
+            * Mat4::from_rotation_x(0.4);
+        let room = room_frame(anchor, &layout, layout.default_seat).unwrap();
+        let spot = subtitle_spot(&room, room.distance, ASPECT);
+        let local = room.screen_pose.inverse() * spot.pose;
+        let (_, rot, pos) = local.to_scale_rotation_translation();
+        let want = Vec3::new(0.0, -SUBTITLE_DROP * room.fit.y, SUBTITLE_LIFT);
+        assert!((pos - want).length() < 1e-4, "{pos}");
+        assert!(rot.angle_between(glam::Quat::IDENTITY) < 1e-4);
     }
 
     #[test]
