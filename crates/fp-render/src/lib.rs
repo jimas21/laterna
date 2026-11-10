@@ -12,6 +12,8 @@
 //! - [`timing`]: per-period duration statistics for the frame loop, and the
 //!   GPU time of each part of a frame.
 //! - `q10c`: shows the Steam Frame decoder's 10-bit (Q10C) pictures.
+//! - [`testcard`]: a generated test card and test patterns, with their mip
+//!   chains.
 //! - [`hdr`]: HDR on the SDR screen: tone curve, gamut compression and the
 //!   scene peak, which `peak` measures from the frames.
 
@@ -26,6 +28,7 @@ mod pipeline;
 mod q10c;
 pub mod renderer;
 mod shared;
+pub mod testcard;
 pub mod timing;
 mod tp10_eyes;
 mod video;
