@@ -527,7 +527,10 @@ mod tests {
         let look = Look::new(&data);
         let (off, full) = (look.uniform(&input(0.0)), look.uniform(&input(1.0)));
         assert_eq!(off.house_rgb.truncate(), Vec3::ZERO);
-        assert_eq!(full.house_rgb.truncate().to_array(), data.lighting.house_rgb);
+        assert_eq!(
+            full.house_rgb.truncate().to_array(),
+            data.lighting.house_rgb
+        );
         assert_eq!((off.ambient_up.w, full.ambient_up.w), (0.0, 1.0));
         // The ambient light is the same; the sky and its fog halve.
         assert_eq!(off.ambient_up.truncate(), full.ambient_up.truncate());
