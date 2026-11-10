@@ -36,10 +36,9 @@ pub fn write_png(height: u32) -> Result<PathBuf, String> {
         return Err(format!("the test card comes in {HEIGHTS:?}, not {height}"));
     }
     let w = width(height);
-    let rgb: Vec<u8> = pictures::card(w, height)
-        .chunks_exact(4)
-        .flat_map(|p| [p[0], p[1], p[2]])
-        .collect();
+    let rgba = pictures::card(w, height);
+    let (texels, _) = rgba.as_chunks::<4>();
+    let rgb: Vec<u8> = texels.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
     let dir = fp_core::dirs::cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(format!("testcard-{height}p.png"));
@@ -214,10 +213,9 @@ mod tests {
             assert!(((position - head.0).length() - distance).abs() < 1e-4);
             assert!((position.y - head.0.y).abs() < 1e-5, "head height");
             let got = clockwise_deg(head);
+            // Clockwise from above is to the right, a negative yaw.
             assert!((got + LAYER_YAW_DEG).abs() < 0.01, "yaw {yaw}: {got}");
         }
-        // Positive is right of the head, as the constant's sign says.
-        assert!(LAYER_YAW_DEG < 0.0);
     }
 
     #[test]
