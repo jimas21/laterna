@@ -615,7 +615,7 @@ impl Source for PlexSource {
     fn list(&self, location: Option<&str>) -> Result<Vec<Entry>> {
         match location {
             None => Ok(self
-                .libraries()?
+                .visible_libraries()?
                 .iter()
                 .map(CatalogItem::to_entry)
                 .collect()),

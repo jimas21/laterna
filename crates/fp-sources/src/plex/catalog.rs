@@ -90,6 +90,48 @@ impl PlexSource {
             .find_map(|path| self.image(&path, size))
     }
 
+    /// Whether the user left library `section` out of this source.
+    fn hidden(&self, section: &str) -> bool {
+        lock(&self.config)
+            .hidden_sections
+            .iter()
+            .any(|hidden| hidden == section)
+    }
+
+    /// Whether a reply's item may be shown: it is not in a library left out.
+    /// One that does not say which library it is in is shown.
+    pub(super) fn shown(&self, v: &Value) -> bool {
+        text(v, "librarySectionID").is_none_or(|section| !self.hidden(&section))
+    }
+
+    /// The items of `raw` that are videos, collections or playlists in
+    /// libraries not left out.
+    fn shown_items(&self, raw: &[Value]) -> Vec<CatalogItem> {
+        raw.iter()
+            .filter(|v| self.shown(v))
+            .filter_map(|v| self.catalog_item(v))
+            .collect()
+    }
+
+    /// `libraries` without those left out.
+    fn without_hidden(&self, mut libraries: Vec<CatalogItem>) -> Vec<CatalogItem> {
+        libraries.retain(|library| {
+            library
+                .id
+                .strip_prefix("section:")
+                .is_none_or(|section| !self.hidden(section))
+        });
+        libraries
+    }
+
+    /// The libraries not left out: what the front page and the source's own
+    /// folder list show.
+    pub(super) fn visible_libraries(&self) -> Result<Vec<CatalogItem>> {
+        Ok(self.without_hidden(self.libraries()?))
+    }
+
+    /// Every library of the server, those left out too: what testing a
+    /// connection and the source's settings go by.
     pub(super) fn libraries(&self) -> Result<Vec<CatalogItem>> {
         self.client()?;
         // Sections is available to shared users too; section/all is the
@@ -314,7 +356,17 @@ impl PlexSource {
         let v = self.json(path)?;
         let c = container(&v);
         let raw = array(c, "Metadata");
-        let mut items: Vec<_> = raw.iter().filter_map(|v| self.catalog_item(v)).collect();
+        // A row's or a collection's listing can hold items of any library.
+        let mixed = query.hub.is_some()
+            || query
+                .parent
+                .as_deref()
+                .is_some_and(|p| p.starts_with(COLLECTION));
+        let mut items: Vec<_> = raw
+            .iter()
+            .filter(|v| !mixed || self.shown(v))
+            .filter_map(|v| self.catalog_item(v))
+            .collect();
         if !query.types.is_empty() {
             items.retain(|i| {
                 query.types.contains(&i.kind)
@@ -546,27 +598,37 @@ impl Catalog for PlexSource {
         }
     }
 
+    fn all_libraries(&self) -> Result<Vec<CatalogItem>> {
+        self.libraries()
+    }
+
     fn home(&self) -> Result<CatalogHome> {
-        let libraries = self.libraries()?;
+        let all = self.libraries()?;
+        // With every library left out the page is empty: the server's rows
+        // for all of them are not asked for.
+        let any = !all.is_empty();
+        let libraries = self.without_hidden(all);
+        let nothing_shown = any && libraries.is_empty();
         let sections: Vec<String> = libraries
             .iter()
             .filter_map(|library| library.id.strip_prefix("section:"))
             .map(str::to_string)
             .collect();
         let resume = match self.json(&format!("{CONTINUE_WATCHING}?X-Plex-Container-Size=20")) {
-            Ok(v) => array(container(&v), "Metadata")
-                .iter()
-                .filter_map(|v| self.catalog_item(v))
-                .collect(),
+            Ok(v) => self.shown_items(array(container(&v), "Metadata")),
             Err(e) => {
                 log::info!("continue watching on {}: {e}", self.name);
                 Vec::new()
             }
         };
-        let rows = self.server_rows(&sections).unwrap_or_else(|e| {
-            log::info!("home rows on {}: {e}", self.name);
+        let rows = if nothing_shown {
             Vec::new()
-        });
+        } else {
+            self.server_rows(&sections).unwrap_or_else(|e| {
+                log::info!("home rows on {}: {e}", self.name);
+                Vec::new()
+            })
+        };
         // A server that gives no rows of its own still gets the newest of each
         // library.
         let mut latest = Vec::new();
@@ -629,10 +691,7 @@ impl Catalog for PlexSource {
                 "episode" | "clip" => "Videos",
                 _ => continue,
             };
-            let found: Vec<_> = array(hub, "Metadata")
-                .iter()
-                .filter_map(|v| self.catalog_item(v))
-                .collect();
+            let found = self.shown_items(array(hub, "Metadata"));
             if found.is_empty() {
                 continue;
             }
@@ -767,9 +826,9 @@ impl Catalog for PlexSource {
     }
     fn next_up(&self, series: Option<&str>, limit: usize) -> Result<Vec<CatalogItem>> {
         let v = self.json(&format!("{CONTINUE_WATCHING}?X-Plex-Container-Size=100"))?;
-        Ok(array(container(&v), "Metadata")
-            .iter()
-            .filter_map(|v| self.catalog_item(v))
+        Ok(self
+            .shown_items(array(container(&v), "Metadata"))
+            .into_iter()
             .filter(|i| {
                 i.kind == CatalogKind::Episode
                     && series.is_none_or(|s| i.series_id.as_deref() == Some(s))
@@ -857,7 +916,14 @@ impl PlexSource {
             if NON_VIDEO_HUBS.contains(&kind.as_str()) || (home && is_continue_watching(hub)) {
                 continue;
             }
-            let raw = array(hub, "Metadata");
+            let hub_section = text(hub, "librarySectionID");
+            if hub_section.as_deref().is_some_and(|s| self.hidden(s)) {
+                continue;
+            }
+            let raw: Vec<&Value> = array(hub, "Metadata")
+                .iter()
+                .filter(|v| self.shown(v))
+                .collect();
             let items: Vec<_> = raw.iter().filter_map(|v| self.catalog_item(v)).collect();
             let title = text(hub, "title").unwrap_or_default();
             if items.len() < raw.len() {
@@ -885,7 +951,7 @@ impl PlexSource {
                     sort: CatalogSort::Server,
                     ..Default::default()
                 });
-            let library = text(hub, "librarySectionID")
+            let library = hub_section
                 .or_else(|| raw.iter().find_map(|m| text(m, "librarySectionID")))
                 .map(|section| format!("section:{section}"));
             rows.push(CatalogRow {
