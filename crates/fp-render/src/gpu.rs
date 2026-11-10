@@ -151,6 +151,23 @@ fn q10c_supported(
         && storage_formats == vk::TRUE
 }
 
+/// Depth formats in order of preference: 32-bit float, then 24-bit, then
+/// 16-bit. Vulkan guarantees one of the first two and the last everywhere.
+const DEPTH_FORMATS: [vk::Format; 3] = [
+    vk::Format::D32_SFLOAT,
+    vk::Format::X8_D24_UNORM_PACK32,
+    vk::Format::D16_UNORM,
+];
+
+/// The first of [`DEPTH_FORMATS`] that `supported` accepts; 16-bit, which
+/// every device can attach, when none is.
+pub(crate) fn pick_depth_format(supported: impl Fn(vk::Format) -> bool) -> vk::Format {
+    DEPTH_FORMATS
+        .into_iter()
+        .find(|&f| supported(f))
+        .unwrap_or(vk::Format::D16_UNORM)
+}
+
 impl Gpu {
     pub fn new(creator: &dyn Creator, app_name: &str) -> Result<Gpu> {
         // SAFETY: loads the system Vulkan loader.
@@ -271,6 +288,23 @@ impl Gpu {
         Gpu::new(&DirectCreator, "frameplayerx")
     }
 
+    /// The format of the depth attachment the eye passes use: the first of
+    /// 32-bit float, 24-bit and 16-bit that can be a depth attachment in
+    /// optimal tiling.
+    pub fn depth_format(&self) -> vk::Format {
+        let format = pick_depth_format(|f| {
+            // SAFETY: valid physical device.
+            let p = unsafe {
+                self.instance
+                    .get_physical_device_format_properties(self.pdev, f)
+            };
+            p.optimal_tiling_features
+                .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+        });
+        log::info!("GPU: eye passes use a {format:?} depth buffer");
+        format
+    }
+
     pub(crate) fn alloc(&self) -> std::sync::MutexGuard<'_, Allocator> {
         lock(&self.allocator)
     }
@@ -306,5 +340,26 @@ impl Drop for Gpu {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_depth_format_prefers_32_bit_float() {
+        assert_eq!(pick_depth_format(|_| true), vk::Format::D32_SFLOAT);
+    }
+
+    #[test]
+    fn pick_depth_format_falls_back_in_order() {
+        let no_32 = pick_depth_format(|f| f != vk::Format::D32_SFLOAT);
+        assert_eq!(no_32, vk::Format::X8_D24_UNORM_PACK32);
+        let only_16 = pick_depth_format(|f| f == vk::Format::D16_UNORM);
+        assert_eq!(only_16, vk::Format::D16_UNORM);
+        // None offered: 16-bit, which every device can attach.
+        let none = pick_depth_format(|_| false);
+        assert_eq!(none, vk::Format::D16_UNORM);
     }
 }
