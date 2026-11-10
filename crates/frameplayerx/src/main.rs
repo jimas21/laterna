@@ -443,10 +443,11 @@ struct Switches {
     /// preview sees it too); it is here so the log says it is set. It does
     /// not undo the change to the eye pass that makes places possible.
     no_places: bool,
-    /// `FRAMEPLAYERX_MSAA=4`: draw the eye passes with 4x multisampling, so
-    /// a room's edges are smooth (1, the default, is none). It costs GPU
-    /// time: the log's "eyes" median says how much, against a run without.
-    msaa: Option<u32>,
+    /// `FRAMEPLAYERX_MSAA=1` (or `0`): draw the eye passes with one sample
+    /// a pixel. They use 4x multisampling by default (smooth edges, and no
+    /// measurable cost on the Frame's tile GPU), which is what `=4` asks for
+    /// too. A device without 4x multisampling gets the nearest it has.
+    msaa_off: bool,
 }
 
 impl Switches {
@@ -475,7 +476,7 @@ impl Switches {
                 get("FRAMEPLAYERX_TESTCARD_LAYER").as_deref(),
             ),
             no_places: !app::places::enabled(&get),
-            msaa: parse_msaa(get("FRAMEPLAYERX_MSAA").as_deref()),
+            msaa_off: msaa_is_off(get("FRAMEPLAYERX_MSAA").as_deref()),
         }
     }
 
@@ -512,8 +513,8 @@ impl Switches {
         if self.no_places {
             on.push("FRAMEPLAYERX_PLACES=0".to_string());
         }
-        if let Some(n) = self.msaa {
-            on.push(format!("FRAMEPLAYERX_MSAA={n}"));
+        if self.msaa_off {
+            on.push("FRAMEPLAYERX_MSAA=1".to_string());
         }
         if on.is_empty() {
             "none".into()
@@ -521,12 +522,21 @@ impl Switches {
             on.join(", ")
         }
     }
+
+    /// The samples a pixel the eye passes are drawn with: 4 unless
+    /// `FRAMEPLAYERX_MSAA` turned it off.
+    fn msaa_samples(&self) -> u32 {
+        if self.msaa_off { 1 } else { EYE_SAMPLES }
+    }
 }
 
-/// The samples a pixel `FRAMEPLAYERX_MSAA` asks for: 4 for "4", and none
-/// (one sample) for "1", nothing or anything else.
-fn parse_msaa(value: Option<&str>) -> Option<u32> {
-    (value.map(str::trim) == Some("4")).then_some(4)
+/// The samples a pixel the eye passes are drawn with by default.
+const EYE_SAMPLES: u32 = 4;
+
+/// Whether `FRAMEPLAYERX_MSAA` turns multisampling off: "1" or "0". Nothing,
+/// "4" or anything else leaves it on.
+fn msaa_is_off(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "0"))
 }
 
 /// What the runtime hands the app each frame, summarised every 10 s. A
@@ -767,7 +777,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         _ => log::info!("display refresh rates: not available"),
     }
     let mut renderer =
-        Renderer::with_samples(gpu.clone(), session.format, switches.msaa.unwrap_or(1))?;
+        Renderer::with_samples(gpu.clone(), session.format, switches.msaa_samples())?;
     renderer.set_quality(switches.quality);
     if let Some(secs) = switches.bare_loop {
         log::info!("bare frame loop for {secs} s: no app, panels or layers");
@@ -1204,17 +1214,20 @@ mod tests {
     }
 
     #[test]
-    fn msaa_is_four_samples_or_none() {
-        assert_eq!(with("FRAMEPLAYERX_MSAA", "4").msaa, Some(4));
-        assert_eq!(with("FRAMEPLAYERX_MSAA", " 4 ").msaa, Some(4));
-        for off in ["", "1", "0", "2", "no"] {
-            assert_eq!(with("FRAMEPLAYERX_MSAA", off).msaa, None, "{off:?}");
+    fn msaa_is_four_samples_unless_turned_off() {
+        // On by default; "4" still asks for the same.
+        assert_eq!(Switches::parse(env(&[])).msaa_samples(), 4);
+        assert_eq!(Switches::parse(env(&[])).describe(), "none");
+        for on in ["4", " 4 ", "", "2", "yes"] {
+            let s = with("FRAMEPLAYERX_MSAA", on);
+            assert_eq!(s.msaa_samples(), 4, "{on:?}");
+            assert_eq!(s.describe(), "none", "{on:?}");
         }
-        assert_eq!(Switches::parse(env(&[])).msaa, None);
-        assert_eq!(
-            with("FRAMEPLAYERX_MSAA", "4").describe(),
-            "FRAMEPLAYERX_MSAA=4"
-        );
+        for off in ["1", "0", " 1 "] {
+            let s = with("FRAMEPLAYERX_MSAA", off);
+            assert_eq!(s.msaa_samples(), 1, "{off:?}");
+            assert_eq!(s.describe(), "FRAMEPLAYERX_MSAA=1", "{off:?}");
+        }
     }
 
     #[test]
