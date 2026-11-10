@@ -445,7 +445,7 @@ impl App {
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_below(anchor, my, mp, main_d, BELOW_DEG);
-        self.panels[BAR].pose = place(bar_anchor, 0.0, bar_d, -0.32, 22.0);
+        self.panels[BAR].pose = place(bar_anchor, 0.0, bar_d, -0.32 * bar_d / BAR_DISTANCE, 22.0);
         self.panels[TRACKS].pose = above_bar(&self.panels[BAR], &self.panels[TRACKS]);
         self.panels[TOAST].pose = toast_pose(
             &self.panels[BAR],
@@ -464,7 +464,8 @@ impl App {
         };
         let kb_anchor = place_around(kb_from, ky, kp, 0.0, 0.0);
         let kb_d = panel_distance(KEYBOARD_DISTANCE, kb_moved);
-        self.panels[KEYBOARD].pose = place(kb_anchor, 0.0, kb_d, -0.55, 35.0);
+        let kb_drop = -0.55 * kb_d / KEYBOARD_DISTANCE;
+        self.panels[KEYBOARD].pose = place(kb_anchor, 0.0, kb_d, kb_drop, 35.0);
         // From the same point as the library panel, so it stays in the room or
         // follows along with the menus.
         let start = perf_start_yaw(
