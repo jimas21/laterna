@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 /// The colour around a flat screen to start with, a near-black grey.
 pub const BACKGROUND: [f32; 3] = [0.086, 0.086, 0.11];
 
+/// Metres a flat screen may be from the viewer.
+pub const SCREEN_DISTANCE: std::ops::RangeInclusive<f32> = 1.0..=20.0;
+
 /// Everything the viewer can adjust about how a video is shown. Defaults are
 /// neutral. Persisted per video by the library and applied by the renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

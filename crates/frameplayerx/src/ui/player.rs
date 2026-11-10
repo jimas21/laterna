@@ -1384,7 +1384,7 @@ fn position_tab(
                 tr!("adjust-distance"),
                 None,
                 &mut s.screen_distance,
-                1.0..=20.0,
+                fp_core::view::SCREEN_DISTANCE,
                 d.screen_distance,
                 " m",
                 1,
