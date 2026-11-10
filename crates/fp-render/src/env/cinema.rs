@@ -618,7 +618,7 @@ mod tests {
         }
         assert!(front.eye.z >= 6.5);
         // In front of it there is only flat floor, the stage and two steps.
-        assert!(APPROACH_Z > STAGE_DEPTH + 2.0);
+        const { assert!(APPROACH_Z > STAGE_DEPTH + 2.0) };
         assert_eq!(floor_at(APPROACH_Z - 0.5), 0.0);
     }
 
