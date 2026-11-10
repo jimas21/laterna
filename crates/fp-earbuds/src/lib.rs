@@ -8,7 +8,10 @@
 //! - [`state`]: what is known about the earbuds. Plain data.
 //! - [`wire`]: the JSON, parsed forgivingly and without any I/O.
 //! - [`settings`]: the user's four settings, loaded forgivingly.
+//! - [`policy`]: when to pause or resume a video as earbuds come out and go back in. Pure; the
+//!   caller passes the time.
 
+pub mod policy;
 pub mod settings;
 pub mod state;
 pub mod wire;
