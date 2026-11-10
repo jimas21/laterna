@@ -1,0 +1,42 @@
+{
+  "id": 100,
+  "name": "Example Home",
+  "guestEnabled": false,
+  "users": [
+    {
+      "id": 1,
+      "uuid": "uuid-owner",
+      "title": "Owner",
+      "username": "owner",
+      "thumb": "https://example.invalid/avatar/1",
+      "admin": true,
+      "guest": false,
+      "restricted": false,
+      "protected": false,
+      "home": true
+    },
+    {
+      "id": 2,
+      "uuid": "uuid-guest",
+      "title": "Guest",
+      "username": "",
+      "thumb": "https://example.invalid/avatar/2",
+      "admin": false,
+      "guest": false,
+      "restricted": false,
+      "protected": true,
+      "home": true
+    },
+    {
+      "id": "3",
+      "uuid": "uuid-kid",
+      "title": "Kid",
+      "thumb": "",
+      "admin": false,
+      "guest": false,
+      "restricted": true,
+      "protected": false,
+      "home": true
+    }
+  ]
+}
