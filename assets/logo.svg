@@ -1,18 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- FramePlayerX: an X opened in the middle for a play button. The blue
-       and violet arms are the left and right eye. tools/make-artwork.py
-       renders the Steam artwork from this file, without the background
-       for the transparent logo. -->
+  <!-- Laterna: a magic lantern's brass lens throws a beam onto the wall, and
+       the warm disc of light it lands as carries a play notch. The faint
+       cool disc behind it is the afterimage that light leaves in your eyes.
+       tools/make-artwork.py renders the Steam artwork from this file,
+       without the background for the transparent logo. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#141A33"/>
-      <stop offset="1" stop-color="#2B1A5E"/>
+      <stop offset="0" stop-color="#1F1812"/>
+      <stop offset="1" stop-color="#0E0B08"/>
     </linearGradient>
+    <radialGradient id="disc" cx="0.42" cy="0.4" r="0.64">
+      <stop offset="0" stop-color="#FFEBC2"/>
+      <stop offset="0.55" stop-color="#FFCB80"/>
+      <stop offset="1" stop-color="#E08F45"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="0.1" y1="0.9" x2="0.75" y2="0.25">
+      <stop offset="0" stop-color="#FFD9A0" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#FFD9A0" stop-opacity="0.12"/>
+    </linearGradient>
+    <radialGradient id="after" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3FB8C9" stop-opacity="0.38"/>
+      <stop offset="0.7" stop-color="#2F6DFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#2F6DFF" stop-opacity="0"/>
+    </radialGradient>
   </defs>
   <rect id="background" width="512" height="512" rx="112" fill="url(#bg)"/>
-  <g fill="none" stroke-linecap="round" stroke-width="52">
-    <path stroke="#5CA0FF" d="M118 118L168 168M344 344L394 394"/>
-    <path stroke="#AA6EFF" d="M394 118L344 168M168 344L118 394"/>
-  </g>
-  <path fill="#FFFFFF" stroke="#FFFFFF" stroke-width="22" stroke-linejoin="round" d="M218 186V326L336 256Z"/>
+  <circle cx="344" cy="226" r="150" fill="url(#after)"/>
+  <path fill="url(#beam)" d="M120 352L170 402L398 268L246 116Z"/>
+  <circle cx="310" cy="194" r="122" fill="url(#disc)"/>
+  <path fill="#1A1410" stroke="#1A1410" stroke-width="16" stroke-linejoin="round" d="M282 144V244L368 194Z"/>
+  <circle cx="142" cy="380" r="42" fill="#2A1E14" stroke="#B8894A" stroke-width="16"/>
+  <circle cx="142" cy="380" r="16" fill="#FFE2AA"/>
 </svg>
