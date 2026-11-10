@@ -210,6 +210,7 @@ impl PyramidPass {
                 blend: false,
                 descriptor_buffer: false,
                 depth: Depth::None,
+                samples: vk::SampleCountFlags::TYPE_1,
             },
             c"fs_pyramid",
         );

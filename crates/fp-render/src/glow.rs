@@ -273,6 +273,7 @@ pub(crate) fn desc(
         blend: false,
         descriptor_buffer,
         depth: Depth::None,
+        samples: vk::SampleCountFlags::TYPE_1,
     }
 }
 

@@ -109,7 +109,14 @@ impl Image {
     ) -> Result<Image> {
         let format = view_formats[0];
         let mut format_list = vk::ImageFormatListCreateInfo::default().view_formats(view_formats);
-        let mut info = image_info(format, width, height, mips, usage);
+        let mut info = image_info(
+            format,
+            width,
+            height,
+            mips,
+            usage,
+            vk::SampleCountFlags::TYPE_1,
+        );
         if view_formats.len() > 1 {
             info = info
                 .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
@@ -118,20 +125,40 @@ impl Image {
         Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, view_formats, name)
     }
 
-    /// A depth attachment image of `format`, for rendering only: its
-    /// contents never leave the tile, so it is a transient attachment. Its
-    /// single view (`views[0]`) has the depth aspect.
+    /// A depth attachment image of `format` with `samples` samples a pixel,
+    /// for rendering only: its contents never leave the tile, so it is a
+    /// transient attachment. Its single view (`views[0]`) has the depth
+    /// aspect.
     pub fn depth(
         gpu: &Gpu,
         width: u32,
         height: u32,
         format: vk::Format,
+        samples: vk::SampleCountFlags,
         name: &str,
     ) -> Result<Image> {
         let usage = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
-        let info = image_info(format, width, height, 1, usage);
+        let info = image_info(format, width, height, 1, usage, samples);
         Image::create(gpu, &info, vk::ImageAspectFlags::DEPTH, &[format], name)
+    }
+
+    /// A multisampled colour attachment image of `format` with `samples`
+    /// samples a pixel, for rendering only: the pass resolves it into the
+    /// eye's own image and never stores it, so it is a transient attachment
+    /// (on a tiler it need never leave the tile).
+    pub fn multisampled(
+        gpu: &Gpu,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        samples: vk::SampleCountFlags,
+        name: &str,
+    ) -> Result<Image> {
+        let usage =
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
+        let info = image_info(format, width, height, 1, usage, samples);
+        Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, &[format], name)
     }
 
     fn create(
@@ -219,13 +246,15 @@ impl Image {
     }
 }
 
-/// The `CreateInfo` of a single-sample, optimally tiled 2D image.
+/// The `CreateInfo` of an optimally tiled 2D image with `samples` samples a
+/// pixel.
 fn image_info<'a>(
     format: vk::Format,
     width: u32,
     height: u32,
     mips: u32,
     usage: vk::ImageUsageFlags,
+    samples: vk::SampleCountFlags,
 ) -> vk::ImageCreateInfo<'a> {
     vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
@@ -237,7 +266,7 @@ fn image_info<'a>(
         })
         .mip_levels(mips.max(1))
         .array_layers(1)
-        .samples(vk::SampleCountFlags::TYPE_1)
+        .samples(samples)
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(usage)
         .initial_layout(vk::ImageLayout::UNDEFINED)

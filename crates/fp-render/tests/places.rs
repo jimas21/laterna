@@ -22,7 +22,7 @@ use std::time::Duration;
 mod common;
 use common::{
     SIZE, centre, eyes_looking, frame, is_blue, is_red, near, params, px, render, render_eyes,
-    setup, srgb,
+    setup, setup_samples, srgb,
 };
 
 /// Where the viewer's eyes are in the world, metres up.
@@ -625,4 +625,75 @@ fn screen_light_off_leaves_the_room_unlit_by_the_picture() {
     let (dark, lit) = (lower_mean(&off_red, 90), lower_mean(&on_red, 90));
     assert!(lit[0] > dark[0] + 0.25, "off {dark:?}, on {lit:?}");
     e.destroy(&r);
+}
+
+/// The pixels of `img` that are neither the red square's nor the blue
+/// behind it: the ones an edge between them is smoothed into.
+fn between_red_and_blue(img: &[u8]) -> usize {
+    (0..SIZE)
+        .flat_map(|y| (0..SIZE).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let c = px(img, x, y);
+            !is_red(c) && !is_blue(c)
+        })
+        .count()
+}
+
+/// A red square in front of blue, seen with the head tilted so the square's
+/// edges are slanted, at `samples` samples a pixel: the two eyes' images and
+/// the samples the device gave.
+fn slanted_edge(samples: u32) -> Option<([Vec<u8>; 2], u32)> {
+    let (mut r, mut e) = setup_samples(SIZE, samples)?;
+    let mut data = red_and_blue();
+    square(&mut data, -2.0, 1.0, 0);
+    square(&mut data, -4.0, 4.0, 1);
+    r.set_place_data(Place::Cinema, data);
+    let mut p = plain_params();
+    p.env = Some(EnvFrame {
+        place: Place::Cinema,
+        room_to_world: Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0)),
+        house: 1.0,
+        screen_light: false,
+        time: 0.0,
+    });
+    let eyes = eyes_looking(EYE_HEIGHT, Quat::from_rotation_z(0.3));
+    let img = render_eyes(&mut r, &mut e, None, &p, &[], &eyes);
+    let had = r.samples();
+    e.destroy(&r);
+    Some((img, had))
+}
+
+#[test]
+fn msaa_smooths_a_room_edge() {
+    let Some((one, had_one)) = slanted_edge(1) else {
+        return;
+    };
+    assert_eq!(had_one, 1);
+    for img in &one {
+        assert_eq!(
+            between_red_and_blue(img),
+            0,
+            "at one sample an edge is two values"
+        );
+    }
+    let Some((four, had)) = slanted_edge(4) else {
+        return;
+    };
+    if had < 4 {
+        eprintln!("skipping: the device has no 4x multisampling");
+        return;
+    }
+    for (eye, img) in four.iter().enumerate() {
+        // The square's slanted edges are some 120 pixels long: nearly every
+        // pixel on them takes a value between the two colours.
+        let smoothed = between_red_and_blue(img);
+        assert!(smoothed > 40, "eye {eye}: {smoothed} pixels are between");
+        // The middle of the square and the blue far from it are untouched.
+        assert!(is_red(centre(img)), "eye {eye}: centre {:?}", centre(img));
+        assert!(
+            is_blue(px(img, 3, 3)),
+            "eye {eye}: corner {:?}",
+            px(img, 3, 3)
+        );
+    }
 }

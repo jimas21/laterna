@@ -496,9 +496,17 @@ type Part = fn(&fp_render::GpuTimes) -> Option<f32>;
 #[derive(Default)]
 pub struct GpuWindow {
     frames: Vec<fp_render::GpuTimes>,
+    /// Samples a pixel of the eye passes (0 or 1: no multisampling).
+    samples: u32,
 }
 
 impl GpuWindow {
+    /// Says how the eye passes are multisampled, so the line shows which run
+    /// an "eyes" time is of.
+    pub fn set_samples(&mut self, samples: u32) {
+        self.samples = samples;
+    }
+
     pub fn push(&mut self, times: Option<fp_render::GpuTimes>) {
         self.frames.extend(times);
     }
@@ -540,6 +548,9 @@ impl GpuWindow {
             })
             .collect();
         line += &format!("; medians {}", medians.join(", "));
+        if self.samples > 1 {
+            line += &format!("; eyes at {}x MSAA", self.samples);
+        }
         if let Some(mhz) = gpu_clock() {
             line += &format!("; GPU at {mhz} MHz");
         }
@@ -602,6 +613,26 @@ mod tests {
         }
         let line = w.take_line().expect("a line");
         assert!(line.contains("medians eyes 3.00, pyramid 0.40"), "{line}");
+    }
+
+    #[test]
+    fn the_gpu_line_says_when_the_eyes_are_multisampled() {
+        let frame = || fp_render::GpuTimes {
+            eyes: Some(3.0),
+            total: Some(4.0),
+            ..Default::default()
+        };
+        let mut w = GpuWindow::default();
+        w.push(Some(frame()));
+        let plain = w.take_line().expect("a line");
+        assert!(!plain.contains("MSAA"), "{plain}");
+        w.set_samples(1);
+        w.push(Some(frame()));
+        assert!(!w.take_line().expect("a line").contains("MSAA"));
+        w.set_samples(4);
+        w.push(Some(frame()));
+        let line = w.take_line().expect("a line");
+        assert!(line.contains("; eyes at 4x MSAA"), "{line}");
     }
 
     // As read on a Steam Frame (SteamOS 0.4.5).

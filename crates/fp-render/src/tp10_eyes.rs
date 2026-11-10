@@ -63,16 +63,15 @@ unsafe impl Send for Tp10Eyes {}
 impl Tp10Eyes {
     /// The pipeline and `slots` frame slots' buffers, drawing into
     /// `color_format` (with a depth attachment of `depth_format` in the
-    /// instance, which it ignores) and sampling through `sampler`; `aniso` is
-    /// the pyramid's sampler and `dummy` a view for its descriptor until there
-    /// is a pyramid.
+    /// instance, which it ignores), `samples` samples a pixel, sampling
+    /// through `sampler`; `aniso` is the pyramid's sampler and `dummy` a view
+    /// for its descriptor until there is a pyramid.
     pub fn new(
         gpu: &Gpu,
         color_format: vk::Format,
         depth_format: vk::Format,
-        sampler: vk::Sampler,
-        aniso: vk::Sampler,
-        dummy: vk::ImageView,
+        samples: vk::SampleCountFlags,
+        (sampler, aniso, dummy): (vk::Sampler, vk::Sampler, vk::ImageView),
         slots: usize,
     ) -> Result<Tp10Eyes> {
         let mut t = Tp10Eyes {
@@ -95,6 +94,7 @@ impl Tp10Eyes {
             gpu,
             color_format,
             depth_format,
+            samples,
             (sampler, aniso, dummy),
             slots,
         ) {
@@ -109,6 +109,7 @@ impl Tp10Eyes {
         gpu: &Gpu,
         color_format: vk::Format,
         depth_format: vk::Format,
+        samples: vk::SampleCountFlags,
         (sampler, aniso, dummy): (vk::Sampler, vk::Sampler, vk::ImageView),
         slots: usize,
     ) -> Result<()> {
@@ -185,6 +186,7 @@ impl Tp10Eyes {
                 blend: true,
                 descriptor_buffer: true,
                 depth: Depth::Ignore(depth_format),
+                samples,
             },
         )?;
         for _ in 0..slots {
