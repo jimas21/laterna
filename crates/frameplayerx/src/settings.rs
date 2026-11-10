@@ -229,6 +229,10 @@ pub struct PanelOffsets {
     pub perf: [f32; 2],
     /// How much nearer or further than usual each of them was moved.
     pub depth: PanelDepths,
+    /// How much bigger or smaller than usual the library panel was made by
+    /// its corner handle. An `Option`: a settings file from before has none,
+    /// and a plain number would default to 0 and shrink the panel to nothing.
+    pub scale_main: Option<f32>,
 }
 
 /// Metres each panel that moves was pulled in (negative) or pushed out from

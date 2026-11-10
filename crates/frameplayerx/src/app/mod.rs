@@ -189,6 +189,8 @@ pub struct App {
     pointer: Pointer,
     /// The move bar and resize handle under a flat screen (`chrome`).
     chrome: chrome::ScreenChrome,
+    /// The move bars under the panels, and the library's resize handle.
+    panel_chrome: chrome::panels::PanelChrome,
     /// The size of the last picture the video gave, for the screen's shape.
     last_frame_size: Option<(u32, u32)>,
     pub playback: Option<Playback>,
@@ -268,6 +270,12 @@ pub struct App {
 struct PanelDrag {
     panel: usize,
     hand: usize,
+    /// What took hold: a grip anywhere on the panel, or a trigger on its
+    /// bar. The hold ends when that is let go.
+    by: crate::world::GrabBy,
+    /// The panels' window controls' bar that took hold, if one did (which of
+    /// `chrome::panels`), to show it held.
+    via: Option<usize>,
     start: (f32, f32),
     reach: Option<f32>,
     from: [f32; 2],
@@ -358,6 +366,7 @@ impl App {
             sub_fonts,
             pointer: Pointer::default(),
             chrome: Default::default(),
+            panel_chrome: Default::default(),
             last_frame_size: None,
             playback: None,
             open_seq: 0,
@@ -443,12 +452,17 @@ impl App {
     /// One line about the open video and the UI, for the preview harness.
     pub fn status_line(&self) -> String {
         let ui = format!(
-            "ui_visible={} browser={} adjust={} tracks={} dashboard_requests={}",
+            "ui_visible={} browser={} adjust={} tracks={} dashboard_requests={} \
+             main_scale={:.2} main_yaw={:.1} main_pitch={:.1} main_depth={:.2}",
             self.ui_visible,
             self.show_browser,
             self.ui.adjust_open,
             self.ui.tracks_open,
-            self.dashboard_requests
+            self.dashboard_requests,
+            self.panels[MAIN].world_scale(),
+            self.offsets.main[0],
+            self.offsets.main[1],
+            self.offsets.depth.main
         );
         match &self.playback {
             Some(p) => format!(
@@ -494,6 +508,20 @@ impl App {
         })
     }
 
+    /// One of the panels' window controls by its preview name (`main-bar`,
+    /// `adjust-bar`, `perf-bar`, `keyboard-bar`, `main-corner`).
+    fn panel_chrome_named(&self, name: &str) -> Option<&Panel> {
+        let chrome = &self.panel_chrome;
+        Some(match name {
+            "main-bar" => &chrome.bars[0],
+            "adjust-bar" => &chrome.bars[1],
+            "perf-bar" => &chrome.bars[2],
+            "keyboard-bar" => &chrome.bars[3],
+            "main-corner" => &chrome.corner,
+            _ => return None,
+        })
+    }
+
     /// Repaints every panel next frame (the preview changed the UI state).
     pub fn repaint_all(&mut self) {
         for p in self.panels.iter_mut() {
@@ -501,6 +529,7 @@ impl App {
         }
         self.chrome.bar.request_repaint();
         self.chrome.corner.request_repaint();
+        self.panel_chrome.request_repaint();
     }
 
     /// The renderer's image of a visible panel, for preview screenshots.
@@ -510,7 +539,10 @@ impl App {
             "perf" => &self.perf,
             "window-bar" => &self.chrome.bar,
             "window-corner" => &self.chrome.corner,
-            _ => &self.panels[Self::panel_index(name)?],
+            _ => match self.panel_chrome_named(name) {
+                Some(p) => p,
+                None => &self.panels[Self::panel_index(name)?],
+            },
         };
         p.visible.then_some(p.id).flatten()
     }
@@ -520,7 +552,10 @@ impl App {
             "perf" => &self.perf,
             "window-bar" => &self.chrome.bar,
             "window-corner" => &self.chrome.corner,
-            _ => &self.panels[Self::panel_index(name)?],
+            _ => match self.panel_chrome_named(name) {
+                Some(p) => p,
+                None => &self.panels[Self::panel_index(name)?],
+            },
         };
         if !p.visible {
             return None;

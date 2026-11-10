@@ -2,6 +2,7 @@
 //! draws.
 
 use super::*;
+use crate::world::GrabBy;
 use fp_render::ScreenShape;
 
 impl App {
@@ -14,6 +15,7 @@ impl App {
         self.reanchor = true;
         self.panel_drag = None;
         self.chrome.cancel();
+        self.panel_chrome.cancel();
         self.offsets.main = [0.0, 0.0];
         self.offsets.depth.main = 0.0;
         self.settings.panel_offsets = self.offsets;
@@ -34,6 +36,7 @@ impl App {
     pub(super) fn reset_placement(&mut self) {
         self.panel_drag = None;
         self.chrome.cancel();
+        self.panel_chrome.cancel();
         self.adjust_hold = None;
         self.offsets = Default::default();
         self.settings.panel_offsets = self.offsets;
@@ -66,7 +69,7 @@ impl App {
     /// and trigger (see `controls`).
     pub(super) fn move_panels(
         &mut self,
-        grab: Option<(usize, usize)>,
+        grab: Option<(usize, usize, GrabBy, Option<usize>)>,
         input: &FrameInput,
         anchor: Mat4,
         buzz: &mut Vec<(usize, f32, i64)>,
@@ -95,13 +98,13 @@ impl App {
             BAR => under,
             _ => room,
         };
-        let grab = grab.and_then(|(panel, hand)| match panel {
-            KEYBOARD => self.keyboard_target().map(|t| (t, hand)),
-            MAIN | ADJUST | PERF => Some((panel, hand)),
-            BAR | TRACKS if self.playback.is_some() => Some((BAR, hand)),
+        let grab = grab.and_then(|(panel, hand, by, via)| match panel {
+            KEYBOARD => self.keyboard_target().map(|t| (t, hand, by, via)),
+            MAIN | ADJUST | PERF => Some((panel, hand, by, via)),
+            BAR | TRACKS if self.playback.is_some() => Some((BAR, hand, by, via)),
             _ => None,
         });
-        if let Some((panel, hand)) = grab
+        if let Some((panel, hand, by, via)) = grab
             && let Some((pos, rot)) = hands[hand].aim
         {
             let start = match panel {
@@ -113,6 +116,8 @@ impl App {
             self.panel_drag = Some(PanelDrag {
                 panel,
                 hand,
+                by,
+                via,
                 start: angles(rot, frame_of(panel)),
                 reach: head.map(|head| reach(head, pos)),
                 from: start,
@@ -124,6 +129,8 @@ impl App {
         let Some(PanelDrag {
             panel,
             hand,
+            by,
+            via: _,
             start: (y0, p0),
             reach: reach0,
             from: [oy, op],
@@ -134,12 +141,19 @@ impl App {
             return;
         };
         let h = &hands[hand];
-        if h.squeeze > GRIP * 0.6 {
+        let held = match by {
+            GrabBy::Grip => h.squeeze > GRIP * 0.6,
+            GrabBy::Trigger => self.pointer.trigger_down(hand),
+        };
+        if held {
             if let Some((pos, rot)) = h.aim {
                 let (y, p) = angles(rot, frame_of(panel));
                 // Without the head (then or now) the depth holds where it is.
-                let moved = match (head, reach0) {
-                    (Some(head), Some(r)) => reach(head, pos) - r,
+                // A trigger takes no reach from the hand: the thumbstick
+                // pushes and pulls instead (as at the screen's bar).
+                let moved = match (head, reach0, by) {
+                    (_, _, GrabBy::Trigger) => 0.0,
+                    (Some(head), Some(r), _) => reach(head, pos) - r,
                     _ => follow.value()[2],
                 };
                 // Where the hand is, a moment behind it: a hand's tremor would
@@ -150,7 +164,13 @@ impl App {
                 }
                 let to = [wrap(oy + dy), (op + dp).clamp(-45.0, 45.0)];
                 let usual = usual_distance(panel);
-                *self.depth_of(panel) = pushed_distance(usual + z0, dz, PANEL_RANGE) - usual;
+                *self.depth_of(panel) = match by {
+                    GrabBy::Grip => pushed_distance(usual + z0, dz, PANEL_RANGE) - usual,
+                    GrabBy::Trigger => {
+                        let now = panel_distance(usual, *self.depth_of(panel));
+                        Self::stick_pushed(now, h.stick.y, input.dt) - usual
+                    }
+                };
                 match panel {
                     MAIN => self.offsets.main = to,
                     ADJUST => self.offsets.adjust = to,
@@ -189,13 +209,16 @@ impl App {
         self.panels[KEYBOARD].visible = kb_target.is_some();
         self.chrome.ease(input.dt);
         self.place_panels(anchor, kb_target);
+        self.place_panel_chrome(eye);
         let buzz = self.route_input(&input, anchor);
         // Routing the input moved the panels, the picture or both: place the
         // panels again, so they are drawn where the hands just put them rather
         // than a frame behind.
         self.place_panels(anchor, kb_target);
+        self.place_panel_chrome(eye);
         self.paint_panels(renderer, &input, kb_target);
         self.paint_window_controls(renderer, &input);
+        self.paint_panel_chrome(renderer, &input);
         self.perf_overlay(renderer, &input);
         let (frame, video, passthrough) = self.video(renderer, &input, anchor);
         let (quads, layers) = self.compose(&input, eye);
@@ -291,8 +314,10 @@ impl App {
     /// stays where it is, menus included: a room that turned with the head
     /// would swim, and so would a sky and its floor.
     fn follows(&self, passthrough_available: bool) -> bool {
-        let dragging =
-            self.panel_drag.is_some() || self.drag_start.is_some() || self.chrome.dragging();
+        let dragging = self.panel_drag.is_some()
+            || self.drag_start.is_some()
+            || self.chrome.dragging()
+            || self.panel_chrome.resizing();
         follows_head(self.settings.follow, self.flat_or_none(), dragging)
             && self.active_place(passthrough_available).is_none()
     }
@@ -556,7 +581,23 @@ impl App {
             // The window controls (app/chrome) come last, after the overlay:
             // see `chrome::WINDOW_BAR`.
             let (bar, corner) = (&mut self.chrome.bar, &mut self.chrome.corner);
-            let mut panels = [a, b, c, d, e, &mut self.perf, bar, corner];
+            let [lib_bar, adjust_bar, perf_bar, kb_bar] = &mut self.panel_chrome.bars;
+            let lib_corner = &mut self.panel_chrome.corner;
+            let mut panels = [
+                a,
+                b,
+                c,
+                d,
+                e,
+                &mut self.perf,
+                bar,
+                corner,
+                lib_bar,
+                adjust_bar,
+                perf_bar,
+                kb_bar,
+                lib_corner,
+            ];
             self.pointer.route(&mut panels, &input.hands, input.dt)
         };
         let mut buzz = Vec::new();
@@ -567,17 +608,31 @@ impl App {
             Some(g) if matches!(g.panel, chrome::WINDOW_BAR | chrome::WINDOW_CORNER) => {
                 self.begin_window_drag(g, input, anchor, &mut buzz);
             }
-            Some(g) => panel_grab = Some((g.panel, g.hand)),
+            Some(g) if g.panel == chrome::panels::PANEL_CORNER => {
+                self.begin_panel_resize(g, input, &mut buzz);
+            }
+            // A bar under a panel moves that panel (the keyboard's, the one
+            // it types into).
+            Some(g) if g.panel >= chrome::panels::PANEL_BAR_FIRST => {
+                if let Some((slot, target)) = self.panel_bar_target(g.panel) {
+                    panel_grab = Some((target, g.hand, g.by, Some(slot)));
+                }
+            }
+            Some(g) => panel_grab = Some((g.panel, g.hand, g.by, None)),
             None => {}
         }
         self.move_panels(panel_grab, input, anchor, &mut buzz);
         self.update_window_drag(input, anchor, &mut buzz);
+        self.update_panel_resize(input, &mut buzz);
         if let Some(hand) = routed.pressed {
             buzz.push((hand, 0.2, 8));
         }
         self.controller(
             input,
-            routed.over_ui || self.panel_drag.is_some() || self.chrome.dragging(),
+            routed.over_ui
+                || self.panel_drag.is_some()
+                || self.chrome.dragging()
+                || self.panel_chrome.resizing(),
             routed.click_outside,
             anchor,
             &mut buzz,
@@ -809,7 +864,12 @@ impl App {
             &mut self.chrome.bar,
             &mut self.chrome.corner,
         ];
-        for p in self.panels.iter_mut().chain(extra) {
+        for p in self
+            .panels
+            .iter_mut()
+            .chain(extra)
+            .chain(self.panel_chrome.all_mut())
+        {
             p.update_fade(input.dt);
         }
         let mut order: Vec<(u64, &Panel)> = self
@@ -822,6 +882,7 @@ impl App {
                 (chrome::BAR_LAYER, &self.chrome.bar),
                 (chrome::CORNER_LAYER, &self.chrome.corner),
             ])
+            .chain(self.panel_chrome.all())
             .filter(|(_, p)| p.shown())
             .collect();
         let distance = |p: &Panel| (p.pose.w_axis.truncate() - eye).length();
