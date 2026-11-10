@@ -431,6 +431,8 @@ struct Switches {
     no_dashboard_close: bool,
     /// `FRAMEPLAYERX_QUALITY=nodither,nosupersample,noedgeaa,nopyramid`: turn picture
     /// quality features off, to compare a look with and without on one build.
+    /// `FRAMEPLAYERX_EDGE=<pixels>` and `FRAMEPLAYERX_EDGE_GAMMA=<curve>` tune
+    /// the picture's edge blend (defaults 1.75 and 1.6).
     quality: Quality,
     /// `FRAMEPLAYERX_TESTCARD=1080|2160`: open the generated test card
     /// (a PNG of that height) instead of the library.
@@ -471,7 +473,17 @@ impl Switches {
             bare_loop: number("FRAMEPLAYERX_BARE_LOOP").filter(|s| *s > 0.0),
             xr_minimal: on("FRAMEPLAYERX_XR_MINIMAL"),
             no_dashboard_close: on("FRAMEPLAYERX_NO_DASHBOARD_CLOSE"),
-            quality: Quality::without(get("FRAMEPLAYERX_QUALITY").as_deref().unwrap_or("")),
+            quality: {
+                let mut q = Quality::without(get("FRAMEPLAYERX_QUALITY").as_deref().unwrap_or(""));
+                let num = |name: &str| get(name).and_then(|v| v.trim().parse::<f32>().ok());
+                if let Some(px) = num("FRAMEPLAYERX_EDGE") {
+                    q.edge_px = px;
+                }
+                if let Some(g) = num("FRAMEPLAYERX_EDGE_GAMMA") {
+                    q.edge_gamma = g;
+                }
+                q
+            },
             testcard: testcard::parse_height(get("FRAMEPLAYERX_TESTCARD").as_deref()),
             testcard_layer: testcard::LayerMode::parse(
                 get("FRAMEPLAYERX_TESTCARD_LAYER").as_deref(),
@@ -501,9 +513,16 @@ impl Switches {
         if self.no_dashboard_close {
             on.push("FRAMEPLAYERX_NO_DASHBOARD_CLOSE".to_string());
         }
-        if self.quality != Quality::default() {
-            let off = self.quality.off_list();
+        let off = self.quality.off_list();
+        if !off.is_empty() {
             on.push(format!("FRAMEPLAYERX_QUALITY={off}"));
+        }
+        let (q, d) = (self.quality, Quality::default());
+        if q.edge_px != d.edge_px || q.edge_gamma != d.edge_gamma {
+            on.push(format!(
+                "FRAMEPLAYERX_EDGE={} FRAMEPLAYERX_EDGE_GAMMA={}",
+                q.edge_px, q.edge_gamma
+            ));
         }
         if let Some(height) = self.testcard {
             on.push(format!("FRAMEPLAYERX_TESTCARD={height}"));

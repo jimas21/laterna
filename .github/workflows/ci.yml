@@ -283,7 +283,8 @@ jobs:
           - os: windows-latest
             name: frameplayerx-install-windows-x86_64
             exe: frameplayerx-install.exe
-          - os: macos-latest
+          # Pinned: macos-latest went three runs without a runner on 2026-11-10.
+          - os: macos-15
             name: frameplayerx-install-macos-arm64
             exe: frameplayerx-install
     runs-on: ${{ matrix.os }}

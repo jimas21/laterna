@@ -1738,6 +1738,7 @@ impl Renderer {
         let mut p = params::build(video, frame_desc.as_ref(), inv);
         p.hdr = params::hdr_levels(self.hdr_peak.peak_nits());
         p.display[1] = self.quality.bits();
+        p.display[3] = self.quality.edge_bits();
         let tp10 = match (self.slots[slot_idx].tp10_bound, self.tp10_eyes.as_mut()) {
             (Some((buffer, desc)), Some(t)) => self.imports.tp10_picture(buffer).map(|pic| {
                 params::sample_tp10(&mut p, desc.height, pic.luma_bands, pic.chroma_bands);
