@@ -171,6 +171,7 @@ impl App {
             }
             Action::SelectQuality(q) => self.play_quality(q),
             Action::ResetPlacement => self.reset_placement(),
+            Action::CycleSize => self.cycle_size(),
             Action::SetFavorite(id, f) => {
                 let r = self.services.library.set_favorite(id, f);
                 self.library_changed("the favorite", |e| tr!("error-save-favorite", error = e), r);

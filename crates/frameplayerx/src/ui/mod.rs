@@ -21,6 +21,7 @@ pub mod plex;
 pub mod premium;
 pub mod queue;
 pub mod settings;
+pub mod size;
 pub mod sources;
 pub mod subtitle_text;
 pub mod theme;
@@ -277,6 +278,9 @@ pub enum Action {
     /// Puts a flat screen, the control bar, the adjust panel and the browse
     /// panel back where they start.
     ResetPlacement,
+    /// The bar's Size button: Home theater, Cinema, Giant, and round again
+    /// (a room's Back, Middle and Front seat), with the name on a toast.
+    CycleSize,
     SetFavorite(MediaId, bool),
     SetRating(MediaId, u8),
     SetUserFormat(MediaId, Option<VideoFormat>),

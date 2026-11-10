@@ -9,7 +9,7 @@ use crate::settings::{HOUSE_PLAYING, PLAIN_PLACE, Settings};
 use crate::subtitles::Pick;
 use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 use fp_core::format::{Projection, StereoLayout, VideoFormat};
-use fp_core::view::ViewSettings;
+use fp_core::view::{ScreenSize, ViewSettings};
 use fp_media::PlayerState;
 use fp_render::env::{Place, PlaceKind, SeatName};
 
@@ -650,7 +650,7 @@ struct ViewKeys {
     place_shown: Option<Place>,
 }
 
-/// Close, hide, room, place, follow, multitask, bookmark and adjust.
+/// Close, hide, room, place, size, follow, multitask, bookmark and adjust.
 fn view_keys(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
@@ -698,6 +698,14 @@ fn view_keys(
             .clicked()
     {
         toggle_adjust_tab(state, POSITION_TAB);
+    }
+    // Size steps Home theater, Cinema, Giant (a room's seats, round a room).
+    if flat
+        && widgets::key(ui, icons::FRAME_CORNERS, 52.0, false)
+            .tip(tr!("player-size"))
+            .clicked()
+    {
+        actions.push(Action::CycleSize);
     }
     // Only a flat screen follows: around 180°/360° video you look about.
     // Inside a place it does nothing, and the tip says so.
@@ -1652,12 +1660,25 @@ pub(super) fn place_controls(
     let layout = place.layout();
     let seat = places::seat_index(settings, place, &layout);
     let mut picked = None;
+    let mut picked_size = None;
+    // A room whose seats are the three sizes shows the same Size choice as
+    // everywhere else; any other seats are shown by name.
+    let sized = layout.screen.is_some()
+        && ScreenSize::ALL
+            .iter()
+            .all(|&z| layout.seat_index(super::size::seat_for(z)).is_some());
+    let current_size = layout
+        .seats
+        .get(seat)
+        .and_then(|s| super::size::size_of_seat(s.name));
     let mut height = places::seat_height_cm(settings, place) as f32;
     let mut new_height = None;
     let mut house = settings.house_lights_playing * 100.0;
     let mut light = settings.screen_light_level * 100.0;
     widgets::rows(ui, |r| {
-        if layout.seats.len() > 1 {
+        if sized {
+            picked_size = widgets::size_row(r, current_size);
+        } else if layout.seats.len() > 1 {
             r.row(tr!("place-seat"), None, |ui| {
                 // Right to left: the first seat shows first.
                 for (i, s) in layout.seats.iter().enumerate().rev() {
@@ -1706,6 +1727,9 @@ pub(super) fn place_controls(
         }
     });
     if let Some(i) = picked {
+        pick_seat(settings, place, i);
+    }
+    if let Some(i) = picked_size.and_then(|z| layout.seat_index(super::size::seat_for(z))) {
         pick_seat(settings, place, i);
     }
     if let Some(cm) = new_height {

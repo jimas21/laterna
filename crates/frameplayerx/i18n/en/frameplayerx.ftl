@@ -124,13 +124,19 @@ settings-flat-videos = Flat videos
 settings-screen-distance = Screen distance
 settings-screen-width = Screen width
 settings-screen-width-desc = Its longer side: a portrait video's height.
-# How wide the screen looks: its angle across the eye.
+# A row: how big the screen looks. Its three choices are chips, each followed by small degrees.
 screen-size = Size
-screen-size-desc = How wide the screen looks. Moving it nearer or further keeps the size.
-screen-size-small = Small
-screen-size-medium = Medium
-screen-size-large = Large
-screen-now-degrees = Now { $degrees }° across.
+screen-size-desc = How big the screen looks. Bigger fills more of your view.
+# Short: a chip. The smallest of the three sizes.
+screen-size-home = Home theater
+# Short: a chip. The middle size, where every video starts.
+screen-size-cinema = Cinema
+# Short: a chip. The biggest of the three sizes.
+screen-size-giant = Giant
+# A toast on the video when the bar's Size button picks a size.
+toast-screen-size = Size: { $name }
+# A tooltip: steps the screen's size through the three choices.
+player-size = Screen size
 settings-screen-curvature = Screen curvature
 settings-vr-videos = 180° and 360° videos
 settings-height = Height
@@ -1527,7 +1533,7 @@ place-house-lights-desc = How bright the room stays once the video starts. The l
 place-screen-light = Screen light
 place-screen-light-desc = How much the walls, ceiling and seats take on the colours of the picture. 0 turns it off.
 # Under the adjust panel's Screen heading while a room is chosen.
-place-sets-screen = This place sets the screen. Pick a seat to change how big it looks.
+place-sets-screen = This room has its own screen. Size above picks your seat to make it look bigger or smaller.
 # A tooltip: opens the place picker.
 player-place = Place
 # A tooltip: puts the library beside the playing video, so you can pick another

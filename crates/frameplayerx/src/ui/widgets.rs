@@ -8,6 +8,7 @@ use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Pos2, Rect, Response, Sense, Stroke, StrokeKind,
     Ui, Vec2, text::LayoutJob,
 };
+use fp_core::view::ScreenSize;
 
 const ANIM: f32 = 0.12;
 
@@ -529,12 +530,35 @@ pub fn chip_width(ui: &Ui, label: &str) -> f32 {
 }
 
 pub fn chip_icon(ui: &mut Ui, icon: Option<&str>, label: &str, selected: bool) -> Response {
+    chip_full(ui, icon, label, None, selected)
+}
+
+/// A chip with `sub` after its label in smaller, quieter type: a size's
+/// degrees beside its name.
+pub fn chip_sub(ui: &mut Ui, label: &str, sub: &str, selected: bool) -> Response {
+    chip_full(ui, None, label, Some(sub), selected)
+}
+
+fn chip_full(
+    ui: &mut Ui,
+    icon: Option<&str>,
+    label: &str,
+    sub: Option<&str>,
+    selected: bool,
+) -> Response {
     let h = 40.0;
     let text = ui.painter().layout_no_wrap(
         label.to_string(),
         theme::font(Weight::Medium, 16.0),
         Color32::WHITE,
     );
+    let sub_g = sub.map(|t| {
+        ui.painter().layout_no_wrap(
+            t.to_string(),
+            theme::font(Weight::Medium, 13.0),
+            Color32::WHITE,
+        )
+    });
     let icon_g = icon.map(|i| {
         ui.painter()
             .layout_no_wrap(i.to_string(), theme::icon(19.0), Color32::WHITE)
@@ -544,11 +568,25 @@ pub fn chip_icon(ui: &mut Ui, icon: Option<&str>, label: &str, selected: bool) -
     } else {
         0.0
     };
-    let content = text.size().x + icon_g.as_ref().map(|g| g.size().x + gap).unwrap_or(0.0);
+    const SUB_GAP: f32 = 7.0;
+    let content = text.size().x
+        + icon_g.as_ref().map(|g| g.size().x + gap).unwrap_or(0.0)
+        + sub_g.as_ref().map(|g| g.size().x + SUB_GAP).unwrap_or(0.0);
     let (rect, resp) =
         ui.allocate_exact_size(Vec2::new((content + 32.0).max(h), h), Sense::click());
-    if ui.is_rect_visible(rect) && dimensional(ui) {
-        let (face, fg) = key_face(ui, &resp, h / 2.0, selected);
+    if ui.is_rect_visible(rect) {
+        // The chip's face and the colour its content is drawn in.
+        let (face, fg) = if dimensional(ui) {
+            key_face(ui, &resp, h / 2.0, selected)
+        } else {
+            let t = anim(ui, resp.id, resp.hovered());
+            let s = anim(ui, resp.id.with("sel"), selected);
+            let bg = mix(mix(theme::SURFACE_2, theme::SURFACE_3, t), theme::TEXT, s);
+            let fg = mix(mix(theme::TEXT_2, Color32::WHITE, t), theme::BG, s);
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same((h / 2.0) as u8), bg);
+            (rect, fg)
+        };
         let p = ui.painter();
         let mut x = face.center().x - content / 2.0;
         if let Some(g) = icon_g {
@@ -559,32 +597,19 @@ pub fn chip_icon(ui: &mut Ui, icon: Option<&str>, label: &str, selected: bool) -
             );
             x += g.size().x + gap;
         }
+        let name_width = text.size().x;
         p.galley_with_override_text_color(
             Pos2::new(x, face.center().y - text.size().y / 2.0),
             text,
             fg,
         );
-    } else if ui.is_rect_visible(rect) {
-        let t = anim(ui, resp.id, resp.hovered());
-        let s = anim(ui, resp.id.with("sel"), selected);
-        let bg = mix(mix(theme::SURFACE_2, theme::SURFACE_3, t), theme::TEXT, s);
-        let fg = mix(mix(theme::TEXT_2, Color32::WHITE, t), theme::BG, s);
-        let p = ui.painter();
-        p.rect_filled(rect, CornerRadius::same((h / 2.0) as u8), bg);
-        let mut x = rect.center().x - content / 2.0;
-        if let Some(g) = icon_g {
+        if let Some(g) = sub_g {
             p.galley_with_override_text_color(
-                Pos2::new(x, rect.center().y - g.size().y / 2.0),
-                g.clone(),
-                fg,
+                Pos2::new(x + name_width + SUB_GAP, face.center().y - g.size().y / 2.0),
+                g,
+                fg.gamma_multiply(0.65),
             );
-            x += g.size().x + gap;
         }
-        p.galley_with_override_text_color(
-            Pos2::new(x, rect.center().y - text.size().y / 2.0),
-            text,
-            fg,
-        );
     }
     resp
 }
@@ -909,11 +934,58 @@ impl Rows<'_> {
     }
 }
 
-/// The flat screen's size controls: Small, Medium and Large (what the
-/// screen spans across the eye), then distance and width, which show the
-/// angle they make. While a size is picked, moving the screen nearer or
-/// further keeps its angle (the width follows). `names` are the distance
-/// and width labels, `defaults` what their reset buttons go back to.
+/// The size choice as a row: Home theater, Cinema and Giant, each with its
+/// degrees small beside it, `current` lit. Returns the size clicked.
+pub fn size_row(r: &mut Rows, current: Option<ScreenSize>) -> Option<ScreenSize> {
+    let mut picked = None;
+    let chip_of = |ui: &mut Ui, size: ScreenSize| {
+        let name = super::size::name(size);
+        let degrees = super::size::degrees_label(size);
+        chip_sub(ui, name, &degrees, current == Some(size)).clicked()
+    };
+    // The three chips need about 500 points beside the text: a narrow panel
+    // (the adjust panel) puts them under it instead.
+    if r.ui.available_width() < 960.0 {
+        r.content(|ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.label(
+                egui::RichText::new(tr!("screen-size"))
+                    .font(theme::font(Weight::Medium, 18.0))
+                    .color(theme::TEXT),
+            );
+            ui.label(
+                egui::RichText::new(tr!("screen-size-desc"))
+                    .font(theme::font(Weight::Regular, 15.0))
+                    .color(theme::TEXT_2),
+            );
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                for size in ScreenSize::ALL {
+                    if chip_of(ui, size) {
+                        picked = Some(size);
+                    }
+                }
+            });
+        });
+    } else {
+        r.row(tr!("screen-size"), Some(tr!("screen-size-desc")), |ui| {
+            // Laid out right to left.
+            for size in ScreenSize::ALL.into_iter().rev() {
+                if chip_of(ui, size) {
+                    picked = Some(size);
+                }
+            }
+        });
+    }
+    picked
+}
+
+/// The flat screen's size controls: the size choice, then the distance and
+/// width for a fine adjustment. Picking a size, or moving the screen nearer
+/// or further while one is picked, keeps its size (the width follows).
+/// `names` are the distance and width labels, `defaults` what their reset
+/// buttons go back to.
 pub fn screen_size_rows(
     r: &mut Rows,
     names: (&str, &str),
@@ -921,26 +993,11 @@ pub fn screen_size_rows(
     width: &mut f32,
     defaults: (f32, f32),
 ) {
-    use fp_core::view::{
-        SCREEN_DISTANCE, SCREEN_WIDTH, ScreenSize, screen_degrees, screen_width_for,
-    };
+    use fp_core::view::{SCREEN_DISTANCE, SCREEN_WIDTH};
     let keep = ScreenSize::of(*width, *distance);
-    let fit = |degrees: f32, distance: f32| {
-        screen_width_for(degrees, distance).clamp(*SCREEN_WIDTH.start(), *SCREEN_WIDTH.end())
-    };
-    r.row(tr!("screen-size"), Some(tr!("screen-size-desc")), |ui| {
-        // Laid out right to left.
-        for size in ScreenSize::ALL.into_iter().rev() {
-            let name = match size {
-                ScreenSize::Small => tr!("screen-size-small"),
-                ScreenSize::Medium => tr!("screen-size-medium"),
-                ScreenSize::Large => tr!("screen-size-large"),
-            };
-            if chip(ui, name, keep == Some(size)).clicked() {
-                *width = fit(size.degrees(), *distance);
-            }
-        }
-    });
+    if let Some(size) = size_row(r, keep) {
+        *width = super::size::fit(size.degrees(), *distance);
+    }
     let moved = r.slider(
         names.0,
         None,
@@ -951,16 +1008,11 @@ pub fn screen_size_rows(
         1,
     );
     if let (true, Some(size)) = (moved, keep) {
-        *width = fit(size.degrees(), *distance);
+        *width = super::size::fit(size.degrees(), *distance);
     }
-    let now = tr!(
-        "screen-now-degrees",
-        degrees = format!("{:.0}", screen_degrees(*width, *distance))
-    );
-    let desc = format!("{} {now}", tr!("settings-screen-width-desc"));
     r.slider(
         names.1,
-        Some(&desc),
+        Some(tr!("settings-screen-width-desc")),
         width,
         SCREEN_WIDTH,
         defaults.1,
