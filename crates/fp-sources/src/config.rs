@@ -759,8 +759,7 @@ mod tests {
             title: "Owner Name".into(),
             home: true,
         };
-        let mut credentials =
-            PlexCredentials::manual("account-secret".into(), "device-abc".into());
+        let mut credentials = PlexCredentials::manual("account-secret".into(), "device-abc".into());
         credentials.account = Some(account);
         let config = PlexConfig {
             auth: Some(credentials),
