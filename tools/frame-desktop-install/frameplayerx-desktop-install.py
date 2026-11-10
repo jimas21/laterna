@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Installs FramePlayerX on a Steam Frame from Desktop Mode
+"""Installs Laterna on a Steam Frame from Desktop Mode
 and adds it to the Steam library. No Developer Mode, PC or SSH needed.
 
 Runs on the headset as the normal user, with the Python 3 that SteamOS ships
-(standard library only). Install-FramePlayerX.desktop downloads it from the
-latest release and runs it in a terminal, Uninstall-FramePlayerX.desktop
-the same with --remove; by hand:
+(standard library only). Install-Laterna.desktop downloads it from the
+project's web page (GitHub Pages) and runs it in a terminal,
+Uninstall-Laterna.desktop the same with --remove; by hand:
 
-  python3 frameplayerx-desktop-install.py                     # latest stable release
+  python3 frameplayerx-desktop-install.py                     # latest stable release (newest beta if none)
   python3 frameplayerx-desktop-install.py --beta              # newest release, betas too
   python3 frameplayerx-desktop-install.py --zip ~/Downloads/frameplayerx-1.0.0-aarch64.zip
   python3 frameplayerx-desktop-install.py --dir ~/Apps --name-suffix " (test)"
@@ -56,7 +56,7 @@ import urllib.request
 import zipfile
 import zlib
 
-REPO = 'jimas21/frameplex'
+REPO = 'jimas21/laterna'
 DEVTOOLS = 'http://127.0.0.1:8080/json'
 HOME = os.path.expanduser('~')
 STEAM_ROOTS = [os.path.join(HOME, '.local/share/Steam'), os.path.join(HOME, '.steam/steam')]
@@ -64,12 +64,13 @@ STEAM_ROOTS = [os.path.join(HOME, '.local/share/Steam'), os.path.join(HOME, '.st
 # What each app is, where its releases are, and how its zip is laid out.
 APPS = {
     'frameplayerx': {
-        'name': 'FramePlayerX',
+        'name': 'Laterna',
         'asset': re.compile(r'^frameplayerx-.*-aarch64\.zip$'),
         'dir': 'frameplayerx',
         'exe': 'frameplayerx.sh',
-        # Library names and launchers of any copy, from any installer.
-        'family': re.compile(r'^FramePlayerX\b'),
+        # Library names and launchers of any copy, from any installer, under
+        # this name or the one before it.
+        'family': re.compile(r'^(?:Laterna|FramePlayerX)\b'),
         'exes': ('frameplayerx.sh',),
         'icons': ['assets/steam/icon.png'],
         'art': 'assets/steam',
@@ -106,8 +107,8 @@ def ask(question, assume=True):
     if assume and os.environ.get('FRAMEPLAYERX_INSTALL_YES') == '1':
         return True
     if os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'):
-        for cmd in (['kdialog', '--title', 'FramePlayerX', '--yesno', question],
-                    ['zenity', '--question', '--title=FramePlayerX', f'--text={question}']):
+        for cmd in (['kdialog', '--title', 'Laterna', '--yesno', question],
+                    ['zenity', '--question', '--title=Laterna', f'--text={question}']):
             if shutil.which(cmd[0]):
                 return subprocess.run(cmd).returncode == 0
     if sys.stdin.isatty():
@@ -518,7 +519,7 @@ def remove_art(ids):
 
 
 def data_dirs():
-    """FramePlayerX's settings, data and cache folders (fp_core::dirs)."""
+    """Laterna's settings, data and cache folders (fp_core::dirs)."""
     return [os.path.join(os.environ.get(var) or os.path.join(HOME, fallback), 'frameplayerx')
             for var, fallback in (('XDG_CONFIG_HOME', '.config'), ('XDG_DATA_HOME', '.local/share'),
                                   ('XDG_CACHE_HOME', '.cache'))]
@@ -662,7 +663,7 @@ def live_remove(name, exe):
 # ---------------------------------------------------------- old versions
 
 # Siblings of the install directory that hold earlier copies: <dir>.old (kept
-# by this installer and FramePlayerX's updater), .prev, .new, .rollback,
+# by this installer and Laterna's updater), .prev, .new, .rollback,
 # .bak*, .release-build3 ... Never .keep.
 LEFTOVER = re.compile(r'^\.(old|prev|new|rollback|bak.*|release.*)$')
 
@@ -839,7 +840,7 @@ def main():
     if args.zip:
         match = [k for k in APPS if APPS[k]['asset'].match(os.path.basename(args.zip))]
         if not match:
-            raise Fail(f'The zip filename does not match FramePlayerX release assets ({APPS["frameplayerx"]["asset"].pattern}).')
+            raise Fail(f'The zip filename does not match Laterna release assets ({APPS["frameplayerx"]["asset"].pattern}).')
         keys = match
     parent = os.path.abspath(os.path.expanduser(args.dir))
     cache = os.path.join(HOME, '.cache/frameplayerx-installer')
@@ -878,7 +879,7 @@ def main():
             say(f"  Removed {dest}{' and its library entry' if ids else ''}.")
             # A test copy shares its data with the main one: only on request.
             if args.purge or (not args.name_suffix and ask(
-                    'Also delete your FramePlayerX settings, sources and watch history?\n'
+                    'Also delete your Laterna settings, sources and watch history?\n'
                     'Your videos stay where they are.', assume=False)):
                 for d in data_dirs():
                     shutil.rmtree(d, ignore_errors=True)
@@ -900,8 +901,18 @@ def main():
                     raise Fail('That zip does not match the published release (SHA-256 differs).')
                 say('  Checked against the published release.')
         else:
-            tag, asset, url, size, digest = latest_release(app, releases(args.repo), args.beta)
-            say(f'  Latest {"release" if args.beta else "stable release"}: {tag}')
+            found = releases(args.repo)
+            beta = args.beta
+            try:
+                tag, asset, url, size, digest = latest_release(app, found, beta)
+            except Fail:
+                if beta:
+                    raise
+                # Before the first stable release there are only betas: take the newest.
+                beta = True
+                tag, asset, url, size, digest = latest_release(app, found, beta)
+                say('  No stable release yet, so this installs the newest beta.')
+            say(f'  Latest {"release" if beta else "stable release"}: {tag}')
             zip_path = os.path.join(cache, asset)
             if not (os.path.isfile(zip_path) and digest and sha256(zip_path) == digest):
                 download(url, zip_path, size)

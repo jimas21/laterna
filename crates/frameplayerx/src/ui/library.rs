@@ -69,9 +69,9 @@ pub fn browser(ctx: &egui::Context, v: &mut View) {
         });
 }
 
-/// The app icon (assets/logo.svg): an X opened in the middle for a play
-/// button, on its rounded square. Drawn as shapes, so it's sharp at any
-/// panel resolution.
+/// The app icon (assets/logo.svg): a lantern's brass lens throws a beam onto
+/// a warm disc with a play notch, on its soot square. Drawn as shapes, so
+/// it's sharp at any panel resolution.
 fn logo(ui: &mut egui::Ui, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let p = ui.painter();
@@ -85,26 +85,38 @@ fn logo(ui: &mut egui::Ui, size: f32) {
         theme::LOGO_SQUARE_TOP,
         theme::LOGO_SQUARE_BOTTOM,
     );
-    let arm = |a: egui::Pos2, b: egui::Pos2, color: Color32| {
-        p.line_segment([a, b], egui::Stroke::new(52.0 * k, color));
-        p.circle_filled(a, 26.0 * k, color);
-        p.circle_filled(b, 26.0 * k, color);
-    };
-    arm(at(118.0, 118.0), at(168.0, 168.0), theme::LOGO_BLUE);
-    arm(at(344.0, 344.0), at(394.0, 394.0), theme::LOGO_BLUE);
-    arm(at(394.0, 118.0), at(344.0, 168.0), theme::LOGO_VIOLET);
-    arm(at(168.0, 344.0), at(118.0, 394.0), theme::LOGO_VIOLET);
-    // The play button, with the corners the SVG's 22-wide stroke rounds.
-    let play = [at(218.0, 186.0), at(336.0, 256.0), at(218.0, 326.0)];
+    p.circle_filled(at(344.0, 226.0), 150.0 * k, theme::LOGO_AFTERIMAGE);
+    let beam = vec![
+        at(120.0, 352.0),
+        at(246.0, 116.0),
+        at(398.0, 268.0),
+        at(170.0, 402.0),
+    ];
     p.add(egui::Shape::convex_polygon(
-        play.to_vec(),
-        Color32::WHITE,
+        beam,
+        theme::LOGO_BEAM,
         egui::Stroke::NONE,
     ));
-    for (&a, &b) in play.iter().zip(play.iter().cycle().skip(1)) {
-        p.line_segment([a, b], egui::Stroke::new(22.0 * k, Color32::WHITE));
-        p.circle_filled(a, 11.0 * k, Color32::WHITE);
+    p.circle_filled(at(310.0, 194.0), 122.0 * k, theme::LOGO_DISC);
+    // The play notch, with the corners the SVG's 16-wide stroke rounds.
+    let notch = [at(282.0, 144.0), at(368.0, 194.0), at(282.0, 244.0)];
+    p.add(egui::Shape::convex_polygon(
+        notch.to_vec(),
+        theme::LOGO_NOTCH,
+        egui::Stroke::NONE,
+    ));
+    for (&a, &b) in notch.iter().zip(notch.iter().cycle().skip(1)) {
+        p.line_segment([a, b], egui::Stroke::new(16.0 * k, theme::LOGO_NOTCH));
+        p.circle_filled(a, 8.0 * k, theme::LOGO_NOTCH);
     }
+    // The lens: a brass ring round a pale centre.
+    p.circle(
+        at(142.0, 380.0),
+        42.0 * k,
+        theme::LOGO_LENS,
+        egui::Stroke::new(16.0 * k, theme::LOGO_BRASS),
+    );
+    p.circle_filled(at(142.0, 380.0), 16.0 * k, theme::LOGO_LENS_CENTRE);
 }
 
 /// A rounded square shaded from `top` to `bottom`, its edge feathered over
@@ -156,44 +168,14 @@ fn gradient_square(
     p.add(mesh);
 }
 
-/// "FramePlayer" and the logo's blue-to-violet "X".
+/// "Laterna" as one plain line of text.
 fn wordmark(ui: &mut egui::Ui, size: f32) {
     let font = theme::font(Weight::Bold, size);
     let name = ui
         .painter()
-        .layout_no_wrap("FramePlayer".into(), font.clone(), theme::TEXT);
-    let x = ui
-        .painter()
-        .layout_no_wrap("X".into(), font, Color32::WHITE);
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(name.size().x + x.size().x, name.size().y),
-        Sense::hover(),
-    );
-    let at = rect.min + egui::vec2(name.size().x, 0.0);
-    let p = ui.painter();
-    p.galley(rect.min, name, theme::TEXT);
-    // egui has no gradient text: the X is drawn in thin vertical slices,
-    // each clipped to its strip and given its own colour.
-    const SLICES: usize = 12;
-    let w = x.size().x / SLICES as f32;
-    for i in 0..SLICES {
-        // The outer strips reach past the X in case the glyph overhangs.
-        let left = if i == 0 {
-            at.x - size
-        } else {
-            at.x + i as f32 * w
-        };
-        let right = if i == SLICES - 1 {
-            at.x + x.size().x + size
-        } else {
-            at.x + (i + 1) as f32 * w
-        };
-        let strip = egui::Rect::from_x_y_ranges(left..=right, rect.y_range());
-        let color =
-            theme::LOGO_BLUE.lerp_to_gamma(theme::LOGO_VIOLET, (i as f32 + 0.5) / SLICES as f32);
-        p.with_clip_rect(strip)
-            .galley_with_override_text_color(at, x.clone(), color);
-    }
+        .layout_no_wrap("Laterna".into(), font, theme::TEXT);
+    let (rect, _) = ui.allocate_exact_size(name.size(), Sense::hover());
+    ui.painter().galley(rect.min, name, theme::TEXT);
 }
 
 fn nav(ui: &mut egui::Ui, v: &mut View) {

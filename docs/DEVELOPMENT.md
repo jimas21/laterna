@@ -1,6 +1,6 @@
-# Developing FramePlayerX
+# Developing Laterna
 
-How to build, test and release FramePlayerX, and how the code fits
+How to build, test and release Laterna, and how the code fits
 together. For using the app, see the [user guide](USER-GUIDE.md).
 
 ## Requirements
@@ -107,6 +107,7 @@ headset's Noto Sans CJK; for the preview, install it with
 | `fp-library` | The SQLite database: folder scanning, the metadata and thumbnail worker, search, watch history |
 | `fp-sources` | Sources: local folders, HTTP, WebDAV, DLNA, SMB, DeoVR and HereSphere feeds, Jellyfin, Emby and Plex |
 | `fp-haptics` | Funscripts, the sync engine, and TCode, Buttplug and Handy devices |
+| `fp-earbuds` | Battery, noise control and ear detection for AirPods and Beats, read from a local MagicPodsCore, and the pause policy for an earbud coming out |
 | `fp-remote` | The DeoVR remote API and the phone web remote |
 | `fp-updater` | Signed update manifests, download, install and rollback; the `fp-release` maintainer tool |
 | `frameplayerx-install` | The PC installer: pairs with the headset and installs over SSH |
@@ -353,7 +354,7 @@ checked again; any other is checked once a day with `If-None-Match` /
 
 ### On this computer with Monado
 
-`tools/local-xr.sh` runs FramePlayerX against [Monado](https://monado.freedesktop.org),
+`tools/local-xr.sh` runs Laterna against [Monado](https://monado.freedesktop.org),
 the open-source OpenXR runtime, so a change can be tried without building
 and installing on the Frame. Monado shows both eyes in a desktop window and
 fakes the headset and controllers from the keyboard and mouse. It works on
@@ -363,7 +364,7 @@ frame rate).
 
 ```bash
 tools/local-xr.sh setup                   # once: Monado, build tools, FFmpeg
-tools/local-xr.sh run                     # Monado + FramePlayerX
+tools/local-xr.sh run                     # Monado + Laterna
 tools/local-xr.sh run ~/Videos/clip.mp4   # ...opening a video
 tools/local-xr.sh headless --exit-after 10 clip.mp4   # no window: smoke test
 tools/local-xr.sh preview /tmp/shots      # every screen as PNGs (ui-preview.sh)
@@ -382,7 +383,7 @@ Click into Monado's debug window (*Monado!*) to drive it:
 
 Its *Qwerty › Help* tab lists every key. The controllers present
 themselves as Khronos simple controllers (select and menu), which
-FramePlayerX binds.
+Laterna binds.
 
 - The window with the eyes opens at 1600×900; `LOCAL_XR_WINDOW=1280x720`
   picks another size, and it can be resized. Under WSL it's Monado's X11
@@ -391,7 +392,7 @@ FramePlayerX binds.
   `XRT_COMPOSITOR_SCALE_PERCENTAGE=200 tools/local-xr.sh run` is sharper,
   `=60` smoother on a software renderer.
 - Monado's log is in `/tmp/monado-service.log`; `-v` turns on
-  FramePlayerX's debug log.
+  Laterna's debug log.
 
 By hand, with Monado's simulated headset and no window:
 
@@ -426,7 +427,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
 
 | Command | What it does |
 |---|---|
-| `frameplayerx --info FILE` | Prints what FramePlayerX detects about a video: format, streams, HDR |
+| `frameplayerx --info FILE` | Prints what Laterna detects about a video: format, streams, HDR |
 | `frameplayerx --decode-bench FILE [--sw]` | Decodes without displaying and prints the decoder and frame rate |
 | `frameplayerx --seek-test FILE\|URL` | Skips through a video headless, checking buffering and that hardware decoders are given back, and measures reads |
 
@@ -450,6 +451,40 @@ printf 'open clip_8k.mp4\nwait-playing 30\nwait 2\ngpu\nwait 10\ngpu\n' > /tmp/g
 frameplayerx --preview /tmp/shots --size 2160 --script /tmp/gpu.fps
 ```
 
+### The test card
+
+To judge sharpness and calm objectively, FramePlayerX can make its own test
+card: a zone plate in the middle (a chirp from flat to the finest detail the
+picture holds, at the edges of its square), line wedges of 1 px and 2 px in
+three directions, 1-texel and 2-texel checkers beside a flat grey of what a
+checker should average to, 32 grey steps along the top, colour bars and a
+0-10 % dark ramp along the bottom, and a 1 px white border, corner marks and
+a cross. It is pure Rust (`fp_render::testcard`: `card`, `checker`,
+`zone_plate`, `ramp` and `box_mips`), so tests and the headset draw the same
+pixels.
+
+- `FRAMEPLAYERX_TESTCARD=1080` or `2160` (in the env file, see below) opens
+  the card as a picture, 1920x1080 or 3840x2160, written to
+  `~/.cache/frameplayerx/testcard-<height>p.png`, when no file is named. The
+  player's controls stay up on a one-frame picture: hide them with the Show/hide
+  controls button.
+- `FRAMEPLAYERX_TESTCARD_LAYER=plain` or `mips` also hangs the same card as a
+  compositor layer (a quad layer, the size of the default screen) to the
+  right of where you face once the app has focus, beside the one in the eyes,
+  to compare the two while turning your head slowly. `plain` is a swapchain
+  of one level; `mips` has the whole chain from `box_mips`, and the log says
+  how many levels the runtime gave it (`quad layer 102: ... mip levels`;
+  a runtime that refuses mips gets one level and a warning).
+- In `--preview`, `testcard 2160` makes and opens the card and `hide-controls`
+  hides the player's panels. `tools/ui-preview.sh` uses them for the
+  `testcard-1440.png` and `testcard-2160.png` shots (the card through eyes of
+  those sizes) and keeps the card itself as `testcard-source-2160p.png`.
+- `tools/make-testcards.sh OUT_DIR` makes four 30 s test clips on this
+  computer with ffmpeg, from its own generated sources: the card as 8-bit
+  H.264 1080p and 10-bit HEVC 2160p (the 8-bit hardware path and the 10-bit
+  one), the card panning 2 px a frame at 24 fps (cadence), and a dark ramp in
+  10-bit (banding). Nothing is copied anywhere; the clips are never committed.
+
 ## On the headset
 
 ```bash
@@ -471,7 +506,7 @@ Steam can't pass environment variables to an app, so the launcher reads
 
 | Variable | Default | What it does |
 |---|---|---|
-| `FRAMEPLAYERX_REFRESH_RATE` | | A refresh rate in Hz to set in SteamVR's per-app settings for FramePlayerX, unless you chose one there. Unset or `0` sets nothing, so SteamVR's default applies |
+| `FRAMEPLAYERX_REFRESH_RATE` | | A refresh rate in Hz to set in SteamVR's per-app settings for Laterna, unless you chose one there. Unset or `0` sets nothing, so SteamVR's default applies |
 | `FRAMEPLAYERX_RESOLUTION` | | Pixels per eye, set the same way. Unset or `0` sets nothing |
 | `FRAMEPLAYERX_RENDER_SCALE` | | The eye pictures' size as a multiple of the size the runtime recommends (0.5 to 2, a multiple of 8 pixels a side, within the runtime's maximum), instead of Settings › General › Render resolution. The log's `eye buffers` line says what was chosen |
 | `FRAMEPLAYERX_UI_IN_EYES` | | `1` draws the UI into the eye pictures instead of as compositor quad layers, for comparing the two |
@@ -485,12 +520,14 @@ Steam can't pass environment variables to an app, so the launcher reads
 | `FRAMEPLAYERX_ZERO_COPY` | | `0` copies hardware-decoded frames out of the decoder's buffers instead of reading them there, as before; for comparing the two |
 | `FRAMEPLAYERX_TP10_EYES` | | `0` converts SDR 10-bit frames read in place into P010 planes instead of sampling them in the eye passes, as before; for comparing the two |
 | `FRAMEPLAYERX_QUALITY` | | Picture-quality features to turn off, comma-separated: `nodither` (noise against banding in dark gradients), `nosupersample` (four taps where a flat picture is minified), `noedgeaa` (antialiased screen edges). All are on by default; for comparing a look with and without on one build. The start-up log's `A/B switches` line names what is off |
+| `FRAMEPLAYERX_TESTCARD` | | `1080` or `2160` opens the generated test card of that height instead of the library (when no file is named); see [The test card](#the-test-card) |
+| `FRAMEPLAYERX_TESTCARD_LAYER` | | `plain` or `mips` also shows the card as a compositor layer beside it, with one mip level or the whole chain, to compare how the two are filtered |
 
 ### Steam Frame notes
 
 What the code relies on about the platform:
 
-- SteamVR runs **on the headset** and is the OpenXR runtime. FramePlayerX
+- SteamVR runs **on the headset** and is the OpenXR runtime. Laterna
   finds the active runtime's manifest and talks to it directly, so there's
   no Khronos loader to ship.
 - Native ARM64 apps run **outside the Steam Linux Runtime** container, so
@@ -512,7 +549,7 @@ What the code relies on about the platform:
 - Turnip has no TP10 images, though the GPU reads TP10. A TP10 texture
   reads wrongly past 2^24 samples, so 10-bit planes are read in bands.
 - SteamOS only mounts ext4 microSD cards itself, and no USB drives;
-  FramePlayerX mounts exFAT, FAT32 and NTFS itself under
+  Laterna mounts exFAT, FAT32 and NTFS itself under
   `/run/media/steamos/<name>`.
 - Apps installed in Developer Mode appear in the Steam library as non-Steam
   games; `frameplayerx-install` writes that entry to `shortcuts.vdf`.
@@ -550,7 +587,7 @@ headset and copies the text and JSON reports into `probe-reports/`.
      goes all the way.
    - Other branches get that version as `X.Y.Z-beta.N` (N one above the
      highest existing beta of it, and always above the latest stable),
-     published as a GitHub pre-release. FramePlayerX offers it on the Beta
+     published as a GitHub pre-release. Laterna offers it on the Beta
      update channel only.
    - Alpha: tick **Alpha** when running the workflow (any branch, `main`
      too) to get `X.Y.Z-alpha.N`, N being the run number, left as a draft
@@ -590,7 +627,7 @@ release:
 
 | Button | Opens |
 |---|---|
-| Desktop Mode / Uninstall | The release's `Install-FramePlayerX.desktop` / `Uninstall-FramePlayerX.desktop` |
+| Desktop Mode / Uninstall | The release's `Install-Laterna.desktop` / `Uninstall-Laterna.desktop` |
 | FrameDrop | `https://framedropvr.com/install?manifest=` with the release's `framedrop.json`, FrameDrop's documented link: it opens FrameDrop, or FrameDrop's site when it isn't installed |
 | Frame Control | `site/frame-control.html` on GitHub Pages, which opens `frame-control://install?manifest=` with the release's `frameplayerx.json`. GitHub doesn't keep links to app schemes like `frame-control://` in Markdown, so a web page has to |
 

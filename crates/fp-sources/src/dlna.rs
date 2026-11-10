@@ -116,7 +116,7 @@ pub fn m_search_request(search_target: &str, mx: u32) -> String {
          MAN: \"ssdp:discover\"\r\n\
          MX: {mx}\r\n\
          ST: {search_target}\r\n\
-         USER-AGENT: Linux/1.0 UPnP/1.1 FramePlayerX/{}\r\n\r\n",
+         USER-AGENT: Linux/1.0 UPnP/1.1 Laterna/{}\r\n\r\n",
         env!("CARGO_PKG_VERSION")
     )
 }

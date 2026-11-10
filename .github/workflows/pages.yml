@@ -5,8 +5,8 @@ name: pages
 # Settings > Pages > Build and deployment > Source: GitHub Actions.
 on:
   push:
-    branches: [main]
-    paths: ['site/**', 'assets/logo.svg', '.github/workflows/pages.yml']
+    branches: [environments]
+    paths: ['site/**', 'assets/logo.svg', 'tools/frame-desktop-install/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,9 @@ jobs:
         run: |
           mkdir _site
           cp site/* assets/logo.svg _site/
+          # The Desktop Mode installer: the README's button downloads it from here,
+          # so it works before the first stable release too.
+          cp tools/frame-desktop-install/*.desktop tools/frame-desktop-install/frameplayerx-desktop-install.py _site/
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

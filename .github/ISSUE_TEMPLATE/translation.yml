@@ -45,6 +45,6 @@ body:
   - type: input
     id: version
     attributes:
-      label: FramePlayerX version
+      label: Laterna version
       description: Settings › About.
       placeholder: e.g. 0.14.0

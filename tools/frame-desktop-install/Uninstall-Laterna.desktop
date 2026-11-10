@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Uninstall Laterna
+Comment=Removes Laterna from this Steam Frame and from the Steam library
+Icon=edit-delete
+Exec=konsole --hold -e sh -c "curl -fsSL https://jimas21.github.io/laterna/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py && python3 /tmp/frameplayerx-desktop-install.py --remove"
+Terminal=false

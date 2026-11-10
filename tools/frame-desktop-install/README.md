@@ -1,14 +1,14 @@
 # Installing from Desktop Mode
 
-Installs FramePlayerX on a Steam Frame from its Desktop Mode, with no PC,
+Installs Laterna on a Steam Frame from its Desktop Mode, with no PC,
 and adds it to the Steam library. Both files here are attached to every
 release:
 
-- `Install-FramePlayerX.desktop`: what people download. Opened in Desktop
+- `Install-Laterna.desktop`: what people download. Opened in Desktop
   Mode, it downloads `frameplayerx-desktop-install.py` from the latest
   stable release and runs it in a Konsole window, which stays open so the
   result can be read. Desktop Mode asks once whether to trust the file.
-- `Uninstall-FramePlayerX.desktop`: the same, running it with `--remove`.
+- `Uninstall-Laterna.desktop`: the same, running it with `--remove`.
 - `frameplayerx-desktop-install.py`: the installer. It uses only the Python
   3 that SteamOS ships.
 
@@ -21,7 +21,7 @@ What the installer does:
    it in; if that fails, the installed version is put back. Nothing else
    changes before this, so a bad download or a full disk leaves what was
    installed.
-3. Removes other copies of FramePlayerX: their library entries and the
+3. Removes other copies of Laterna: their library entries and the
    folders they start from. Settings and the watch history live elsewhere
    and stay.
 4. Adds the Steam library entry with its artwork. The Frame's desktop Steam

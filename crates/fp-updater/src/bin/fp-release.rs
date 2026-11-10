@@ -30,7 +30,7 @@ use fp_updater::{
 };
 
 const USAGE: &str = "\
-fp-release: build, sign and check FramePlayerX release metadata
+fp-release: build, sign and check Laterna release metadata
 
 USAGE:
   fp-release keygen [--out PREFIX]
@@ -43,7 +43,7 @@ USAGE:
 
   fp-release verify MANIFEST.json [--pub PREFIX.pub]
       Check MANIFEST.json.sig and the manifest contents, against PREFIX.pub
-      or, without --pub, the release key built into FramePlayerX.
+      or, without --pub, the release key built into Laterna.
 
   fp-release manifest --version X --zip PATH --url-base URL [--arch aarch64]
                       [--notes FILE] [--channel stable|beta]
@@ -225,7 +225,7 @@ fn keygen(args: &Args) -> CliResult {
     write_new(
         &secret_path,
         &format!(
-            "# FramePlayerX release signing key (ed25519 seed, base64). KEEP SECRET.\n{}\n",
+            "# Laterna release signing key (ed25519 seed, base64). KEEP SECRET.\n{}\n",
             BASE64.encode(seed)
         ),
         true,
@@ -233,7 +233,7 @@ fn keygen(args: &Args) -> CliResult {
     write_new(
         &public_path,
         &format!(
-            "# FramePlayerX release public key (ed25519, base64)\n{}\n",
+            "# Laterna release public key (ed25519, base64)\n{}\n",
             BASE64.encode(public)
         ),
         false,
@@ -537,7 +537,7 @@ mod tests {
         run(&s(&[
             "framedrop",
             "--name",
-            "FramePlayerX",
+            "Laterna",
             "--zip",
             &zip_s,
             "--url",
@@ -556,7 +556,7 @@ mod tests {
             run(&s(&[
                 "framedrop",
                 "--name",
-                "FramePlayerX",
+                "Laterna",
                 "--zip",
                 &zip_s,
                 "--url",

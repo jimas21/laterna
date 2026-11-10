@@ -1,0 +1,19 @@
+[package]
+name = "fp-earbuds"
+version = "0.1.0"
+description = "Battery, noise control and ear detection for AirPods and Beats, read from a local MagicPodsCore over WebSocket"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+crossbeam-channel.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tungstenite.workspace = true

@@ -68,7 +68,7 @@ impl Default for ButtplugConfig {
     fn default() -> Self {
         ButtplugConfig {
             url: DEFAULT_URL.into(),
-            client_name: "FramePlayerX".into(),
+            client_name: "Laterna".into(),
             name: "Intiface".into(),
             min_interval_ms: 50,
             scan: true,

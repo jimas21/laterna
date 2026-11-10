@@ -20,6 +20,7 @@ cosmic-text = "0.19"
 crossbeam-channel.workspace = true
 egui.workspace = true
 fp-core.workspace = true
+fp-earbuds.workspace = true
 fp-haptics.workspace = true
 fp-library.workspace = true
 fp-media.workspace = true

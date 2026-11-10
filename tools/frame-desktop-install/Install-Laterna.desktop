@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Install Laterna
+Comment=Installs the latest Laterna on this Steam Frame and adds it to the Steam library
+Icon=system-software-install
+Exec=konsole --hold -e sh -c "curl -fsSL https://jimas21.github.io/laterna/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py && python3 /tmp/frameplayerx-desktop-install.py"
+Terminal=false

@@ -518,7 +518,7 @@ impl Services {
             HapticDeviceConfig::Buttplug { url } => boxed(buttplug::ButtplugDevice::connect(
                 buttplug::ButtplugConfig {
                     url: url.clone(),
-                    client_name: "FramePlayerX".into(),
+                    client_name: "Laterna".into(),
                     ..Default::default()
                 },
             )),
