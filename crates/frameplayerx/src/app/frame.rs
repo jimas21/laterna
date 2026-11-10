@@ -441,7 +441,9 @@ impl App {
         let half_angle = |w: f32, d: f32| (w / 2.0 / d).atan().to_degrees();
         let bar = &self.panels[BAR];
         let growth = half_angle(bar.size.x, bar_d) - half_angle(bar.base_size().x, BAR_DISTANCE);
-        let beside = -52.0 - growth;
+        let aw = self.panels[ADJUST].size.x;
+        let adj_growth = half_angle(aw, adjust_d) - half_angle(aw, ADJUST_DISTANCE);
+        let beside = -52.0 - growth - adj_growth;
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_below(anchor, my, mp, main_d, BELOW_DEG);
@@ -470,7 +472,9 @@ impl App {
         // follows along with the menus.
         let start = perf_start_yaw(
             self.panels[MAIN].size.x,
+            main_d,
             self.panels[BAR].size.x,
+            bar_d,
             self.perf.size.x,
         );
         let [py, pp] = self.offsets.perf;
@@ -824,9 +828,9 @@ fn panel_distance(usual: f32, moved: f32) -> f32 {
 
 /// Degrees left of forward where the performance overlay starts: just clear of
 /// the library panel and the control bar, given their widths and its own.
-fn perf_start_yaw(library: f32, bar: f32, perf: f32) -> f32 {
+fn perf_start_yaw(library: f32, library_d: f32, bar: f32, bar_d: f32, perf: f32) -> f32 {
     let half = |width: f32, distance: f32| (width / 2.0 / distance).atan().to_degrees();
-    half(library, MAIN_DISTANCE).max(half(bar, BAR_DISTANCE)) + 2.0 + half(perf, PERF_DISTANCE)
+    half(library, library_d).max(half(bar, bar_d)) + 2.0 + half(perf, PERF_DISTANCE)
 }
 
 /// The overlay's rows for the open video; none without a picture.
@@ -900,7 +904,13 @@ mod tests {
             let mut perf = perf_panel();
             bar.set_scale(scale);
             perf.set_scale(scale);
-            let yaw = perf_start_yaw(library.size.x, bar.size.x, perf.size.x);
+            let yaw = perf_start_yaw(
+                library.size.x,
+                MAIN_DISTANCE,
+                bar.size.x,
+                BAR_DISTANCE,
+                perf.size.x,
+            );
             let inner = yaw - half(perf.size.x, PERF_DISTANCE);
             assert!(
                 inner > half(library.size.x, MAIN_DISTANCE),
