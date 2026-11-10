@@ -74,6 +74,10 @@ fn items(items: Vec<Value>) -> Value {
     json!({"MediaContainer": {"totalSize": items.len(), "Metadata": items}})
 }
 
+fn identity() -> Value {
+    json!({"MediaContainer": {"machineIdentifier": "machine-1"}})
+}
+
 fn sections() -> Value {
     json!({"MediaContainer": {"Directory": [
         {"key": "1", "type": "movie", "title": "Films"},
@@ -119,7 +123,7 @@ fn reply(mode: Hubs, request: &Req) -> Resp {
         .unwrap_or(0);
     let collections = params.get("type").is_some_and(|t| t == "18");
     match request.path() {
-        "/identity" => json_reply(&json!({"MediaContainer": {"machineIdentifier": "m-1"}})),
+        "/identity" => json_reply(&identity()),
         "/" => json_reply(&json!({"MediaContainer": {"friendlyName": "Test Plex"}})),
         "/library/sections" => json_reply(&sections()),
         "/hubs/continueWatching/items" => json_reply(&items(vec![film(10)])),
