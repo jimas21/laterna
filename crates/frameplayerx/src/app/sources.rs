@@ -164,7 +164,7 @@ impl App {
     }
 
     /// Opens a source in the browser its kind gets: the headset's videos
-    /// and folders, a Jellyfin/Emby client, a feed's scenes, or folders.
+    /// and folders, a Plex or Jellyfin/Emby client, a feed's scenes, or folders.
     pub(super) fn open_source(&mut self, source: String, back_to: Screen) {
         self.ui.details = None;
         self.ui.pin_form = None;

@@ -1263,9 +1263,9 @@ pub fn list_row(
         );
         b.tip(tip).clicked()
     };
-    out.remove = button(icons::X, "Take out", !current, "remove");
-    out.down = button(icons::CARET_DOWN, "Move down", !last, "down");
-    out.up = button(icons::CARET_UP, "Move up", !first, "up");
+    out.remove = button(icons::X, tr!("list-row-take-out"), !current, "remove");
+    out.down = button(icons::CARET_DOWN, tr!("list-row-move-down"), !last, "down");
+    out.up = button(icons::CARET_UP, tr!("list-row-move-up"), !first, "up");
     let room = (x - pic.right() - 30.0).max(40.0);
     let line = |text: &str, font: egui::FontId, color: Color32| {
         let mut job = egui::text::LayoutJob::single_section(

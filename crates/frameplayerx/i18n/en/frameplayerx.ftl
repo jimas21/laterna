@@ -332,6 +332,10 @@ player-tracks = Audio and subtitles
 player-browse = Browse
 # A tooltip.
 player-up-next = Up next
+# Tooltips on a row of a list (Up next, a playlist).
+list-row-take-out = Take out
+list-row-move-down = Move down
+list-row-move-up = Move up
 # A tooltip on a key that turns on and off: the video playing starts again when it ends.
 player-loop-video = Loop this video
 # A tooltip on a key that turns on and off: when a video ends, the next in the list plays.
@@ -548,7 +552,7 @@ sources-lock-pin = Lock with a PIN
 sources-browse = Browse
 sources-add-a-source = Add a source
 # Under the Add a source card: keep the names.
-sources-add-a-source-facts = A library, Jellyfin, DeoVR, SMB…
+sources-add-a-source-facts = A library, Plex, Jellyfin, DeoVR, SMB…
 # Short: a button or tooltip.
 common-cancel = Cancel
 pin-lock-help = While it is locked, it can't be browsed, it is left off Home, and its videos are hidden from the watch history, search and the remotes. The PIN unlocks it until Laterna restarts or you lock it again.
@@ -864,7 +868,7 @@ library-resume = Resume
 # Short: a button.
 library-details = Details
 library-nothing-watched = Nothing watched yet
-library-home-empty-desc = Pick a source below: the videos on this headset, its microSD card and USB drives, your Jellyfin, DLNA, SMB and WebDAV servers, or any DeoVR feed or HereSphere API. What you watch shows up here.
+library-home-empty-desc = Pick a source below: the videos on this headset, its microSD card and USB drives, your Plex, Jellyfin, DLNA, SMB and WebDAV servers, or any DeoVR feed or HereSphere API. What you watch shows up here.
 # A search field's hint.
 library-search = Search titles, tags, folders
 # Short: the button asks again before clearing the history.
@@ -1194,6 +1198,7 @@ queue-loop = Loop
 ## Libraries, the performance overlay, decoders, About
 
 library-error-no-folder = There is no such folder
+library-error-full-path = Enter the folder's full path
 library-error-choose-folder = Choose a folder on the headset or on a card
 library-error-no-id = This drive has no ID to tell it apart from other cards
 library-error-name = The folder's name can't be read
@@ -1268,6 +1273,7 @@ open-not-inserted = This video is on a microSD card or USB drive that is not ins
 error-too-large = larger than { $mb } MB
 # The headset's own folders, as a source's name.
 sources-this-device = This device
+sources-removable = microSD and USB drives
 remote-error-deovr = DeoVR remote API: { $error }
 remote-error-web = web remote: { $error }
 # A video format: a fisheye lens and its field of view.
