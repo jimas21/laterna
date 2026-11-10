@@ -225,8 +225,9 @@ What shipped first, and where it differs from the sketch above.
 ## Place packs (testing)
 
 A place pack is a room made outside the app, in Blender, with its light baked
-into pictures. It replaces one of the built-in rooms. Packs are for testing
-for now: they are copied by hand, and nothing downloads or signs them yet.
+into pictures. It replaces one of the built-in rooms. Official packs ship
+inside the release (see "Shipping a pack" below); other packs are copied by
+hand, and the app does not download any yet.
 
 - **Where.** One folder per pack in `~/.local/share/frameplayerx/places/`
   (or the folder named by `FRAMEPLAYERX_PLACES_DIR`). A pack whose id is

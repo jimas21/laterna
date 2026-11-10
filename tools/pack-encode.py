@@ -362,6 +362,9 @@ def main():
     if len(tex["basis"]) != 8:
         die("want 8 basis textures, the manifest lists %d" % len(tex["basis"]))
 
+    src_real, out_real = os.path.realpath(a.src), os.path.realpath(a.out)
+    if out_real == src_real or src_real.startswith(out_real + os.sep) or out_real.startswith(src_real + os.sep):
+        die("the output folder must not be, hold or sit inside the source folder")
     if os.path.exists(a.out):
         shutil.rmtree(a.out)
     os.makedirs(a.out)

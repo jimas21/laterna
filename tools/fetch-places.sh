@@ -62,7 +62,7 @@ while read -r id url sha extra || [ -n "${id:-}" ]; do
   grep -qx "$id/manifest.json" <<<"$entries" || { echo "fetch-places: $id: no $id/manifest.json" >&2; exit 1; }
 
   rm -rf "$work/x" && mkdir "$work/x"
-  unzip -q "$zip" -d "$work/x"
+  unzip -q -n "$zip" -d "$work/x" </dev/null
   [ -d "$work/x/$id" ] || { echo "fetch-places: $id: nothing unpacked" >&2; exit 1; }
   rm -rf "${out:?}/$id"
   mv "$work/x/$id" "$out/$id"
