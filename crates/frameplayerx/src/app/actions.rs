@@ -319,6 +319,10 @@ impl App {
                 }
             }
             Action::Quit => self.quit = true,
+            Action::OpenDashboard => {
+                self.open_dashboard = true;
+                self.dashboard_requests += 1;
+            }
             Action::Restart => {
                 self.quit = true;
                 self.restart = true;

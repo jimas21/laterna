@@ -286,6 +286,12 @@ cat >"$script" <<EOF
 # Library scan and thumbnails. Nothing watched yet: Home offers sources.
 wait 6
 panel main home
+# The Dashboard button beside Quit (no video open): pointed at, then pressed.
+point main 0.9076 0.052
+frames 8
+panel main home-hover-dashboard
+click
+expect-dashboard 1
 # The first source tile pointed at: lifted whole at the row's edge.
 point main 0.13 0.70
 frames 8
@@ -471,6 +477,11 @@ panel main history
 screen home
 frames 15
 panel main home-watched
+# The Dashboard button is there with a video open too (the header then shows
+# Back to video, not Quit); pressing it leaves the video playing.
+panel main dashboard-with-video
+dashboard
+expect-dashboard 2
 # Subtitles in Settings › Sound and subtitles, with the languages listed.
 screen settings sound
 languages

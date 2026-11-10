@@ -774,6 +774,12 @@ picture. Play/pause and seeking are under either thumb.
 | Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand); moving your hand towards your head brings a flat screen nearer, away from it pushes the screen further | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
+To get to SteamVR's dashboard without quitting, press **Dashboard** (four
+squares) at the top right of the browse panel, beside Quit (or beside Back to
+video, when a video is open). FramePlayerX keeps running and the video keeps
+playing under the dashboard; close the dashboard and you are back. The button
+only shows in SteamVR, and pressing it again within two seconds does nothing.
+
 On the control bar, point at the speaker for the volume slider above it;
 press the speaker to mute. What a controller shortcut changes, such as the
 volume or a minute's skip, shows for a moment in a small message above where

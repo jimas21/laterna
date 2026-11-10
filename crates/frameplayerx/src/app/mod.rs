@@ -60,6 +60,9 @@ pub struct FrameInput {
     /// the view (`fp_render::math::pixels_per_tan`), so things painted for the
     /// eyes can be painted at the size they are shown. `None` when not known.
     pub eye_px_per_tan: Option<f32>,
+    /// SteamVR's dashboard can be opened from the app (OpenXR with `vrcmd`
+    /// beside the runtime), so the dashboard button shows.
+    pub dashboard: bool,
 }
 
 /// A panel or pointer ray for the compositor to draw as its own quad layer,
@@ -95,6 +98,9 @@ pub struct FrameOutput {
     pub quit: bool,
     /// With `quit`: start again.
     pub restart: bool,
+    /// The dashboard button was pressed: open SteamVR's dashboard over the
+    /// app, which keeps running and playing.
+    pub open_dashboard: bool,
 }
 
 const MAIN: usize = 0;
@@ -241,6 +247,10 @@ pub struct App {
     feed_busy: usize,
     quit: bool,
     restart: bool,
+    /// The dashboard button was pressed since the last frame.
+    open_dashboard: bool,
+    /// How many times it has been pressed, for the preview harness.
+    dashboard_requests: u32,
 }
 
 /// A panel held by a grip: which panel and hand, the hand's aim angles and
@@ -378,6 +388,8 @@ impl App {
             feed_busy: 0,
             quit: false,
             restart: false,
+            open_dashboard: false,
+            dashboard_requests: 0,
         };
         app.offsets = app.settings.panel_offsets;
         app.apply_ui_scale();
@@ -420,8 +432,12 @@ impl App {
     /// One line about the open video and the UI, for the preview harness.
     pub fn status_line(&self) -> String {
         let ui = format!(
-            "ui_visible={} browser={} adjust={} tracks={}",
-            self.ui_visible, self.show_browser, self.ui.adjust_open, self.ui.tracks_open
+            "ui_visible={} browser={} adjust={} tracks={} dashboard_requests={}",
+            self.ui_visible,
+            self.show_browser,
+            self.ui.adjust_open,
+            self.ui.tracks_open,
+            self.dashboard_requests
         );
         match &self.playback {
             Some(p) => format!(
@@ -442,6 +458,12 @@ impl App {
             ),
             None => format!("no video, screen={:?} {ui}", self.ui.screen),
         }
+    }
+
+    /// How many times the dashboard button has been pressed (the preview
+    /// harness checks it).
+    pub fn dashboard_requests(&self) -> u32 {
+        self.dashboard_requests
     }
 
     /// World position of a fractional point on a visible panel (tests).

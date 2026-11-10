@@ -840,6 +840,8 @@ jf-version-automatic = Automatic
 library-back-to-video = Back to video
 # A tooltip: closes Laterna.
 library-quit = Quit
+# A tooltip: opens SteamVR's dashboard over FramePlayerX, which keeps running.
+library-dashboard = Dashboard
 # Short: a button.
 library-dismiss = Dismiss
 library-watch-again = Watch again

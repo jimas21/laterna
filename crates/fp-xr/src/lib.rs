@@ -12,9 +12,9 @@ pub mod context;
 pub mod input;
 pub mod session;
 
-pub use context::{EyeSizes, XrContext, XrOptions, scaled_eye_size};
+pub use context::{DashboardRate, EyeSizes, XrContext, XrOptions, scaled_eye_size};
 pub use input::{BoundProfile, Hand, InputState};
-pub use session::{FrameCtx, QuadSubmit, SessionEvent, XrSession, XrStats, is_worn};
+pub use session::{FrameCtx, QuadSubmit, SessionEvent, XrSession, XrStats, fit_layers, is_worn};
 
 /// OpenXR errors with the failing call named.
 #[derive(Debug, thiserror::Error)]
