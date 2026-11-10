@@ -114,6 +114,7 @@ impl Sim {
                 layers: false,
                 frame_ms: None,
                 display_hz: None,
+                display_lead: Duration::ZERO,
                 recentred: false,
                 eye_px_per_tan: Some(pixels_per_tan(&proj, self.size)),
                 dashboard: true,

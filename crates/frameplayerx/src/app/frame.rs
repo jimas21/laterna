@@ -199,6 +199,13 @@ impl App {
         self.perf_overlay(renderer, &input);
         let (frame, video, passthrough) = self.video(renderer, &input, anchor);
         let (quads, layers) = self.compose(&input, eye);
+        let film_fps = self
+            .playback
+            .as_ref()
+            .filter(|_| self.settings.auto_refresh_rate)
+            .and_then(|p| p.player.info().video_stream())
+            .map(|v| v.fps)
+            .filter(|fps| *fps > 0.0);
         FrameOutput {
             frame,
             video,
@@ -209,6 +216,7 @@ impl App {
             quit: self.quit,
             restart: self.restart,
             open_dashboard: std::mem::take(&mut self.open_dashboard),
+            film_fps,
         }
     }
 
@@ -719,7 +727,7 @@ impl App {
             time: input.time,
         });
         if let (Some(p), Some(s)) = (&self.playback, shown) {
-            frame = p.player.current_frame();
+            frame = p.player.current_frame_at(input.display_lead);
             // What the screen's shape is worked out from (see
             // `screen_geometry`); the last picture's size stands in on a frame
             // the video gives none.

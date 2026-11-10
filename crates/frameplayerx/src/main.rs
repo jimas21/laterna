@@ -24,6 +24,7 @@ mod playback;
 mod preview;
 mod prober;
 mod queue;
+mod refresh;
 mod seektest;
 mod services;
 mod settings;
@@ -867,6 +868,13 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     let mut dashboard_rate = DashboardRate::default();
     let has_dashboard = ctx.has_dashboard();
     let mut trim_logged = false;
+    // Matching the refresh rate to the film (see `refresh`): the rates the
+    // runtime offers, and the film rate last acted on. A rate asked for on
+    // the command line is the user's and is left alone.
+    let offered_rates = session.refresh_rates().unwrap_or_default();
+    let mut auto_rate = refresh::AutoRate::default();
+    let mut film_seen: Option<Option<f64>> = None;
+    let auto_rate_allowed = switches.request_hz.is_none() && !offered_rates.is_empty();
     loop {
         let event = session.poll()?;
         // Acted on here, not in a frame: no frame may be rendered once the
@@ -912,6 +920,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         let recentred = session.recentred_by(frame.state.predicted_display_time);
         let work = Instant::now();
         let input = session.input(frame.state.predicted_display_time);
+        let display_lead = session.display_lead(&frame.state);
         let dt = last.elapsed().as_secs_f32().min(0.1);
         last = Instant::now();
         let eye_px_per_tan = frame
@@ -933,11 +942,25 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                 display_hz: Some(frame.state.predicted_display_period.as_nanos())
                     .filter(|&ns| ns > 0)
                     .map(|ns| 1e9 / ns as f32),
+                display_lead,
                 recentred,
                 eye_px_per_tan,
                 dashboard: has_dashboard,
             },
         );
+        if auto_rate_allowed && film_seen != Some(out.film_fps) {
+            film_seen = Some(out.film_fps);
+            let now = session.refresh_rate();
+            if let Some(hz) = auto_rate.step(out.film_fps, &offered_rates, now) {
+                match session.request_refresh_rate(hz) {
+                    Ok(()) => log::info!(
+                        "refresh rate for a film at {:?} fps: asked for {hz} Hz (was {now:?})",
+                        out.film_fps
+                    ),
+                    Err(e) => log::warn!("refresh rate {hz} Hz: {e}"),
+                }
+            }
+        }
         // Started without waiting, off this thread: the video keeps playing
         // under SteamVR's dashboard and the session stays up.
         if out.open_dashboard && dashboard_rate.ok(Instant::now()) {
@@ -1081,6 +1104,10 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         }
     }
     log::info!("{frames} frames, {video_frames} with video");
+    // Best effort: the runtime may already be ending the session.
+    if let Some(hz) = auto_rate.restore() {
+        let _ = session.request_refresh_rate(hz);
+    }
     exit_watchdog(EXIT_WITHIN);
     let restart = launcher.filter(|_| restarting);
     if quitting && restart.is_none() {

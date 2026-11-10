@@ -651,6 +651,16 @@ impl Player {
     /// frame queue, starts the clock once the first frame after a seek is
     /// ready, pauses it while starved, and detects the end of the media.
     pub fn current_frame(&self) -> Option<Arc<VideoFrame>> {
+        self.current_frame_at(Duration::ZERO)
+    }
+
+    /// [`Player::current_frame`] for a picture that reaches the eyes `lead`
+    /// from now (the display's predicted time minus the present): the frame
+    /// due then is chosen, not the one due now. A film frame then stays up
+    /// for the same number of display frames each time, instead of one
+    /// more or one fewer as call times wobble. Not applied while paused, and
+    /// scaled by the playback speed.
+    pub fn current_frame_at(&self, lead: Duration) -> Option<Arc<VideoFrame>> {
         let s = &self.shared;
         let serial = s.serial();
         let paused = s.ctl().paused;
@@ -690,7 +700,12 @@ impl Player {
                 }
             }
         } else {
-            let t = s.clock.now();
+            let ahead = if paused {
+                0.0
+            } else {
+                lead.as_secs_f64() * s.clock.speed()
+            };
+            let t = s.clock.now() + ahead;
             let late = (3.0 / s.video_fps.max(1.0)).clamp(0.03, 0.1);
             let mut shown: Option<Arc<VideoFrame>> = None;
             let mut dropped = 0;
@@ -1369,6 +1384,72 @@ mod tests {
         assert_eq!(at(&[0.90, 0.93, 0.96, 0.98, 1.2], 1.0), Some(2));
         // Everything due is too late: the newest.
         assert_eq!(at(&[0.80, 0.85, 0.90, 1.2], 1.0), Some(2));
+    }
+
+    #[test]
+    fn a_lead_picks_the_frame_due_at_the_display_instant() {
+        let at = |pts: &[f64], t, lead| pick_due(pts.iter().copied(), t + lead, 0.05);
+        // 24 fps, 72 Hz: the next film frame is 10 ms away, one period lead.
+        let pts = [1.010, 1.052];
+        assert_eq!(at(&pts, 1.0, 0.0), None, "not due yet");
+        assert_eq!(at(&pts, 1.0, 0.0139), Some(0), "due when it is shown");
+    }
+
+    /// How many display frames each film frame stays up, over 4 s of a
+    /// 24 fps film on a 72 Hz display. The call for display frame `n` is
+    /// made one period before it, give or take 2 ms of jitter, and the film
+    /// starts `phase` after the first display frame. The queue works as in
+    /// `Player::current_frame_at`. The first and last few frames are left out.
+    fn cadence(phase: f64, with_lead: bool) -> Vec<usize> {
+        let period = 1.0 / 72.0;
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut queue: VecDeque<(usize, f64)> =
+            (0..96).map(|k| (k, phase + k as f64 / 24.0)).collect();
+        let mut held = vec![0usize; 96];
+        let mut current = None;
+        for n in 0..288 {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            let jitter = ((rng % 4001) as f64 - 2000.0) / 1e6;
+            let display = n as f64 * period;
+            let call = display - period + jitter;
+            let lead = if with_lead { display - call } else { 0.0 };
+            // The media clock runs with real time.
+            let t = call + lead;
+            if let Some(i) = pick_due(queue.iter().map(|f| f.1), t, 0.05) {
+                queue.drain(..i);
+                current = queue.pop_front().map(|f| f.0);
+            }
+            if let Some(k) = current {
+                held[k] += 1;
+            }
+        }
+        held[3..90].to_vec()
+    }
+
+    #[test]
+    fn with_the_lead_every_film_frame_is_shown_three_times_at_72_hz() {
+        // Whatever the film's phase against the display, and the call jitter
+        // (offset a hair, so no frame sits exactly on pick_due's tolerance).
+        for step in 0..28 {
+            let phase = step as f64 * 0.0005 + 0.00007;
+            let c = cadence(phase, true);
+            assert!(c.iter().all(|&n| n == 3), "phase {phase}: {c:?}");
+        }
+    }
+
+    #[test]
+    fn without_the_lead_call_jitter_makes_the_cadence_uneven() {
+        // What the lead fixes: a frame due near the call time is shown one
+        // display frame early or late as the call wobbles.
+        let uneven = (0..28)
+            .filter(|&step| {
+                let c = cadence(step as f64 * 0.0005 + 0.00007, false);
+                c.iter().any(|&n| n != 3)
+            })
+            .count();
+        assert!(uneven > 0, "no phase showed the uneven cadence");
     }
 
     /// A transcode of a 2 s clip (as MPEG-TS starting 10 s in, as servers'

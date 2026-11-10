@@ -57,6 +57,10 @@ pub fn scaled_eye_size(sizes: &EyeSizes, scale: f32) -> (u32, u32) {
 fn extension_names(set: &xr::ExtensionSet) -> Vec<String> {
     let known = [
         ("XR_KHR_vulkan_enable2", set.khr_vulkan_enable2),
+        (
+            "XR_KHR_convert_timespec_time",
+            set.khr_convert_timespec_time,
+        ),
         ("XR_FB_display_refresh_rate", set.fb_display_refresh_rate),
         ("XR_EXT_eye_gaze_interaction", set.ext_eye_gaze_interaction),
         ("XR_EXT_hand_interaction", set.ext_hand_interaction),
@@ -185,6 +189,12 @@ impl XrContext {
         }
         let mut e = xr::ExtensionSet::default();
         e.khr_vulkan_enable2 = true;
+        // Turns the runtime's display times into the app's own clock, so a
+        // video frame can be chosen for the instant it is shown (see
+        // `XrSession::display_lead`). Light and harmless, so also kept with
+        // minimal extensions.
+        // (The Frame's runtime is Linux; Windows builds only run the tools.)
+        e.khr_convert_timespec_time = avail.khr_convert_timespec_time;
         if !opts.minimal_extensions {
             e.fb_display_refresh_rate = avail.fb_display_refresh_rate;
             e.ext_eye_gaze_interaction = avail.ext_eye_gaze_interaction;
