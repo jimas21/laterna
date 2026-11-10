@@ -69,7 +69,9 @@ impl App {
             Cmd::TogglePause => self.apply(Action::TogglePause),
             Cmd::Back => self.back(),
             Cmd::Menu => {
-                if playing {
+                if self.multitasking() {
+                    self.end_multitask(true);
+                } else if playing {
                     self.show_browser = !self.show_browser;
                     self.ui_visible = true;
                 } else {
@@ -274,9 +276,12 @@ impl App {
             return;
         }
         let playing = self.playback.is_some();
-        if playing && self.ui.tracks_open && self.ui_visible && !self.show_browser {
+        // The player's controls are up: not under the library, unless side by
+        // side with it.
+        let controls_up = !self.show_browser || self.multitasking();
+        if playing && self.ui.tracks_open && self.ui_visible && controls_up {
             self.ui.tracks_open = false;
-        } else if playing && self.ui.adjust_open && self.ui_visible && !self.show_browser {
+        } else if playing && self.ui.adjust_open && self.ui_visible && controls_up {
             self.ui.adjust_open = false;
         } else if (!playing || self.show_browser) && self.ui.details.is_some() {
             self.ui.details = None;
@@ -293,7 +298,8 @@ impl App {
                 self.apply(a);
             }
         } else if playing && self.show_browser {
-            // Library open over the video: back to the video.
+            // Library open over the video (or beside it): back to the video.
+            self.end_multitask(true);
             self.show_browser = false;
             self.ui_visible = true;
         } else if playing && self.ui_visible {

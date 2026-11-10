@@ -461,6 +461,9 @@ pub enum Action {
     /// Open SteamVR's dashboard over the app, which keeps running (and the
     /// video keeps playing).
     OpenDashboard,
+    /// Browse beside the playing video: its screen and the library side by
+    /// side, or back as they were.
+    ToggleMultitask,
     Quit,
     /// Quit and start again, to run an installed update or use a setting
     /// that is read at start.
@@ -886,6 +889,8 @@ pub struct UiState {
     pub worker_status: Option<String>,
     pub update: UpdateStatus,
     pub adjust_open: bool,
+    /// The screen and the library are side by side (the bar's key is lit).
+    pub multitask: bool,
     pub adjust_tab: usize,
     /// The audio and subtitles picker shows above the control bar.
     pub tracks_open: bool,
@@ -966,6 +971,7 @@ impl Default for UiState {
             worker_status: None,
             update: UpdateStatus::Unknown,
             adjust_open: false,
+            multitask: false,
             adjust_tab: 0,
             tracks_open: false,
             crash: None,

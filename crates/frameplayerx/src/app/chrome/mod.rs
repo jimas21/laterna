@@ -11,6 +11,7 @@ pub mod layout;
 pub mod panels;
 
 mod drag;
+mod multitask;
 
 use super::*;
 use crate::controls::{Damped, GRIP};
@@ -45,6 +46,9 @@ pub struct ScreenChrome {
     bar_drop_to: f32,
     /// How each was last painted: [`HandleState`] changes repaint them.
     painted: [Option<HandleState>; 2],
+    /// The screen and the library side by side (see [`multitask`]); session
+    /// only.
+    multitask: Option<multitask::Multitask>,
 }
 
 impl Default for ScreenChrome {
@@ -66,6 +70,7 @@ impl Default for ScreenChrome {
             bar_drop: Damped::at([BAR_DROP]),
             bar_drop_to: BAR_DROP,
             painted: [None; 2],
+            multitask: None,
         }
     }
 }
@@ -172,6 +177,15 @@ impl App {
             }
             if self.chrome.corner.visible {
                 avoid.push(Sky::of(corner.pose, corner.size));
+            }
+            // Side by side, the library is near the bar too: it hangs clear
+            // of that as well.
+            if self.multitasking() {
+                let [yaw, pitch] = self.offsets.main;
+                let usual = MAIN_DISTANCE + self.offsets.depth.main;
+                let d = usual.clamp(*PANEL_RANGE.start(), *PANEL_RANGE.end());
+                let library = place_below(anchor, yaw, pitch, d, BELOW_DEG);
+                avoid.push(Sky::of(picture.inverse() * library, self.panels[MAIN].size));
             }
             self.chrome.bar_drop_to = layout::clear_drop(bar_frame, bar_d, body, &avoid);
         }
@@ -321,6 +335,7 @@ impl App {
         match self.chrome.drag.map(|d| d.part) {
             Some(Part::Move) => "move",
             Some(Part::Resize) => "resize",
+            None if self.multitasking() => "multitask",
             None if self.chrome.bar.visible => "shown",
             None => "hidden",
         }

@@ -878,6 +878,14 @@ smaller (from 0.6 to 1.8 times its usual size). Its middle stays where it is,
 and the new size is remembered. **Put back** returns it to its usual size.
 The same Window controls switch turns these off too.
 
+To pick another video while one plays, press **Browse beside the video** on
+the control bar (flat videos only, not inside a room). The screen moves to
+the left and gets a little narrower if it needs to, and the browse panel
+comes up to the right of it. Both stay up and nothing hides on its own.
+Choose a video in the browse panel and it plays on the screen. Press the key
+again, **Back to video**, Back or the menu button to put the screen and the
+panel back where they were. Closing the video ends it too. It is never saved.
+
 The same grip also moves them nearer or further: with a grip held on a panel
 (the browse panel, control bar, adjust panel or performance overlay), move
 your hand towards your head to bring it closer, or away from it to push it

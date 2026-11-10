@@ -786,10 +786,34 @@ frames 3
 expect main_yaw > 5
 shot library-moved
 EOF
+  # Browse beside the video: the screen turns left and narrows, the library
+  # comes up beside it, and pressing it again puts both back.
+  cat >"$card_home/multitask.fps" <<EOF
+testcard 2160
+wait-playing
+pause
+wait 0.6
+frames 6
+multitask
+shot multitask
+panel main multitask-library
+expect multitask == 1
+expect yaw > 10
+expect width < 5.8
+multitask
+expect multitask == 0
+expect yaw == 0
+expect width ~ 5.81
+shot multitask-back
+EOF
   HOME="$card_home" XDG_CONFIG_HOME="$card_home/.config" XDG_DATA_HOME="$card_home/.local/share" \
     XDG_CACHE_HOME="$card_home/.cache" \
     "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
     --script "$card_home/panels.fps" --size 1400
+  HOME="$card_home" XDG_CONFIG_HOME="$card_home/.config" XDG_DATA_HOME="$card_home/.local/share" \
+    XDG_CACHE_HOME="$card_home/.cache" \
+    "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" \
+    --script "$card_home/multitask.fps" --size 1400
   rm -rf "$card_home"
 fi
 ls -l "$out"

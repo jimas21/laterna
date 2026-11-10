@@ -332,7 +332,12 @@ impl App {
             Action::ToggleLoopPlaylist => {
                 self.settings.loop_playlist = !self.settings.loop_playlist;
             }
+            Action::ToggleMultitask => self.toggle_multitask(),
             Action::ShowBrowser(show) => {
+                if !show {
+                    // Back to video also ends browsing beside it.
+                    self.end_multitask(true);
+                }
                 self.show_browser = show;
                 if show {
                     self.ui.invalidate();
@@ -349,6 +354,7 @@ impl App {
                 self.restart = true;
             }
             Action::HideControls => {
+                self.end_multitask(true);
                 self.ui_visible = false;
                 self.show_browser = false;
             }
@@ -459,6 +465,8 @@ impl App {
         if self.ui.opening.take().is_some() {
             self.open_seq += 1;
         }
+        // Nothing left to browse beside.
+        self.end_multitask(false);
         if let Some(h) = self.services.haptics() {
             h.clear();
         }
