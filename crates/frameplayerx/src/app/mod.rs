@@ -2,6 +2,7 @@
 //! turns controller input into UI events and playback commands each frame.
 
 mod actions;
+pub mod chrome;
 mod earbuds;
 mod frame;
 mod headset;
@@ -175,6 +176,10 @@ pub struct App {
     sub_shaper: Option<ui::subtitle_text::SubtitleText>,
     sub_fonts: Jobs<ui::subtitle_text::SubtitleText>,
     pointer: Pointer,
+    /// The move bar and resize handle under a flat screen (`chrome`).
+    chrome: chrome::ScreenChrome,
+    /// The size of the last picture the video gave, for the screen's shape.
+    last_frame_size: Option<(u32, u32)>,
     pub playback: Option<Playback>,
     open_seq: u64,
     /// When the video being opened was asked for.
@@ -326,6 +331,8 @@ impl App {
             sub_shaper: None,
             sub_fonts,
             pointer: Pointer::default(),
+            chrome: Default::default(),
+            last_frame_size: None,
             playback: None,
             open_seq: 0,
             open_started: Instant::now(),
@@ -409,7 +416,7 @@ impl App {
         match &self.playback {
             Some(p) => format!(
                 "{} playing={} state={:?} pos={:.1}/{:.1} vol={:.2} zoom={:.2} yaw={:.1} pitch={:.1} \
-                 queue={}/{} paused={} {ui}",
+                 queue={}/{} paused={} width={:.2} distance={:.2} curvature={:.2} chrome={} {ui}",
                 p.title,
                 p.transcoding.as_ref().map_or("file", |t| t.label.as_str()),
                 p.player.state(),
@@ -421,7 +428,11 @@ impl App {
                 p.settings.pitch,
                 self.queue.pos + 1,
                 self.queue.items.len(),
-                p.player.is_paused()
+                p.player.is_paused(),
+                p.settings.screen_width,
+                p.settings.screen_distance,
+                p.settings.screen_curvature,
+                self.window_controls_status()
             ),
             None => format!("no video, screen={:?} {ui}", self.ui.screen),
         }
@@ -445,6 +456,8 @@ impl App {
         for p in self.panels.iter_mut() {
             p.request_repaint();
         }
+        self.chrome.bar.request_repaint();
+        self.chrome.corner.request_repaint();
     }
 
     /// The renderer's image of a visible panel, for preview screenshots.
@@ -452,6 +465,8 @@ impl App {
         let p = match name {
             "subs" => &self.subs,
             "perf" => &self.perf,
+            "window-bar" => &self.chrome.bar,
+            "window-corner" => &self.chrome.corner,
             _ => &self.panels[Self::panel_index(name)?],
         };
         p.visible.then_some(p.id).flatten()
@@ -460,6 +475,8 @@ impl App {
     pub fn panel_point(&self, name: &str, x: f32, y: f32) -> Option<Vec3> {
         let p = match name {
             "perf" => &self.perf,
+            "window-bar" => &self.chrome.bar,
+            "window-corner" => &self.chrome.corner,
             _ => &self.panels[Self::panel_index(name)?],
         };
         if !p.visible {

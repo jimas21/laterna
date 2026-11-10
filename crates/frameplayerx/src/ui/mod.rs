@@ -26,6 +26,7 @@ pub mod subtitle_text;
 pub mod theme;
 pub mod thumbs;
 pub mod widgets;
+pub mod window;
 
 use crate::playback::OpenRequest;
 use crate::settings::HapticDeviceConfig;
