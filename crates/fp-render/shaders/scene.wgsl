@@ -64,8 +64,8 @@ struct PushConstants {
     eye: u32,
 };
 
-// The video planes and `sample_yuv` / `luma_at` come from planes.wgsl, or
-// planes_tp10.wgsl for the pipeline sampling Q10C in place (build.rs).
+// The video planes, `fetch_yuv` (raw scaled/offset YUV at a point) and `luma_at` come from
+// planes.wgsl, or planes_tp10.wgsl for the pipeline sampling Q10C in place (build.rs).
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var samp: sampler;
 var<immediate> pc: PushConstants;
