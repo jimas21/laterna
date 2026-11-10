@@ -1,0 +1,523 @@
+//! Moving and resizing the screen by its window controls, apart from the
+//! app: pure maths, stepped once a frame.
+//!
+//! Moving turns the screen about you as the laser turns (the same maths as
+//! dragging the picture), and the thumbstick pushes it away or pulls it
+//! near. A grip also takes the hand's coming nearer or going further, as the
+//! panels do; a trigger ignores that. Resizing keeps the screen's middle and
+//! shape and scales it so its corner follows the laser.
+
+use crate::controls::{DRAG_TAU, Damped, angles, pushed_distance, reach, wrap};
+use crate::world::GrabBy;
+use fp_core::view::SCREEN_DISTANCE;
+use fp_render::ScreenShape;
+use glam::{Mat4, Quat, Vec2, Vec3};
+use std::ops::RangeInclusive;
+
+/// How wide the screen may be made, metres: as zooming it with the left
+/// thumbstick allows.
+pub const WIDTH: RangeInclusive<f32> = 0.5..=30.0;
+
+/// How fast the thumbstick, tilted all the way, pushes the screen away (or
+/// pulls it near): its distance is multiplied by e to this power each second,
+/// about three times as far after one.
+const STICK_DEPTH: f32 = 1.1;
+
+/// How far the thumbstick must tilt before it does anything.
+const DEAD_ZONE: f32 = 0.2;
+
+/// The distance `distance` metres, after `dt` seconds of the thumbstick held
+/// at `stick_y` (up positive): further up, nearer down.
+pub fn stick_depth(distance: f32, stick_y: f32, dt: f32) -> f32 {
+    let tilt = stick_y.abs().min(1.0);
+    if tilt <= DEAD_ZONE {
+        return distance;
+    }
+    let push = stick_y.signum() * (tilt - DEAD_ZONE) / (1.0 - DEAD_ZONE);
+    distance * (STICK_DEPTH * push * dt).exp()
+}
+
+/// Which window control was taken hold of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    /// The bar under the screen.
+    Move,
+    /// The handle at its corner.
+    Resize,
+}
+
+/// Where the screen is: turned `yaw` (left positive) and `pitch` (up
+/// positive) degrees, `distance` metres away, `width` metres wide (its
+/// longer side).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenView {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub distance: f32,
+    pub width: f32,
+}
+
+/// What a drag begins from.
+#[derive(Clone, Copy, Debug)]
+pub struct Start {
+    pub part: Part,
+    pub hand: usize,
+    pub by: GrabBy,
+    /// The hand's pointing ray: where it is and which way it faces.
+    pub aim: (Vec3, Quat),
+    /// The room's frame (the anchor's turn), which yaw and pitch are in.
+    pub room: Quat,
+    /// The head, for how far the hand is from it.
+    pub head: Option<Vec3>,
+    /// The picture's frame in the world: the screen sits straight ahead of
+    /// its origin.
+    pub picture: Mat4,
+    pub view: ScreenView,
+    pub shape: ScreenShape,
+}
+
+/// What a frame brings to a drag.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame {
+    pub aim: Option<(Vec3, Quat)>,
+    /// The holding hand's thumbstick, up positive.
+    pub stick_y: f32,
+    pub head: Option<Vec3>,
+    pub room: Quat,
+    pub picture: Mat4,
+    pub dt: f32,
+}
+
+/// Where the drag has put the screen, and whether it has just met a limit.
+#[derive(Clone, Copy, Debug)]
+pub struct Step {
+    pub view: ScreenView,
+    pub limit: bool,
+}
+
+/// A window control held: the screen as it was and how the hand has moved
+/// since.
+#[derive(Clone, Copy, Debug)]
+pub struct ScreenDrag {
+    pub part: Part,
+    pub hand: usize,
+    pub by: GrabBy,
+    from: ScreenView,
+    now: ScreenView,
+    /// The thumbstick's push on the distance, as a factor.
+    gain: f32,
+    /// Moving: the hand's yaw and pitch when it took hold, how far it was
+    /// from the head, and the yaw, pitch and reach it has moved by since,
+    /// following the hand smoothly.
+    start: (f32, f32),
+    reach: Option<f32>,
+    follow: Damped<3>,
+    /// Resizing: the curve's angle, the direction from the screen's middle to
+    /// its corner, how far along it the hand's ray met the screen's plane
+    /// when it took hold, and the scale the hand has asked for since,
+    /// following it smoothly. `limited`: the width is at a limit.
+    arc: f32,
+    chord: Vec2,
+    grabbed: f32,
+    scale: Damped<1>,
+    limited: bool,
+}
+
+/// Where the ray from `aim` meets the plane `z` metres along the picture's
+/// frame, as the distance right and up from its origin.
+fn on_plane(picture: Mat4, aim: (Vec3, Quat), z: f32) -> Option<Vec2> {
+    let inverse = picture.inverse();
+    let origin = inverse.transform_point3(aim.0);
+    let dir = inverse.transform_vector3(aim.1 * Vec3::NEG_Z);
+    // The plane is ahead (-Z): a ray along it or away from it never meets it.
+    if dir.z > -1e-4 {
+        return None;
+    }
+    let t = (z - origin.z) / dir.z;
+    if t <= 0.0 {
+        return None;
+    }
+    Some(Vec2::new(origin.x + t * dir.x, origin.y + t * dir.y))
+}
+
+impl ScreenDrag {
+    /// Takes hold.
+    pub fn begin(start: Start) -> ScreenDrag {
+        let Start {
+            part,
+            hand,
+            by,
+            aim,
+            room,
+            head,
+            picture,
+            view,
+            shape,
+        } = start;
+        // The corner (the screen's bottom right) in the picture's frame,
+        // away from the screen's middle.
+        let corner = shape.point(1.0, -1.0);
+        let chord = Vec2::new(corner.x, corner.y).normalize_or_zero();
+        // Where the hand took hold, along it: not exactly on the corner, but
+        // the screen must not jump to put the corner there.
+        let curve = match shape.radius() {
+            Some(r) => r * (1.0 - (shape.arc / 2.0).cos()),
+            None => 0.0,
+        };
+        let grabbed = match on_plane(picture, aim, curve - view.distance) {
+            Some(g) => g.dot(chord),
+            None => 0.0,
+        };
+        ScreenDrag {
+            part,
+            hand,
+            by,
+            from: view,
+            now: view,
+            gain: 1.0,
+            start: angles(aim.1, room),
+            reach: head.map(|head| reach(head, aim.0)),
+            follow: Damped::at([0.0; 3]),
+            arc: shape.arc,
+            chord,
+            grabbed,
+            scale: Damped::at([1.0]),
+            limited: false,
+        }
+    }
+
+    /// One frame on: where the hand is now, and so where the screen goes.
+    pub fn step(&mut self, f: &Frame) -> Step {
+        // The thumbstick pushes or pulls the screen, whatever else is held.
+        self.gain = stick_depth(self.gain, f.stick_y, f.dt);
+        let limit = match self.part {
+            Part::Move => {
+                self.moving(f);
+                false
+            }
+            Part::Resize => self.resizing(f),
+        };
+        Step {
+            view: self.now,
+            limit,
+        }
+    }
+
+    /// The distance `base` metres with the thumbstick's push on it, kept
+    /// within the screen's range. (The push stops growing at a limit, so
+    /// pushing on does not have to be undone first.)
+    fn distance(&mut self, base: f32) -> f32 {
+        let (near, far) = (*SCREEN_DISTANCE.start(), *SCREEN_DISTANCE.end());
+        self.gain = self.gain.clamp(near / base, far / base);
+        (base * self.gain).clamp(near, far)
+    }
+
+    fn moving(&mut self, f: &Frame) {
+        let Some((pos, rot)) = f.aim else { return };
+        let (yaw, pitch) = angles(rot, f.room);
+        let moved = match (self.by, f.head, self.reach) {
+            (GrabBy::Grip, Some(head), Some(r)) => reach(head, pos) - r,
+            // Without the head (then or now) the depth holds where it is.
+            (GrabBy::Grip, ..) => self.follow.value()[2],
+            // A trigger ignores the hand coming nearer or going further.
+            (GrabBy::Trigger, ..) => 0.0,
+        };
+        let target = [wrap(yaw - self.start.0), pitch - self.start.1, moved];
+        let [dy, dp, dz] = self.follow.step(target, DRAG_TAU, f.dt);
+        let base = pushed_distance(self.from.distance, dz, SCREEN_DISTANCE);
+        self.now = ScreenView {
+            yaw: wrap(self.from.yaw + dy),
+            pitch: (self.from.pitch + dp).clamp(-90.0, 90.0),
+            distance: self.distance(base),
+            width: self.from.width,
+        };
+    }
+
+    /// Resizing: the screen's corner goes where the ray meets the screen's
+    /// plane, kept on the same line from its middle, so a bigger screen is
+    /// the same shape about the same middle. The plane is the one through the
+    /// corner as it is now, so a curved screen's corner, which comes nearer as
+    /// it widens, stays under the laser. Returns whether the width has just
+    /// met a limit.
+    fn resizing(&mut self, f: &Frame) -> bool {
+        let base = self.from.distance;
+        let distance = self.distance(base);
+        let curve = if self.arc >= 1e-3 {
+            self.now.width / self.arc * (1.0 - (self.arc / 2.0).cos())
+        } else {
+            0.0
+        };
+        let mut width = self.now.width;
+        let mut limit = false;
+        let met = f
+            .aim
+            .and_then(|aim| on_plane(f.picture, aim, curve - distance));
+        // A ray that misses the plane leaves the width where it was.
+        if let Some(g) = met
+            && self.grabbed > 1e-3
+        {
+            let ratio = g.dot(self.chord) / self.grabbed;
+            let [scale] = self.scale.step([ratio], DRAG_TAU, f.dt);
+            let wanted = self.from.width * scale;
+            width = wanted.clamp(*WIDTH.start(), *WIDTH.end());
+            let at_limit = width != wanted;
+            limit = at_limit && !self.limited;
+            self.limited = at_limit;
+        }
+        self.now = ScreenView {
+            distance,
+            width,
+            ..self.from
+        };
+        limit
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DT: f32 = 1.0 / 72.0;
+
+    fn near(a: f32, b: f32, within: f32) -> bool {
+        (a - b).abs() < within
+    }
+
+    fn flat() -> ScreenShape {
+        ScreenShape {
+            width: 6.0,
+            height: 3.375,
+            arc: 0.0,
+        }
+    }
+
+    fn view() -> ScreenView {
+        ScreenView {
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 4.0,
+            width: 6.0,
+        }
+    }
+
+    /// A hand at the eye pointing along `dir`.
+    fn aim(dir: Vec3) -> (Vec3, Quat) {
+        let rot = Quat::from_rotation_arc(Vec3::NEG_Z, dir.normalize());
+        (Vec3::ZERO, rot)
+    }
+
+    fn start(part: Part, by: GrabBy, aim: (Vec3, Quat), shape: ScreenShape) -> Start {
+        Start {
+            part,
+            hand: 1,
+            by,
+            aim,
+            room: Quat::IDENTITY,
+            head: Some(Vec3::ZERO),
+            picture: Mat4::IDENTITY,
+            view: view(),
+            shape,
+        }
+    }
+
+    fn frame(aim: Option<(Vec3, Quat)>, stick_y: f32) -> Frame {
+        Frame {
+            aim,
+            stick_y,
+            head: Some(Vec3::ZERO),
+            room: Quat::IDENTITY,
+            picture: Mat4::IDENTITY,
+            dt: DT,
+        }
+    }
+
+    /// Runs a drag for `seconds` with the hand at `aim` and the stick at
+    /// `stick_y`.
+    fn hold(d: &mut ScreenDrag, aim: (Vec3, Quat), stick_y: f32, seconds: f32) -> Step {
+        let mut step = d.step(&frame(Some(aim), stick_y));
+        for _ in 1..(seconds / DT).round() as usize {
+            step = d.step(&frame(Some(aim), stick_y));
+        }
+        step
+    }
+
+    #[test]
+    fn moving_follows_the_laser() {
+        let ahead = aim(Vec3::NEG_Z);
+        let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Trigger, ahead, flat()));
+        // Ten degrees to the left and five up.
+        let left = Quat::from_rotation_y(10f32.to_radians());
+        let up = Quat::from_rotation_x(5f32.to_radians());
+        let step = hold(&mut d, (Vec3::ZERO, left * up), 0.0, 0.5);
+        assert!(near(step.view.yaw, 10.0, 0.5), "{:?}", step.view);
+        assert!(near(step.view.pitch, 5.0, 0.5), "{:?}", step.view);
+        assert_eq!(step.view.distance, 4.0);
+        assert_eq!(step.view.width, 6.0);
+        // It does not jump when taken hold of: the first frame is at rest.
+        let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Trigger, ahead, flat()));
+        let first = d.step(&frame(Some(ahead), 0.0));
+        assert_eq!(first.view, view());
+    }
+
+    #[test]
+    fn trigger_moves_ignore_the_hand_coming_closer() {
+        let ahead = (Vec3::new(0.0, 0.0, -0.4), Quat::IDENTITY);
+        let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Trigger, ahead, flat()));
+        let further = (Vec3::new(0.0, 0.0, -0.9), Quat::IDENTITY);
+        let step = hold(&mut d, further, 0.0, 1.0);
+        assert_eq!(step.view.distance, 4.0);
+    }
+
+    #[test]
+    fn grip_moves_use_it() {
+        // A hand 1.6 m from the head, which is a long way, so that it can
+        // come in far enough to meet the nearest the screen may be.
+        let ahead = (Vec3::new(0.0, 0.0, -1.6), Quat::IDENTITY);
+        let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Grip, ahead, flat()));
+        // The hand goes 0.1 m further from the head: the screen 0.2 m.
+        let further = (Vec3::new(0.0, 0.0, -1.7), Quat::IDENTITY);
+        let step = hold(&mut d, further, 0.0, 1.0);
+        assert!(near(step.view.distance, 4.2, 0.01), "{:?}", step.view);
+        // Nearer comes in...
+        let nearer = (Vec3::new(0.0, 0.0, -1.3), Quat::IDENTITY);
+        let step = hold(&mut d, nearer, 0.0, 1.0);
+        assert!(near(step.view.distance, 3.4, 0.01), "{:?}", step.view);
+        // ...and not past the nearest.
+        let at_head = (Vec3::ZERO, Quat::IDENTITY);
+        let step = hold(&mut d, at_head, 0.0, 1.0);
+        assert!(near(step.view.distance, 1.0, 1e-4), "{:?}", step.view);
+    }
+
+    #[test]
+    fn the_stick_pushes_and_pulls() {
+        let ahead = aim(Vec3::NEG_Z);
+        for part in [Part::Move, Part::Resize] {
+            for by in [GrabBy::Trigger, GrabBy::Grip] {
+                let mut d = ScreenDrag::begin(start(part, by, ahead, flat()));
+                // Full up for a second at 4 m: e^1.1 times as far.
+                let step = hold(&mut d, ahead, 1.0, 1.0);
+                let ratio = step.view.distance / (4.0 * 1.1f32.exp());
+                assert!(near(ratio, 1.0, 0.01), "{:?}", step.view);
+                // On to the far limit, and no further.
+                let step = hold(&mut d, ahead, 1.0, 3.0);
+                assert_eq!(step.view.distance, 20.0);
+                // Down again at once, however long it was pushed on.
+                let step = hold(&mut d, ahead, -1.0, 1.0);
+                assert!(step.view.distance < 20.0 / 2.9, "{:?}", step.view);
+                let step = hold(&mut d, ahead, -1.0, 5.0);
+                assert_eq!(step.view.distance, 1.0);
+            }
+        }
+        // A light touch is the dead zone.
+        let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Trigger, ahead, flat()));
+        let step = hold(&mut d, ahead, 0.15, 2.0);
+        assert_eq!(step.view.distance, 4.0);
+        // Gently pushed, it goes gently.
+        let step = hold(&mut d, ahead, 0.6, 1.0);
+        let full = 4.0 * 1.1f32.exp();
+        assert!(step.view.distance > 4.0 && step.view.distance < full * 0.8);
+    }
+
+    #[test]
+    fn stick_depth_is_symmetric_and_has_a_dead_zone() {
+        assert_eq!(stick_depth(4.0, 0.0, 1.0), 4.0);
+        assert_eq!(stick_depth(4.0, -0.2, 1.0), 4.0);
+        let up = stick_depth(4.0, 1.0, 1.0);
+        let down = stick_depth(4.0, -1.0, 1.0);
+        assert!(near(up * down, 16.0, 1e-3), "{up} {down}");
+        assert!(near(up / 4.0, 1.1f32.exp(), 1e-3));
+        // Past full tilt counts as full.
+        assert_eq!(stick_depth(4.0, 3.0, 1.0), up);
+    }
+
+    /// A ray from the eye at the screen's corner (the bottom right, 4 m
+    /// away) with its place on the screen's plane `times` as far out along
+    /// the line from the middle.
+    fn towards_corner(shape: &ScreenShape, times: f32) -> (Vec3, Quat) {
+        let corner = Vec3::new(0.0, 0.0, -4.0) + shape.point(1.0, -1.0);
+        aim(Vec3::new(corner.x * times, corner.y * times, corner.z))
+    }
+
+    #[test]
+    fn resizing_keeps_centre_and_shape() {
+        let s = flat();
+        let corner = towards_corner(&s, 1.0);
+        let mut d = ScreenDrag::begin(start(Part::Resize, GrabBy::Trigger, corner, s));
+        let step = hold(&mut d, towards_corner(&s, 1.5), 0.0, 1.0);
+        // The corner goes out half as far again: the screen is half as wide
+        // again, about the same middle, and where it was in front of you.
+        assert!(near(step.view.width, 9.0, 0.05), "{:?}", step.view);
+        let pose = (step.view.yaw, step.view.pitch, step.view.distance);
+        assert_eq!(pose, (0.0, 0.0, 4.0));
+        // In: it shrinks.
+        let step = hold(&mut d, towards_corner(&s, 0.5), 0.0, 1.0);
+        assert!(near(step.view.width, 3.0, 0.05), "{:?}", step.view);
+    }
+
+    #[test]
+    fn the_corner_follows_the_laser_on_a_curved_screen_too() {
+        for curvature in [0.5f32, 1.0] {
+            let s = ScreenShape {
+                arc: curvature * std::f32::consts::TAU / 3.0,
+                ..flat()
+            };
+            let corner = towards_corner(&s, 1.0);
+            let mut d = ScreenDrag::begin(start(Part::Resize, GrabBy::Trigger, corner, s));
+            let to = towards_corner(&s, 1.4);
+            let step = hold(&mut d, to, 0.0, 2.0);
+            assert!(step.view.width > 6.5, "{curvature}: {:?}", step.view);
+            // The screen as it is now has its corner on the laser.
+            let width = step.view.width;
+            let now = ScreenShape {
+                width,
+                height: width * 3.375 / 6.0,
+                ..s
+            };
+            let at = Vec3::new(0.0, 0.0, -4.0) + now.point(1.0, -1.0);
+            let off = at.angle_between(to.1 * Vec3::NEG_Z).to_degrees();
+            assert!(off < 0.7, "{curvature}: {off}");
+        }
+    }
+
+    #[test]
+    fn an_off_corner_grab_does_not_jump() {
+        let s = flat();
+        // Taken hold of a little in from the corner, and a little to one side.
+        let off = aim(Vec3::new(2.7, -1.4, -4.0));
+        let mut d = ScreenDrag::begin(start(Part::Resize, GrabBy::Trigger, off, s));
+        let first = d.step(&frame(Some(off), 0.0));
+        assert!(near(first.view.width, 6.0, 1e-3), "{:?}", first.view);
+        // And moves in proportion from there: half as far again out.
+        let out = aim(Vec3::new(2.7 * 1.5, -1.4 * 1.5, -4.0));
+        let step = hold(&mut d, out, 0.0, 1.0);
+        assert!(near(step.view.width, 9.0, 0.05), "{:?}", step.view);
+    }
+
+    #[test]
+    fn resizing_clamps_and_survives_a_parallel_ray() {
+        let s = flat();
+        let corner = towards_corner(&s, 1.0);
+        let mut d = ScreenDrag::begin(start(Part::Resize, GrabBy::Trigger, corner, s));
+        // Far out: the widest, said once.
+        let far = towards_corner(&s, 20.0);
+        let mut said = 0;
+        let mut step = d.step(&frame(Some(far), 0.0));
+        for _ in 0..144 {
+            said += step.limit as u32;
+            step = d.step(&frame(Some(far), 0.0));
+        }
+        assert_eq!(step.view.width, 30.0);
+        assert_eq!(said, 1, "told once");
+        // A ray along the screen's plane, or away from it, holds the width.
+        for dir in [Vec3::X, Vec3::Z, Vec3::new(1.0, 0.0, 0.00001)] {
+            let step = hold(&mut d, aim(dir), 0.0, 0.2);
+            assert_eq!(step.view.width, 30.0, "{dir}");
+        }
+        // Right in: the narrowest.
+        let step = hold(&mut d, towards_corner(&s, 0.01), 0.0, 2.0);
+        assert_eq!(step.view.width, 0.5);
+        // The hand lost for a moment changes nothing.
+        let step = d.step(&frame(None, 0.0));
+        assert_eq!(step.view.width, 0.5);
+    }
+}

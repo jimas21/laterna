@@ -24,6 +24,12 @@
 //! nearer or further as the hand comes towards or away from the head), both
 //! grips recenter, and a thumbstick pointed at a list pages it left / right
 //! (at a slider, steps it).
+//!
+//! Under a flat screen, the move bar (trigger or grip held on it, then
+//! moving the hand) moves the screen, and the handle at its bottom right
+//! corner (the same) resizes it. While a hand holds either, its thumbstick
+//! pushes or pulls the screen instead of anything above (see
+//! [`Context::held`]), and no picture drag or recenter starts.
 
 use crate::bindings::{Axis, AxisAction, Bindings, Button, ButtonAction};
 use fp_xr::Hand;
@@ -86,6 +92,11 @@ pub struct Context {
     pub click_outside: bool,
     /// A video is open.
     pub playing: bool,
+    /// Per hand: it holds a window handle (the move bar or the resize
+    /// corner). Its thumbstick does nothing here, since the app uses it to
+    /// push or pull the screen, and neither a picture drag nor a recenter
+    /// starts while either hand holds one.
+    pub held: [bool; 2],
     /// Where the head is, in the same space as the hands (for dragging in and
     /// out).
     pub head: Option<Vec3>,
@@ -244,7 +255,7 @@ impl Controls {
                 self.drag = None;
                 out.push(Cmd::DragEnd);
             }
-        } else if ctx.playing && !ctx.over_ui {
+        } else if ctx.playing && !ctx.over_ui && !ctx.held.contains(&true) {
             for i in 0..2 {
                 let h = &hands[i];
                 if gripping(h)
@@ -281,6 +292,12 @@ impl Controls {
                 }
             }
 
+            if ctx.held[i] {
+                // Pushing or pulling the screen: not seeking, paging,
+                // volume or tilt, and nothing repeats on after the let-go.
+                self.held[i] = [(0, 0.0); 4];
+                continue;
+            }
             let s = hand.stick;
             let grip = gripping(hand);
             if !grip && (!playing || ctx.over_ui) {
@@ -326,7 +343,7 @@ impl Controls {
         }
 
         let both = |h: &[Hand; 2]| h.iter().all(|h| h.squeeze > 0.8 && h.trigger < 0.3);
-        if both(hands) && !both(&prev) && self.drag.is_none() {
+        if both(hands) && !both(&prev) && self.drag.is_none() && !ctx.held.contains(&true) {
             out.push(Cmd::Recenter);
         }
         if ctx.click_outside && !any_grip && ctx.playing {
@@ -523,6 +540,76 @@ mod tests {
             };
             assert_eq!(run(&mut c, &h, over), vec![Cmd::Page(-1)]);
         }
+    }
+
+    #[test]
+    fn a_held_handle_takes_that_hands_stick() {
+        // Over a menu the stick pages; over the picture it seeks, sets the
+        // volume or tilts. A hand holding a window handle does none of it.
+        for over_ui in [false, true] {
+            for (hand, stick) in [
+                (RIGHT, Vec2::new(0.9, 0.0)),
+                (RIGHT, Vec2::new(0.0, 1.0)),
+                (LEFT, Vec2::new(0.0, -1.0)),
+                (LEFT, Vec2::new(-0.9, 0.0)),
+            ] {
+                let mut c = Controls::default();
+                let mut h = hands();
+                h[hand].stick = stick;
+                let mut held = [false; 2];
+                held[hand] = true;
+                let cx = Context {
+                    over_ui,
+                    held,
+                    ..ctx(true)
+                };
+                assert_eq!(run(&mut c, &h, cx), vec![], "{hand} {stick} {over_ui}");
+                // The other hand still works.
+                let mut h = hands();
+                h[1 - hand].stick = Vec2::new(0.9, 0.0);
+                let cmds = run(&mut Controls::default(), &h, cx);
+                let want = [Cmd::Seek(1), Cmd::Page(1)][over_ui as usize];
+                assert_eq!(cmds, vec![want], "{hand} {over_ui}");
+            }
+        }
+        // Buttons are not the stick: Play / pause still works.
+        let mut h = hands();
+        h[RIGHT].south = true;
+        let cx = Context {
+            held: [false, true],
+            ..ctx(true)
+        };
+        let out = run(&mut Controls::default(), &h, cx);
+        assert_eq!(out, vec![Cmd::TogglePause]);
+    }
+
+    #[test]
+    fn no_picture_drag_or_recenter_while_a_handle_is_held() {
+        let held = Context {
+            held: [true, false],
+            ..ctx(true)
+        };
+        // Grip, then trigger, would start dragging the picture.
+        let mut c = Controls::default();
+        let mut h = hands();
+        h[1].squeeze = 1.0;
+        run(&mut c, &h, held);
+        h[1].trigger = 1.0;
+        assert_eq!(run(&mut c, &h, held), vec![]);
+        // Both grips would recenter.
+        let mut c = Controls::default();
+        let mut h = hands();
+        run(&mut c, &h, held);
+        h[0].squeeze = 1.0;
+        h[1].squeeze = 1.0;
+        assert_eq!(run(&mut c, &h, held), vec![]);
+        // Let go, they work.
+        let mut c = Controls::default();
+        let mut h = hands();
+        run(&mut c, &h, ctx(true));
+        h[0].squeeze = 1.0;
+        h[1].squeeze = 1.0;
+        assert_eq!(run(&mut c, &h, ctx(true)), vec![Cmd::Recenter]);
     }
 
     #[test]

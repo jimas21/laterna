@@ -30,6 +30,12 @@ pub struct Panel {
     /// The part of it that shows, in egui points, when that's less than all
     /// of it: rays pass through the rest.
     pub solid: Option<egui::Rect>,
+    /// Parts of it, in egui points, that a **trigger** takes hold of (a grip
+    /// takes the panel anywhere): a press there starts a grab instead of a
+    /// click (see [`Routed::grab`]). Empty for most panels.
+    pub handles: Vec<egui::Rect>,
+    /// Always drawn into the eyes, never as a quad layer of its own.
+    pub in_eyes: bool,
     pub opacity: f32,
     /// 0 hidden → 1 shown, following `visible` over a short fade.
     fade: f32,
@@ -60,6 +66,8 @@ impl Panel {
             visible: false,
             display_only: false,
             solid: None,
+            handles: Vec::new(),
+            in_eyes: false,
             opacity: 1.0,
             fade: 0.0,
             events: Vec::new(),
@@ -85,6 +93,13 @@ impl Panel {
     /// texture should already be fine enough for the largest scale.
     pub fn growing(mut self) -> Panel {
         self.grows = true;
+        self
+    }
+
+    /// A panel that is all handle: a trigger anywhere on it grabs (see
+    /// [`Panel::handles`]).
+    pub fn all_handle(mut self) -> Panel {
+        self.handles = vec![egui::Rect::from_min_size(Pos2::ZERO, self.points())];
         self
     }
 
@@ -466,6 +481,23 @@ pub struct Pointer {
     pub aims: [Option<Aim>; 2],
 }
 
+/// A panel taken hold of: by a grip squeezed while pointing at it, or by a
+/// trigger pulled on one of its [`Panel::handles`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grab {
+    /// Index in the slice given to [`Pointer::route`].
+    pub panel: usize,
+    pub hand: usize,
+    pub by: GrabBy,
+}
+
+/// What took hold: the hold ends when that is let go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrabBy {
+    Grip,
+    Trigger,
+}
+
 /// Result of routing controller input to panels.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct Routed {
@@ -475,9 +507,9 @@ pub struct Routed {
     pub pressed: Option<usize>,
     /// A trigger was pressed while not pointing at any panel.
     pub click_outside: bool,
-    /// A grip was squeezed while that hand pointed at a panel: (panel, hand),
-    /// to move the panel.
-    pub grab: Option<(usize, usize)>,
+    /// A grip was squeezed while that hand pointed at a panel, or a trigger
+    /// was pulled on a handle, to move the panel.
+    pub grab: Option<Grab>,
 }
 
 impl Pointer {
@@ -580,7 +612,7 @@ impl Pointer {
             }
             p.push(Event::PointerMoved(pos));
             let stick = hands[self.active].stick;
-            if stick.y.abs() > 0.2 && !p.display_only {
+            if stick.y.abs() > 0.2 && !p.display_only && p.handles.is_empty() {
                 p.push(Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, stick.y * 900.0 * dt),
@@ -596,7 +628,11 @@ impl Pointer {
                 && !self.grips[i]
                 && let Some((pi, _, _)) = self.aims[i].and_then(|a| a.hit)
             {
-                routed.grab = Some((pi, i));
+                routed.grab = Some(Grab {
+                    panel: pi,
+                    hand: i,
+                    by: GrabBy::Grip,
+                });
             }
             self.grips[i] = grip;
         }
@@ -604,7 +640,23 @@ impl Pointer {
         match transitions[self.active] {
             Some(true) if gripping && hit.is_some() => {}
             Some(true) => {
-                if let Some((pi, _, pos)) = hit.filter(|h| !display_only(panels, h)) {
+                let target = hit.filter(|h| !display_only(panels, h));
+                // On a handle the trigger takes hold: no click, so the
+                // panel's own controls never see it.
+                let on_handle = |h: &(usize, f32, Pos2)| {
+                    let handles = &panels[h.0].handles;
+                    handles.iter().any(|r| r.contains(h.2))
+                };
+                if let Some((pi, _, _)) = target.filter(on_handle) {
+                    // (A grip squeezed on the same frame keeps its grab.)
+                    if routed.grab.is_none() {
+                        routed.grab = Some(Grab {
+                            panel: pi,
+                            hand: self.active,
+                            by: GrabBy::Trigger,
+                        });
+                    }
+                } else if let Some((pi, _, pos)) = target {
                     panels[pi].push(Event::PointerButton {
                         pos,
                         button: PointerButton::Primary,
@@ -634,6 +686,21 @@ impl Pointer {
     /// The panel the active hand points at.
     pub fn hovered(&self) -> Option<usize> {
         self.hovered_panel.filter(|_| !self.hovering_display_only)
+    }
+
+    /// The panel the active hand points at, when it is one of the first
+    /// `count` in the slice given to [`Pointer::route`]. The slice lists the
+    /// app's own panels first, then others (the performance overlay, the
+    /// window controls) that a caller indexing its own panels with the
+    /// answer cannot use.
+    pub fn hovered_below(&self, count: usize) -> Option<usize> {
+        self.hovered().filter(|&i| i < count)
+    }
+
+    /// The hand's trigger is held down: pulled past the press point and not
+    /// yet let back below the release point.
+    pub fn trigger_down(&self, hand: usize) -> bool {
+        self.triggers.get(hand).is_some_and(|t| t.down)
     }
 
     /// The panel the trigger is held on, from press to release.
@@ -729,6 +796,10 @@ mod tests {
         );
         let back = p.world_point(pt);
         assert!((back.z + 2.0).abs() < 0.01);
+    }
+
+    fn grabbed(panel: usize, hand: usize, by: GrabBy) -> Grab {
+        Grab { panel, hand, by }
     }
 
     /// A hand pointing at (x, y) in the points of [`panel_in_front`].
@@ -1180,7 +1251,7 @@ mod tests {
 
         hands[1].squeeze = 1.0;
         let r = ptr.route(&mut [&mut p], &hands, 0.016);
-        assert_eq!(r.grab, Some((0, 1)));
+        assert_eq!(r.grab, Some(grabbed(0, 1, GrabBy::Grip)));
     }
 
     #[test]
@@ -1198,7 +1269,7 @@ mod tests {
         );
         hands[1].squeeze = 1.0;
         let r = ptr.route(&mut [&mut p], &hands, 0.016);
-        assert_eq!(r.grab, Some((0, 1)));
+        assert_eq!(r.grab, Some(grabbed(0, 1, GrabBy::Grip)));
     }
 
     #[test]
@@ -1471,5 +1542,153 @@ mod tests {
         let (_, rot, pos) = a.to_scale_rotation_translation();
         assert!(rot.angle_between(head.1) < 0.01, "{rot}");
         assert!(pos.distance(head.0) < 0.01, "{pos}");
+    }
+
+    /// [`panel_in_front`] with its right part (from x = 500 points) a handle.
+    fn panel_with_a_handle() -> Panel {
+        let mut p = panel_in_front();
+        let handle = egui::Rect::from_min_max(Pos2::new(500.0, 0.0), Pos2::new(800.0, 400.0));
+        p.handles = vec![handle];
+        p
+    }
+
+    /// How many of the events queued on a panel are of the kind `which` picks.
+    fn queued(p: &Panel, which: fn(&Event) -> bool) -> usize {
+        p.events.iter().filter(|e| which(e)).count()
+    }
+
+    /// The presses and releases queued on a panel, in order.
+    fn presses(p: &Panel) -> Vec<bool> {
+        let mut out = Vec::new();
+        for e in &p.events {
+            if let Event::PointerButton { pressed, .. } = e {
+                out.push(*pressed);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_trigger_on_a_handle_grabs_without_clicking() {
+        let mut p = panel_with_a_handle();
+        let mut ptr = Pointer::default();
+        let mut hands = [Hand::default(), Hand::default()];
+        hands[1].aim = at(650.0, 200.0);
+        ptr.route(&mut [&mut p], &hands, 0.016);
+        hands[1].trigger = 1.0;
+        p.events.clear();
+        let r = ptr.route(&mut [&mut p], &hands, 0.016);
+        assert_eq!(r.grab, Some(grabbed(0, 1, GrabBy::Trigger)));
+        assert!(!r.click_outside);
+        assert_eq!(r.pressed, None);
+        assert_eq!(ptr.pressed(), None);
+        assert!(presses(&p).is_empty(), "the panel never sees a press");
+        assert!(ptr.trigger_down(1));
+        // The hover still reaches the panel for its highlight, but not the
+        // stick as a scroll.
+        hands[1].stick = Vec2::new(0.0, 1.0);
+        p.events.clear();
+        ptr.route(&mut [&mut p], &hands, 0.016);
+        assert!(ptr.hovered().is_some());
+        assert!(queued(&p, |e| matches!(e, Event::PointerMoved(_))) > 0);
+        assert_eq!(queued(&p, |e| matches!(e, Event::MouseWheel { .. })), 0);
+        // Held, it is not a new press; let go, it ends quietly.
+        let r = ptr.route(&mut [&mut p], &hands, 0.016);
+        assert_eq!(r.grab, None);
+        hands[1].trigger = 0.0;
+        ptr.route(&mut [&mut p], &hands, 0.016);
+        assert!(!ptr.trigger_down(1));
+        assert!(presses(&p).is_empty());
+    }
+
+    #[test]
+    fn a_trigger_off_the_handle_still_clicks() {
+        let mut p = panel_with_a_handle();
+        let mut ptr = Pointer::default();
+        let mut hands = [Hand::default(), Hand::default()];
+        hands[1].aim = at(200.0, 200.0);
+        ptr.route(&mut [&mut p], &hands, 0.016);
+        hands[1].trigger = 1.0;
+        p.events.clear();
+        let r = ptr.route(&mut [&mut p], &hands, 0.016);
+        assert_eq!(r.grab, None);
+        assert_eq!(r.pressed, Some(1));
+        assert_eq!(presses(&p), vec![true]);
+    }
+
+    #[test]
+    fn a_grip_on_a_handle_grabs_too() {
+        let mut p = panel_with_a_handle();
+        let mut ptr = Pointer::default();
+        let mut hands = [Hand::default(), Hand::default()];
+        hands[1].aim = at(650.0, 200.0);
+        ptr.route(&mut [&mut p], &hands, 0.016);
+        hands[1].squeeze = 1.0;
+        p.events.clear();
+        let r = ptr.route(&mut [&mut p], &hands, 0.016);
+        assert_eq!(r.grab, Some(grabbed(0, 1, GrabBy::Grip)));
+        // A trigger pulled while that grip is held does nothing more.
+        hands[1].trigger = 1.0;
+        let r = ptr.route(&mut [&mut p], &hands, 0.016);
+        assert_eq!(r.grab, None);
+        assert!(presses(&p).is_empty());
+    }
+
+    #[test]
+    fn trigger_down_follows_the_hysteresis() {
+        let mut p = panel_in_front();
+        let mut ptr = Pointer::default();
+        let mut hands = [Hand::default(), Hand::default()];
+        hands[1].aim = at(400.0, 200.0);
+        let script = [
+            (0.0, false),
+            (0.5, false),
+            (0.7, true),
+            (0.5, true),
+            (0.4, false),
+            (0.5, false),
+            (0.65, true),
+        ];
+        for (value, down) in script {
+            hands[1].trigger = value;
+            ptr.route(&mut [&mut p], &hands, 0.016);
+            assert_eq!(ptr.trigger_down(1), down, "trigger at {value}");
+            assert!(!ptr.trigger_down(0));
+        }
+        assert!(!ptr.trigger_down(7), "no such hand");
+    }
+
+    #[test]
+    fn a_panel_past_the_apps_own_is_not_one_to_page() {
+        // The app's panels come first in the route slice; what follows (the
+        // overlay, the window controls) is not in the app's own list, so
+        // paging must not index that with it.
+        let mut app = panel_in_front();
+        let mut chrome = panel_in_front();
+        chrome.pose = Mat4::from_translation(Vec3::new(0.0, 0.0, -1.5));
+        let mut ptr = Pointer::default();
+        let mut hands = [Hand::default(), Hand::default()];
+        hands[1].aim = Some((Vec3::ZERO, Quat::IDENTITY));
+        let r = ptr.route(&mut [&mut app, &mut chrome], &hands, 0.016);
+        assert_eq!(ptr.hovered(), Some(1), "the nearer one is pointed at");
+        assert_eq!(ptr.hovered_below(2), Some(1));
+        assert_eq!(ptr.hovered_below(1), None, "it is not one of the first");
+        // Nudging the thumbstick across at it, the controls ask to page it,
+        // which must not index the app's panels with what is pointed at.
+        hands[1].stick = Vec2::new(0.9, 0.0);
+        let cx = crate::controls::Context {
+            over_ui: r.over_ui,
+            playing: true,
+            dt: 0.1,
+            ..Default::default()
+        };
+        let bindings = crate::bindings::Bindings::default();
+        let mut controls = crate::controls::Controls::default();
+        let cmds = controls.update(&hands, Quat::IDENTITY, cx, &bindings);
+        assert_eq!(cmds, vec![crate::controls::Cmd::Page(1)]);
+        assert_eq!(ptr.hovered_below(1), None, "so there is no panel to page");
+        chrome.visible = false;
+        ptr.route(&mut [&mut app, &mut chrome], &hands, 0.016);
+        assert_eq!(ptr.hovered_below(1), Some(0));
     }
 }

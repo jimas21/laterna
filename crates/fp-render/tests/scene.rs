@@ -6,7 +6,7 @@ use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_render::capture::OffscreenEyes;
 use fp_render::math::{Fov, projection, view};
-use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Quality, Renderer, VideoParams};
+use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Quality, Renderer, ScreenShape, VideoParams};
 use glam::{Mat4, Quat, Vec3};
 use std::sync::Arc;
 
@@ -390,6 +390,57 @@ fn flat_screen_sits_in_front_and_background_surrounds_it() {
     assert!(is_blue(px(&l, 2, 2)), "corner {:?}", px(&l, 2, 2));
     let [l, _] = render(&mut r, &mut e, None, &p, &[]);
     assert!(is_blue(centre(&l)), "no video {:?}", centre(&l));
+    e.destroy(&r);
+}
+
+/// The pixel of the 90 degree view from `eye` (looking down -Z) that `point`
+/// falls on, if it is in the picture.
+fn pixel_of(point: Vec3, eye: Vec3) -> Option<(u32, u32)> {
+    let d = point - eye;
+    if d.z >= 0.0 {
+        return None;
+    }
+    let half = SIZE as f32 / 2.0;
+    let x = half * (1.0 + d.x / -d.z);
+    let y = half * (1.0 - d.y / -d.z);
+    let on = |n: f32| (0.0..SIZE as f32).contains(&n);
+    (on(x) && on(y)).then_some((x as u32, y as u32))
+}
+
+#[test]
+fn the_screens_corners_are_where_its_shape_says() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let green = frame(160, 90, |_, _| [0, 255, 0]);
+    let eye = Vec3::new(-0.032, 1.6, 0.0);
+    for curvature in [0.0, 0.5] {
+        let mut p = params(
+            Projection::Flat,
+            StereoLayout::Mono,
+            ViewSettings::default(),
+        );
+        p.settings.screen_curvature = curvature;
+        p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0));
+        p.background = [0.0, 0.0, 0.0, 1.0];
+        let shape = ScreenShape::of(&p, Some((160, 90)));
+        let [l, _] = render(&mut r, &mut e, Some(&green), &p, &[]);
+        for (u, v) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+            let at = |scale: f32| {
+                let local = shape.point(u * scale, v * scale);
+                pixel_of(p.screen_pose.transform_point3(local), eye)
+            };
+            let inside = at(0.9).expect("a corner of the screen is in view");
+            let c = px(&l, inside.0, inside.1);
+            assert!(c[1] > 200, "{curvature} ({u}, {v}) inside: {c:?}");
+            // Just past the corner (when that is still in view) is the
+            // background.
+            if let Some((x, y)) = at(1.1) {
+                let c = px(&l, x, y);
+                assert_eq!(c, [0, 0, 0], "{curvature} ({u}, {v}) outside");
+            }
+        }
+    }
     e.destroy(&r);
 }
 

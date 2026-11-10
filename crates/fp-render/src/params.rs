@@ -6,7 +6,7 @@ use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_media::frame::{ColorInfo, Matrix};
 use fp_media::info::Transfer;
-use glam::{EulerRot, Mat4, Quat, Vec2, Vec4};
+use glam::{EulerRot, Mat4, Quat, Vec2, Vec3, Vec4};
 
 /// Matches `struct Params` in shaders/scene.wgsl (std140-compatible: every
 /// member is 16-byte aligned).
@@ -246,6 +246,105 @@ pub(crate) fn yuv_matrix(color: &ColorInfo, layout: PixelLayout) -> ([Vec4; 3], 
 /// moves off its centre (height, forward). Rays from the centre ignore it.
 const SPHERE_RADIUS: f32 = 3.0;
 
+/// The size of one eye's picture on a flat screen, in video pixels: the
+/// picture as shown (unsqueezed, then turned upright), then its stereo half.
+/// `tex` is the decoded frame's size.
+fn eye_size(video: &VideoParams, tex: (u32, u32)) -> (f32, f32) {
+    let pixel_aspect = video
+        .format
+        .stereo
+        .eye_pixel_aspect(video.pixel_aspect as f64) as f32;
+    let turns = video.rotation / 90 % 4;
+    let (pw, ph) = (tex.0 as f32 * pixel_aspect.max(0.01), tex.1 as f32);
+    let (pw, ph) = if turns % 2 == 1 { (ph, pw) } else { (pw, ph) };
+    match video.format.stereo {
+        StereoLayout::SideBySide | StereoLayout::FrameSequential => (pw / 2.0, ph),
+        StereoLayout::TopBottom => (pw, ph / 2.0),
+        StereoLayout::HalfSideBySide | StereoLayout::HalfTopBottom | StereoLayout::Mono => (pw, ph),
+    }
+}
+
+/// A flat screen's size and curve, exactly as the scene shader draws it. The
+/// shader's parameters and the app both get it from here, so they cannot
+/// disagree about where the screen's edges are.
+///
+/// The screen is in its own space: centred on the origin, facing +Z, the
+/// curve (if any) bending towards +Z at the sides.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenShape {
+    /// Metres along the arc, and tall.
+    pub width: f32,
+    pub height: f32,
+    /// The angle the curve spans, radians; 0 is flat.
+    pub arc: f32,
+}
+
+/// Below this arc, radians, the shader treats the screen as flat.
+const FLAT_ARC: f32 = 1e-3;
+
+impl ScreenShape {
+    /// `frame`: the decoded picture's size, `None` before the first frame
+    /// (then square).
+    pub fn of(video: &VideoParams, frame: Option<(u32, u32)>) -> ScreenShape {
+        let tex = frame.map_or((1, 1), |(w, h)| (w.max(1), h.max(1)));
+        ScreenShape::from_tex(video, tex)
+    }
+
+    fn from_tex(video: &VideoParams, tex: (u32, u32)) -> ScreenShape {
+        let (ew, eh) = eye_size(video, tex);
+        // The screen's width setting is its longer side, so a portrait video
+        // stands as tall as a landscape one is wide.
+        let (width, height) = match video.screen_fit {
+            Some(max) => {
+                let max = max.max(Vec2::splat(0.01));
+                let w = max.x.min(max.y * ew / eh.max(1e-3));
+                (w, w * eh / ew.max(1e-3))
+            }
+            None => {
+                let long = video.settings.screen_width;
+                if ew >= eh {
+                    (long, long * eh / ew.max(1e-3))
+                } else {
+                    (long * ew / eh.max(1e-3), long)
+                }
+            }
+        };
+        let curve = video.settings.screen_curvature.clamp(0.0, 1.0);
+        let arc = curve * std::f32::consts::TAU / 3.0;
+        ScreenShape { width, height, arc }
+    }
+
+    /// The cylinder's radius, metres; `None` when flat.
+    pub fn radius(&self) -> Option<f32> {
+        (self.arc >= FLAT_ARC).then_some(self.width / self.arc)
+    }
+
+    /// A point on the surface in the screen's own space. `u` and `v` run
+    /// from -1 to 1: left to right along the arc, bottom to top.
+    pub fn point(&self, u: f32, v: f32) -> Vec3 {
+        let y = v * self.height / 2.0;
+        match self.radius() {
+            None => Vec3::new(u * self.width / 2.0, y, 0.0),
+            Some(r) => {
+                let phi = u * self.arc / 2.0;
+                Vec3::new(r * phi.sin(), y, r * (1.0 - phi.cos()))
+            }
+        }
+    }
+
+    /// The unit vector along the arc at `u`, left to right: how a handle on
+    /// the edge lies along the curve.
+    pub fn tangent(&self, u: f32) -> Vec3 {
+        match self.radius() {
+            None => Vec3::X,
+            Some(_) => {
+                let phi = u * self.arc / 2.0;
+                Vec3::new(phi.cos(), 0.0, phi.sin())
+            }
+        }
+    }
+}
+
 pub(crate) fn build(
     video: &VideoParams,
     frame: Option<&FrameDesc>,
@@ -283,43 +382,18 @@ pub(crate) fn build(
             (1, 1),
         ),
     };
-    // The picture as shown: unsqueezed, then turned upright. Stereo halves
-    // are halves of that.
-    let pixel_aspect = video
-        .format
-        .stereo
-        .eye_pixel_aspect(video.pixel_aspect as f64) as f32;
     let turns = video.rotation / 90 % 4;
-    let (pw, ph) = (tex.0 as f32 * pixel_aspect.max(0.01), tex.1 as f32);
-    let (pw, ph) = if turns % 2 == 1 { (ph, pw) } else { (pw, ph) };
     // Per-eye aspect for flat screens.
-    let (ew, eh) = match video.format.stereo {
-        StereoLayout::SideBySide | StereoLayout::FrameSequential => (pw / 2.0, ph),
-        StereoLayout::TopBottom => (pw, ph / 2.0),
-        StereoLayout::HalfSideBySide | StereoLayout::HalfTopBottom | StereoLayout::Mono => (pw, ph),
-    };
+    let (ew, eh) = eye_size(video, tex);
     // A fisheye's image circle fills the eye image's shorter side, and stays
     // round when the image is not square.
     let circle = Vec4::new((eh / ew).min(1.0), (ew / eh).min(1.0), 0.0, 0.0);
     let [c0, c1] = s.lens_centre;
-    // The screen's width setting is its longer side, so a portrait video
-    // stands as tall as a landscape one is wide.
-    let (screen_w, screen_h) = match video.screen_fit {
-        Some(max) => {
-            let max = max.max(Vec2::splat(0.01));
-            let w = max.x.min(max.y * ew / eh.max(1e-3));
-            (w, w * eh / ew.max(1e-3))
-        }
-        None => {
-            let long = s.screen_width;
-            if ew >= eh {
-                (long, long * eh / ew.max(1e-3))
-            } else {
-                (long * ew / eh.max(1e-3), long)
-            }
-        }
-    };
-    let arc = s.screen_curvature.clamp(0.0, 1.0) * std::f32::consts::TAU / 3.0;
+    let ScreenShape {
+        width: screen_w,
+        height: screen_h,
+        arc,
+    } = ScreenShape::from_tex(video, tex);
     let correction =
         Mat4::from_euler(EulerRot::YXZ, deg(s.yaw), deg(s.pitch), deg(s.roll)).inverse();
     let kc = chroma(s.key_color);
@@ -394,7 +468,7 @@ mod tests {
     use super::*;
 
     fn apply(rows: &[Vec4; 3], off: Vec4, yuv: [f32; 3]) -> [f32; 3] {
-        let v = glam::Vec3::new(yuv[0], yuv[1], yuv[2]) * off.w - off.truncate();
+        let v = Vec3::new(yuv[0], yuv[1], yuv[2]) * off.w - off.truncate();
         [
             rows[0].truncate().dot(v),
             rows[1].truncate().dot(v),
@@ -634,5 +708,114 @@ mod tests {
         assert!(near(size(1080, 1920, fit), (7.2 * 9.0 / 16.0, 7.2)));
         // Without a fit, the screen width setting rules, as before.
         assert!(near(size(1920, 1080, None), (6.0, 3.375)));
+    }
+
+    fn frame_desc(width: u32, height: u32) -> FrameDesc {
+        FrameDesc {
+            width,
+            height,
+            layout: PixelLayout::Nv12,
+            color: ColorInfo {
+                matrix: Matrix::Bt709,
+                full_range: false,
+                transfer: Transfer::Sdr,
+                wide_gamut: false,
+            },
+        }
+    }
+
+    #[test]
+    fn the_shape_is_what_the_shader_gets() {
+        let layouts = [
+            StereoLayout::Mono,
+            StereoLayout::SideBySide,
+            StereoLayout::HalfSideBySide,
+            StereoLayout::TopBottom,
+            StereoLayout::HalfTopBottom,
+            StereoLayout::FrameSequential,
+        ];
+        // (width, height, rotation, pixel aspect): wide, portrait, turned a
+        // quarter and anamorphic.
+        let pictures = [
+            (1920, 1080, 0, 1.0),
+            (1080, 1920, 0, 1.0),
+            (1920, 1080, 90, 1.0),
+            (1920, 1080, 270, 1.0),
+            (1440, 1080, 0, 4.0 / 3.0),
+        ];
+        for stereo in layouts {
+            for (width, height, rotation, pixel_aspect) in pictures {
+                for curvature in [0.0, 0.5, 1.0] {
+                    let mut video = VideoParams {
+                        format: VideoFormat::new(Projection::Flat, stereo),
+                        rotation,
+                        pixel_aspect,
+                        ..Default::default()
+                    };
+                    video.settings.screen_curvature = curvature;
+                    let p = build(
+                        &video,
+                        Some(&frame_desc(width, height)),
+                        [Mat4::IDENTITY; 2],
+                    );
+                    let shape = ScreenShape::of(&video, Some((width, height)));
+                    assert_eq!(
+                        p.screen.truncate(),
+                        Vec3::new(shape.width, shape.height, shape.arc),
+                        "{stereo:?} {width}x{height} turned {rotation}"
+                    );
+                }
+            }
+        }
+        // Before the first frame the shader gets a square picture's screen.
+        let video = VideoParams::default();
+        let p = build(&video, None, [Mat4::IDENTITY; 2]);
+        let shape = ScreenShape::of(&video, None);
+        assert_eq!(p.screen.x, shape.width);
+        assert_eq!(p.screen.y, shape.height);
+        assert_eq!(shape.width, shape.height);
+        // A room's fit is part of the shape.
+        let video = VideoParams {
+            screen_fit: Some(Vec2::new(5.0, 2.0)),
+            ..Default::default()
+        };
+        let shape = ScreenShape::of(&video, Some((1920, 1080)));
+        let p = build(&video, Some(&frame_desc(1920, 1080)), [Mat4::IDENTITY; 2]);
+        assert_eq!((p.screen.x, p.screen.y), (shape.width, shape.height));
+        assert!(shape.height <= 2.0 + 1e-4 && shape.width <= 5.0 + 1e-4);
+    }
+
+    /// Where the scene shader's `flat_uv` puts a point on the screen's
+    /// surface (0..1 across, 0..1 down), by the same maths.
+    fn shader_uv(shape: &ScreenShape, p: Vec3) -> (f32, f32) {
+        let u = match shape.radius() {
+            None => p.x / shape.width + 0.5,
+            Some(r) => 0.5 + p.x.atan2(r - p.z) * r / shape.width,
+        };
+        (u, 0.5 - p.y / shape.height)
+    }
+
+    #[test]
+    fn points_lie_on_the_shaders_surface() {
+        for curvature in [0.0, 0.3, 1.0] {
+            let mut video = VideoParams::default();
+            video.settings.screen_curvature = curvature;
+            let shape = ScreenShape::of(&video, Some((1920, 1080)));
+            assert_eq!(shape.radius().is_some(), curvature > 0.0);
+            for (u, v) in [(1.0, -1.0), (-1.0, 1.0), (0.0, 0.0), (0.5, -0.25)] {
+                let (su, sv) = shader_uv(&shape, shape.point(u, v));
+                assert!((su - (u + 1.0) / 2.0).abs() < 1e-4, "{curvature}: u {su}");
+                assert!((sv - (1.0 - v) / 2.0).abs() < 1e-4, "{curvature}: v {sv}");
+            }
+            // The tangent is unit length and follows the surface.
+            let t = shape.tangent(1.0);
+            assert!((t.length() - 1.0).abs() < 1e-5);
+            let step = shape.point(1.0, 0.0) - shape.point(0.99, 0.0);
+            assert!(step.normalize().dot(t) > 0.999, "{curvature}");
+        }
+        // The bottom right corner of the default 16:9 screen, flat.
+        let flat = ScreenShape::of(&VideoParams::default(), Some((1920, 1080)));
+        let corner = flat.point(1.0, -1.0);
+        assert!(corner.abs_diff_eq(Vec3::new(3.0, -1.6875, 0.0), 1e-4));
     }
 }

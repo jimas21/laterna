@@ -773,6 +773,8 @@ picture. Play/pause and seeking are under either thumb.
 | Grip + thumbstick press | Subtitles off, or back on: the ones you had, else those in your language | As without the grip |
 | Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand); moving your hand towards your head brings a flat screen nearer, away from it pushes the screen further | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
+| Hold trigger (or grip) on the bar under a flat screen, move | Move the screen with your hand; the thumbstick pushes it away (up) or pulls it near (down) | The same |
+| Hold trigger (or grip) on the handle at its bottom right corner, move | Resize the screen about its middle, keeping its shape | The same |
 
 To get to SteamVR's dashboard without quitting, press **Dashboard** (four
 squares) at the top right of the browse panel, beside Quit (or beside Back to
@@ -803,6 +805,22 @@ the adjust panel to move it about the bar. During a 180° or 360° video,
 Yaw, Pitch and dragging turn only the picture; the control bar and adjust
 panel stay where they are. The browse panel (or the keyboard under it)
 moves the same way, with grip, and stays where you leave it.
+
+While the controls are up, a flat screen has a bar under it and a handle at
+its bottom right corner, like the Steam Frame's own windows. Point at the
+bar, hold the trigger and move your hand: the screen turns about you as your
+hand does, and the thumbstick of that hand pushes it away or pulls it near
+(a grip on the bar works too, and also takes your hand moving in or out).
+Point at the handle, hold the trigger and move your hand away from the
+screen's middle to make it bigger, or towards it to make it smaller: the
+screen keeps its middle and its shape, between half a metre and thirty metres
+wide. Both stay the same size to your eye however far or wide the screen is.
+While one is held, the thumbstick does nothing else (no seeking, volume or
+tilt), and grip + trigger does not drag the picture. The control bar hangs
+lower when a small or wide-format screen would put it over them. The handle
+steps aside while the adjust panel is open. A video with its own saved
+screen movements (keyframes) shows those, so dragging it seems to do nothing.
+Settings › General › Window controls turns the bar and handle off.
 
 The same grip also moves them nearer or further: with a grip held on a panel
 (the browse panel, control bar, adjust panel or performance overlay), move

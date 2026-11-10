@@ -312,6 +312,11 @@ fn general(ui: &mut egui::Ui, v: &mut View) {
             &mut s.follow,
         );
         r.switch(
+            tr!("settings-window-controls"),
+            Some(tr!("settings-window-controls-desc")),
+            &mut s.window_controls,
+        );
+        r.switch(
             tr!("settings-haptic-devices"),
             Some(tr!("settings-haptic-devices-desc")),
             &mut s.haptics_enabled,
