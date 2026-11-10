@@ -878,7 +878,8 @@ a place while it shows.
 - **Or set it for every video** in Settings › Places. It is the same
   choice: it stays until you change it, and a restart keeps it.
 - **Seat.** The cinema has three seats, Front, Middle and Back. The seat sets
-  how large the screen looks. Each place remembers its own seat.
+  how large the screen looks; Front, the first choice, shows it largest.
+  Each place remembers its own seat.
 - **House lights while playing.** The lights dim in about two seconds when
   the video plays, and come back up in about one when you pause, it ends or
   you close it. A pause to buffer leaves them as they are. The slider sets how

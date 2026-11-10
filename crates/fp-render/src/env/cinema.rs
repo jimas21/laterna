@@ -107,7 +107,10 @@ pub fn layout() -> Layout {
     ];
     Layout {
         seats,
-        default_seat: 1,
+        // Front: from there the picture spans about 67 degrees, near the
+        // usual screen's 74. From the middle it is under 50 and looks small
+        // and soft on the headset.
+        default_seat: 0,
         screen: Some(ScreenFrame {
             centre: SCREEN_CENTRE,
             max: SCREEN_MAX,
@@ -500,9 +503,21 @@ mod tests {
     }
 
     #[test]
-    fn the_middle_seat_looks_straight_at_the_picture() {
+    fn the_front_seat_is_the_default_and_the_picture_looks_large_from_it() {
         let layout = layout();
         let seat = layout.seat(layout.default_seat);
+        assert_eq!(seat.name, SeatName::Front);
+        let screen = layout.screen.unwrap();
+        // A 16:9 film fills the frame's height: 12.8 m wide.
+        let half_width = screen.max.y * 16.0 / 9.0 / 2.0;
+        let across = 2.0 * (half_width / (screen.centre - seat.eye).length()).atan();
+        assert!(across.to_degrees() > 60.0, "{}", across.to_degrees());
+    }
+
+    #[test]
+    fn the_middle_seat_looks_straight_at_the_picture() {
+        let layout = layout();
+        let seat = layout.seat(layout.seat_index(SeatName::Middle).unwrap());
         assert_eq!(seat.name, SeatName::Middle);
         let screen = layout.screen.unwrap();
         assert!((seat.eye.y - screen.centre.y).abs() < 0.3);
