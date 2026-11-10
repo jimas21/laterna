@@ -319,7 +319,7 @@ impl App {
                 self.show_browser = show;
                 if show {
                     self.ui.invalidate();
-                    self.refresh_source();
+                    self.refresh_source(false);
                 }
             }
             Action::Quit => self.quit = true,
@@ -448,7 +448,7 @@ impl App {
         self.show_browser = true;
         self.ui_visible = true;
         self.ui.invalidate();
-        self.refresh_source();
+        self.refresh_source(true);
     }
 
     /// Changes the open video's view adjustments (saved later with the

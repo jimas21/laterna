@@ -818,6 +818,9 @@ pub struct UiState {
     pub up_next: Option<(u64, Vec<queue::Row>)>,
     /// The source being browsed (shown on the Sources screen).
     pub source: Option<SourceView>,
+    /// The front pages of the servers last seen, shown at once when one is
+    /// opened again.
+    pub catalog_cache: catalog::HomeCache,
     /// Counts requests to sources, so answers reach the page that asked.
     pub seq: u64,
     pub source_form: Option<SourceForm>,
@@ -898,6 +901,7 @@ impl Default for UiState {
             picking: None,
             up_next: None,
             source: None,
+            catalog_cache: Default::default(),
             seq: 0,
             source_form: None,
             pin_form: None,
@@ -1119,12 +1123,13 @@ mod tests {
         assert!(s.source_back().is_none());
         assert!(s.source.is_none());
 
-        let mut j = catalog::CatalogView::new(1);
+        let mut j = catalog::CatalogView::new(1, None);
         j.pages.push(catalog::Page {
             seq: 2,
             request_seq: None,
             loading: false,
             error: None,
+            loaded_at: None,
             body: catalog::Body::Item {
                 item: Box::default(),
             },

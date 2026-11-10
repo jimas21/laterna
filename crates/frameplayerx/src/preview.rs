@@ -343,6 +343,20 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(6)?;
             }
+            // The tab of the library page open: `library-tab collections`.
+            Some("library-tab") => {
+                use crate::ui::SourcePage;
+                let tab = parts.get(1).ok_or("library-tab needs a tab")?;
+                let shown = match self.app.ui.source.as_mut().map(|s| &mut s.page) {
+                    Some(SourcePage::Catalog(j)) => j.show_tab(tab),
+                    _ => false,
+                };
+                if !shown {
+                    return Err("library-tab needs a library page open".into());
+                }
+                self.app.repaint_all();
+                self.run_frames(6)?;
+            }
             Some("tracks") => {
                 self.app.ui.tracks_open = true;
                 self.app.repaint_all();

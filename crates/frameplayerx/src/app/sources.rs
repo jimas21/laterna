@@ -205,7 +205,8 @@ impl App {
                 // answer now.
                 self.thumbs.retry_failed_remote();
                 let seq = self.ui.next_seq();
-                let j = ui::catalog::CatalogView::new(seq);
+                let cached = self.ui.catalog_cache.get(&source);
+                let j = ui::catalog::CatalogView::new(seq, cached);
                 self.ui.source = Some(view(SourcePage::Catalog(j)));
                 self.apply(Action::Catalog {
                     source,
@@ -272,8 +273,9 @@ impl App {
     }
 
     /// Brings a catalog page up to date after watching (marks, resume
-    /// points and "next up" changed on the server).
-    pub(super) fn refresh_source(&mut self) {
+    /// points and "next up" changed on the server). Unless `force`, a page
+    /// the server answered a moment ago stays as it is.
+    pub(super) fn refresh_source(&mut self, force: bool) {
         let Some(SourceView {
             source,
             page: SourcePage::Catalog(j),
@@ -283,6 +285,9 @@ impl App {
             return;
         };
         let source = source.clone();
+        if !force && j.loaded_recently() {
+            return;
+        }
         self.thumbs.retry_failed_remote();
         if let Some((seq, load)) = j.reload() {
             // After the server has heard that playback stopped.

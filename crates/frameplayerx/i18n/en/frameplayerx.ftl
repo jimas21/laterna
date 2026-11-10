@@ -784,6 +784,14 @@ sort-smallest-first = Smallest first
 sort-server-order = Server's order
 # The last card of a row of a server's page: opens everything in the row.
 catalog-see-all = See all
+# A tab on a library's page: the rows the server picked for it.
+catalog-recommended = Recommended
+# A tab on a library's page: all its titles.
+catalog-library = Library
+# A tab on a library's page: its collections.
+catalog-collections = Collections
+catalog-no-collections = No collections
+catalog-no-collections-desc = This library has no collections yet.
 jf-asking = Asking the server…
 filter-genres = Genres
 filter-find-genre = Find a genre
