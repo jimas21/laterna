@@ -506,7 +506,7 @@ impl App {
             Job::PlexPolled(generation, result) => self.plex_polled(generation, *result),
             Job::PlexConnected(generation, result) => self.plex_connected(generation, *result),
             Job::PlexServersChecked(generation, checks) => {
-                self.plex_servers_checked(generation, checks)
+                self.plex_servers_checked(generation, checks);
             }
             Job::PlexAccounts(accounts) => self.plex_accounts_named(accounts),
             Job::CrashReport(report) => {

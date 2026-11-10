@@ -204,7 +204,7 @@ impl App {
         });
     }
 
-    pub(super) fn plex_connect(&mut self, config: fp_sources::PlexConfig) {
+    pub(super) fn plex_connect(&mut self, config: PlexConfig) {
         let generation = self.ui.next_seq();
         let Some(f) = self
             .ui
@@ -220,7 +220,7 @@ impl App {
             Job::PlexConnected(
                 generation,
                 Box::new(
-                    fp_sources::plex::PlexSource::new(&config)
+                    PlexSource::new(&config)
                         .and_then(|s| s.probe())
                         .map_err(|e| ui::errors::source(&e)),
                 ),
@@ -336,11 +336,7 @@ impl App {
         self.panels[MAIN].request_repaint();
     }
 
-    pub(super) fn plex_connected(
-        &mut self,
-        generation: u64,
-        result: Result<fp_sources::PlexConfig, String>,
-    ) {
+    pub(super) fn plex_connected(&mut self, generation: u64, result: Result<PlexConfig, String>) {
         let Some(f) = self.plex_form(generation) else {
             return;
         };
@@ -471,7 +467,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fp_sources::plex::auth::PlexProfile;
+    use fp_sources::plex::auth::{PlexConnection, PlexProfile};
 
     fn account(uuid: &str) -> PlexAccount {
         PlexAccount {
@@ -504,7 +500,7 @@ mod tests {
             name: machine.into(),
             machine_identifier: machine.into(),
             access_token: token.map(str::to_string),
-            connections: vec![fp_sources::plex::auth::PlexConnection {
+            connections: vec![PlexConnection {
                 uri: format!("https://{machine}.plex.direct:32400"),
                 address: None,
                 port: Some(32400),

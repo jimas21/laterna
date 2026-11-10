@@ -374,7 +374,7 @@ pub fn form(
     id: String,
     configs: &[SourceConfig],
     actions: &mut Vec<Action>,
-) -> Option<fp_sources::SourceConfig> {
+) -> Option<SourceConfig> {
     if let LinkState::Waiting {
         pin,
         polled,
@@ -538,7 +538,7 @@ pub fn form(
         )
         .clicked()
         {
-            return Some(fp_sources::SourceConfig::Plex(cfg));
+            return Some(SourceConfig::Plex(cfg));
         }
     } else if !matches!(f.plex.state, LinkState::Servers { .. }) {
         ui.add_enabled_ui(false, |ui| {
@@ -637,7 +637,7 @@ fn set_ticked(ticked: &mut BTreeSet<String>, machine: &str, on: bool) {
 }
 
 fn replacement_id(f: &mut SourceForm, current: String) -> String {
-    if let Some(fp_sources::SourceConfig::Plex(old)) = &f.editing
+    if let Some(SourceConfig::Plex(old)) = &f.editing
         && old.access_token != f.plex.token.trim()
     {
         f.editing = None;
@@ -649,7 +649,7 @@ fn replacement_id(f: &mut SourceForm, current: String) -> String {
 
 fn manual_config(f: &SourceForm, id: String) -> PlexConfig {
     let mut cfg = match &f.editing {
-        Some(fp_sources::SourceConfig::Plex(c)) => c.clone(),
+        Some(SourceConfig::Plex(c)) => c.clone(),
         _ => PlexConfig {
             id,
             name: "Plex".into(),
@@ -732,7 +732,7 @@ mod tests {
             name: "Plex".into(),
             machine_identifier: "machine".into(),
             access_token: Some("server-token".into()),
-            connections: vec![fp_sources::plex::auth::PlexConnection {
+            connections: vec![PlexConnection {
                 uri: "https://server.plex.direct:32400".into(),
                 address: Some("192.168.1.10".parse().unwrap()),
                 port: Some(32400),
@@ -781,8 +781,7 @@ mod tests {
             ));
             saved.local_only = local_only;
             saved.allow_relay = allow_relay;
-            let mut form =
-                super::super::sources::edit_form(&fp_sources::SourceConfig::Plex(saved.clone()));
+            let mut form = super::super::sources::edit_form(&SourceConfig::Plex(saved.clone()));
             assert_eq!(form.plex.connection, mode);
             assert_eq!(form.plex.selected.as_ref(), Some(&saved));
             assert!(form.plex.set_connection(mode).is_none());
@@ -836,7 +835,7 @@ mod tests {
             ..Default::default()
         };
         let original = manual_config(&form, "old-source".into());
-        form.editing = Some(fp_sources::SourceConfig::Plex(original));
+        form.editing = Some(SourceConfig::Plex(original));
         assert_eq!(replacement_id(&mut form, "old-source".into()), "old-source");
         form.plex.token = "another-account".into();
         let id = replacement_id(&mut form, "old-source".into());
