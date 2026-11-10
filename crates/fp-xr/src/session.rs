@@ -366,10 +366,8 @@ impl XrSession {
                     self.recenter_at = Some(e.change_time());
                 }
                 xr::Event::DisplayRefreshRateChangedFB(_) => {
-                    match self.session.get_display_refresh_rate() {
-                        Ok(hz) => log::info!("display refresh rate changed: now {hz} Hz"),
-                        Err(e) => log::info!("display refresh rate changed (current rate: {e})"),
-                    }
+                    let now = self.session.get_display_refresh_rate().ok();
+                    log::info!("display refresh rate changed: now {now:?} Hz");
                 }
                 xr::Event::InstanceLossPending(_) => return Ok(SessionEvent::Exit),
                 _ => {}
