@@ -201,6 +201,9 @@ impl App {
         };
         match kind {
             fp_sources::SourceKind::MediaBrowser | fp_sources::SourceKind::Plex => {
+                // A server that was asleep when its pictures failed may
+                // answer now.
+                self.thumbs.retry_failed_remote();
                 let seq = self.ui.next_seq();
                 let j = ui::catalog::CatalogView::new(seq);
                 self.ui.source = Some(view(SourcePage::Catalog(j)));
@@ -280,6 +283,7 @@ impl App {
             return;
         };
         let source = source.clone();
+        self.thumbs.retry_failed_remote();
         if let Some((seq, load)) = j.reload() {
             // After the server has heard that playback stopped.
             self.catalog_job(source, seq, load, Duration::from_millis(800));
