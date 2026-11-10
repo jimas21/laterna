@@ -34,7 +34,11 @@ impl App {
     pub(super) fn update_earbuds(&mut self) {
         let now = Instant::now();
         let run = &mut self.earbuds;
-        if run.link.is_none() && run.looked.is_none_or(|t| now.duration_since(t) >= LOOK_EVERY) {
+        if run.link.is_none()
+            && run
+                .looked
+                .is_none_or(|t| now.duration_since(t) >= LOOK_EVERY)
+        {
             run.looked = Some(now);
             if crate::tragus::installed().is_some() {
                 run.link = EarbudsLink::spawn(EarbudsConfig::default()).ok();

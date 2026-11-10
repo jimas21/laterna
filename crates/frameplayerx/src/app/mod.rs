@@ -2,8 +2,8 @@
 //! turns controller input into UI events and playback commands each frame.
 
 mod actions;
-mod frame;
 mod earbuds;
+mod frame;
 mod headset;
 mod input;
 mod plex;

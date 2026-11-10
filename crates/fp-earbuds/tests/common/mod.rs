@@ -170,7 +170,9 @@ pub fn standard(idx: usize, stream: TcpStream, shared: &Shared, init: &str, out:
     if ws.send(Message::text(init)).is_err() {
         return;
     }
-    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
+    let _ = ws
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(20)));
     serve(&mut ws, idx, shared, out);
 }
 

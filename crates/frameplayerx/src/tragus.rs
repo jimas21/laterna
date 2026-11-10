@@ -343,11 +343,18 @@ mod tests {
         };
         assert_eq!(name, "Buds");
         assert_eq!(levels.len(), 2);
-        assert_eq!((levels[0].slot == Slot::Left, levels[0].percent), (true, 80));
+        assert_eq!(
+            (levels[0].slot == Slot::Left, levels[0].percent),
+            (true, 80)
+        );
         assert!(levels[1].charging && levels[1].percent == 60);
         assert_eq!(
             modes,
-            [NoiseMode::Off, NoiseMode::Transparency, NoiseMode::NoiseCancel]
+            [
+                NoiseMode::Off,
+                NoiseMode::Transparency,
+                NoiseMode::NoiseCancel
+            ]
         );
         assert_eq!(selected, Some(NoiseMode::Off));
     }
