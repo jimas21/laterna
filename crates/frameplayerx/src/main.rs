@@ -1065,7 +1065,10 @@ mod tests {
             assert_eq!(with("FRAMEPLAYERX_REQUEST_HZ", bad).request_hz, None);
         }
         for bad in ["", "fast", "dither", "nodithers"] {
-            assert_eq!(with("FRAMEPLAYERX_QUALITY", bad).quality, Quality::default());
+            assert_eq!(
+                with("FRAMEPLAYERX_QUALITY", bad).quality,
+                Quality::default()
+            );
         }
         assert_eq!(with("FRAMEPLAYERX_REQUEST_HZ", "0").request_hz, Some(0.0));
         for bad in ["", "fast", "0", "-1.5", "NaN", "inf"] {

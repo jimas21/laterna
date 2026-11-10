@@ -1,0 +1,29 @@
+{
+  "MediaContainer": {
+    "size": 2,
+    "totalSize": 2,
+    "offset": 0,
+    "Metadata": [
+      {
+        "ratingKey": "100",
+        "type": "collection",
+        "subtype": "movie",
+        "title": "Staff Picks",
+        "childCount": "12",
+        "librarySectionID": 1,
+        "thumb": "/library/collections/100/composite/170000100",
+        "art": "/library/collections/100/art/170000100"
+      },
+      {
+        "ratingKey": "101",
+        "type": "collection",
+        "subtype": "movie",
+        "title": "Rainy Day",
+        "childCount": "12",
+        "librarySectionID": 1,
+        "thumb": "/library/collections/101/composite/170000101",
+        "art": "/library/collections/101/art/170000101"
+      }
+    ]
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "MediaContainer": {
+    "size": 3,
+    "allowSync": false,
+    "identifier": "com.plexapp.plugins.library",
+    "Hub": [
+      {
+        "hubIdentifier": "home.continue",
+        "title": "Continue Watching",
+        "type": "episode",
+        "context": "hub.home.continue",
+        "size": 1,
+        "more": false,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/continueWatching/items",
+        "Metadata": [
+          {
+            "ratingKey": "201",
+            "type": "episode",
+            "title": "Pilot",
+            "grandparentTitle": "Made-Up Show",
+            "grandparentRatingKey": "20",
+            "parentRatingKey": "21",
+            "parentIndex": 1,
+            "index": 1,
+            "duration": 1500000,
+            "viewCount": 0,
+            "librarySectionID": 2,
+            "thumb": "/library/metadata/201/thumb/170000201",
+            "grandparentArt": "/library/metadata/20/art/1700000020"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "movie.recentlyadded.1",
+        "title": "Recently Added Movies",
+        "type": "movie",
+        "context": "hub.movie.recentlyadded",
+        "size": 2,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/home/recentlyAdded?type=1&sectionID=1",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "101",
+            "type": "movie",
+            "title": "Film One",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000101,
+            "thumb": "/library/metadata/101/thumb/170000101",
+            "art": "/library/metadata/101/art/170000101"
+          },
+          {
+            "ratingKey": "102",
+            "type": "movie",
+            "title": "Film Two",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000102,
+            "thumb": "/library/metadata/102/thumb/170000102",
+            "art": "/library/metadata/102/art/170000102"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "tv.recentlyadded.2",
+        "title": "Recently Added Episodes",
+        "type": "episode",
+        "context": "hub.tv.recentlyadded",
+        "size": 1,
+        "more": false,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/home/recentlyAdded?type=4&sectionID=2",
+        "librarySectionID": 2,
+        "Metadata": [
+          {
+            "ratingKey": "203",
+            "type": "episode",
+            "title": "Third",
+            "grandparentTitle": "Made-Up Show",
+            "grandparentRatingKey": "20",
+            "parentRatingKey": "21",
+            "parentIndex": 1,
+            "index": 3,
+            "duration": 1500000,
+            "viewCount": 0,
+            "librarySectionID": 2,
+            "thumb": "/library/metadata/203/thumb/170000203",
+            "grandparentArt": "/library/metadata/20/art/1700000020"
+          }
+        ]
+      }
+    ]
+  }
+}

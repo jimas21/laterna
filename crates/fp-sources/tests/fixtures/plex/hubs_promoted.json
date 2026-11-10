@@ -1,0 +1,293 @@
+{
+  "MediaContainer": {
+    "size": 9,
+    "allowSync": false,
+    "identifier": "com.plexapp.plugins.library",
+    "Hub": [
+      {
+        "hubIdentifier": "home.continue",
+        "title": "Continue Watching",
+        "type": "episode",
+        "context": "hub.home.continue",
+        "size": 1,
+        "more": false,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/continueWatching/items",
+        "Metadata": [
+          {
+            "ratingKey": "201",
+            "type": "episode",
+            "title": "Pilot",
+            "grandparentTitle": "Made-Up Show",
+            "grandparentRatingKey": "20",
+            "parentRatingKey": "21",
+            "parentIndex": 1,
+            "index": 1,
+            "duration": 1500000,
+            "viewCount": 0,
+            "librarySectionID": 2,
+            "thumb": "/library/metadata/201/thumb/170000201",
+            "grandparentArt": "/library/metadata/20/art/1700000020"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "home.ondeck",
+        "title": "On Deck",
+        "type": "episode",
+        "context": "hub.home.onDeck",
+        "size": 1,
+        "more": false,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/library/onDeck",
+        "Metadata": [
+          {
+            "ratingKey": "202",
+            "type": "episode",
+            "title": "Second",
+            "grandparentTitle": "Made-Up Show",
+            "grandparentRatingKey": "20",
+            "parentRatingKey": "21",
+            "parentIndex": 1,
+            "index": 2,
+            "duration": 1500000,
+            "viewCount": 0,
+            "librarySectionID": 2,
+            "thumb": "/library/metadata/202/thumb/170000202",
+            "grandparentArt": "/library/metadata/20/art/1700000020"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "movie.recentlyadded.1",
+        "title": "Recently Added Movies",
+        "type": "movie",
+        "context": "hub.movie.recentlyadded",
+        "size": 3,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/home/recentlyAdded?type=1&sectionID=1",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "101",
+            "type": "movie",
+            "title": "Film One",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000101,
+            "thumb": "/library/metadata/101/thumb/170000101",
+            "art": "/library/metadata/101/art/170000101"
+          },
+          {
+            "ratingKey": "102",
+            "type": "movie",
+            "title": "Film Two",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000102,
+            "thumb": "/library/metadata/102/thumb/170000102",
+            "art": "/library/metadata/102/art/170000102"
+          },
+          {
+            "ratingKey": "103",
+            "type": "movie",
+            "title": "Film Three",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000103,
+            "thumb": "/library/metadata/103/thumb/170000103",
+            "art": "/library/metadata/103/art/170000103"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "custom.collection.1.100",
+        "title": "Staff Picks",
+        "type": "movie",
+        "context": "hub.custom.collection",
+        "size": 2,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/library/collections/100/children",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "104",
+            "type": "movie",
+            "title": "Film Four",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000104,
+            "thumb": "/library/metadata/104/thumb/170000104",
+            "art": "/library/metadata/104/art/170000104"
+          },
+          {
+            "ratingKey": "105",
+            "type": "movie",
+            "title": "Film Five",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000105,
+            "thumb": "/library/metadata/105/thumb/170000105",
+            "art": "/library/metadata/105/art/170000105"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "tv.recentlyadded.2",
+        "title": "Recently Added Episodes",
+        "type": "episode",
+        "context": "hub.tv.recentlyadded",
+        "size": 2,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/home/recentlyAdded?type=4&sectionID=2",
+        "librarySectionID": 2,
+        "Metadata": [
+          {
+            "ratingKey": "203",
+            "type": "episode",
+            "title": "Third",
+            "grandparentTitle": "Made-Up Show",
+            "grandparentRatingKey": "20",
+            "parentRatingKey": "21",
+            "parentIndex": 1,
+            "index": 3,
+            "duration": 1500000,
+            "viewCount": 0,
+            "librarySectionID": 2,
+            "thumb": "/library/metadata/203/thumb/170000203",
+            "grandparentArt": "/library/metadata/20/art/1700000020"
+          },
+          {
+            "ratingKey": "204",
+            "type": "episode",
+            "title": "Fourth",
+            "grandparentTitle": "Made-Up Show",
+            "grandparentRatingKey": "20",
+            "parentRatingKey": "21",
+            "parentIndex": 1,
+            "index": 4,
+            "duration": 1500000,
+            "viewCount": 0,
+            "librarySectionID": 2,
+            "thumb": "/library/metadata/204/thumb/170000204",
+            "grandparentArt": "/library/metadata/20/art/1700000020"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "music.recentlyadded.3",
+        "title": "Recently Added Albums",
+        "type": "album",
+        "context": "hub.music.recentlyadded.3",
+        "size": 1,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/home/recentlyAdded?type=9&sectionID=3",
+        "librarySectionID": 3,
+        "Metadata": [
+          {
+            "ratingKey": "301",
+            "type": "album",
+            "title": "Album One",
+            "parentTitle": "Artist One"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "movie.mixed.1",
+        "title": "Mixed Bag",
+        "type": "movie",
+        "context": "hub.movie.mixed.1",
+        "size": 2,
+        "more": false,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/sections/1/mixed",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "106",
+            "type": "movie",
+            "title": "Film Six",
+            "year": 2019,
+            "duration": 6000000,
+            "viewCount": 0,
+            "librarySectionID": 1,
+            "addedAt": 1700000106,
+            "thumb": "/library/metadata/106/thumb/170000106",
+            "art": "/library/metadata/106/art/170000106"
+          },
+          {
+            "ratingKey": "900",
+            "type": "photo",
+            "title": "Not a video"
+          }
+        ]
+      },
+      {
+        "hubIdentifier": "movie.empty.1",
+        "title": "Nothing Here",
+        "type": "movie",
+        "context": "hub.movie.empty.1",
+        "size": 0,
+        "more": false,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/hubs/sections/1/empty"
+      },
+      {
+        "hubIdentifier": "library.collections.1",
+        "title": "Collections",
+        "type": "collection",
+        "context": "hub.library.collections",
+        "size": 2,
+        "more": true,
+        "promoted": true,
+        "style": "shelf",
+        "key": "/library/sections/1/all?type=18",
+        "librarySectionID": 1,
+        "Metadata": [
+          {
+            "ratingKey": "100",
+            "type": "collection",
+            "subtype": "movie",
+            "title": "Staff Picks",
+            "childCount": "12",
+            "librarySectionID": 1,
+            "thumb": "/library/collections/100/composite/170000100",
+            "art": "/library/collections/100/art/170000100"
+          },
+          {
+            "ratingKey": "101",
+            "type": "collection",
+            "subtype": "movie",
+            "title": "Rainy Day",
+            "childCount": "12",
+            "librarySectionID": 1,
+            "thumb": "/library/collections/101/composite/170000101",
+            "art": "/library/collections/101/art/170000101"
+          }
+        ]
+      }
+    ]
+  }
+}
