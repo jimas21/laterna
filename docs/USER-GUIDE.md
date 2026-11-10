@@ -65,7 +65,7 @@ unpacks it into `~/frameplayerx`.
 PC from the release page and run it:
 
 ```
-frameplayerx-install pair 192.168.0.68       # once: the headset's IP address
+frameplayerx-install pair <headset-ip>        # once: the headset's IP address
 frameplayerx-install                         # latest release
 frameplayerx-install --channel beta          # newest release, betas too
 frameplayerx-install --zip frameplayerx-0.1.0-aarch64.zip

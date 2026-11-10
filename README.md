@@ -9,12 +9,20 @@
 [![Latest Beta](https://img.shields.io/github/v/release/jimas21/frameplex?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/jimas21/frameplex/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](LICENSE)
 
-This is a fork of [FramePlayerX](https://github.com/remotesojourner/frameplayerx) (Apache-2.0). Its releases and in-app updates come from this repository, not from upstream.
-
-A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fisheye videos, in 2D or 3D, from the headset, a microSD card, a USB drive or a media server. It runs natively on the headset.
+A media player for the Valve Steam Frame that runs natively on the headset: flat, 180°, 360° and fisheye video in 2D or 3D, from the headset, a card, a USB drive or a media server. A new name for this fork is on the way.
 
 > [!NOTE]
-> FramePlayerX is a fork of [FramePlayer](https://github.com/yellkell/frameplayer) by [yellkell](https://github.com/yellkell), who created the original player and released it as open source. Thank you, yellkell, for the work this project is built on.
+> **Where it comes from.** This project is a fork of [FramePlayerX](https://github.com/remotesojourner/frameplayerx) by remotesojourner, which is itself a fork of [FramePlayer](https://github.com/yellkell/frameplayer) by [yellkell](https://github.com/yellkell), who created the original player and released it as open source. Thank you both. Everything here is Apache-2.0, like the projects it builds on. Its releases and in-app updates come from this repository, signed with its own key.
+
+## What's different in this fork
+
+- **Sharper picture**: antialiased screen edges and supersampling when the picture is minified, so distant or tilted screens stop shimmering
+- **Pauses when you take the headset off**, and stays paused until you press play
+- **Earbuds** (in progress): AirPods battery, noise control and pause-when-a-bud-comes-out through the separate open-source MagicPods programs, installed from Settings
+- **Moving the screen closer or further**, and smoother dragging (in progress)
+- **Environments** (in progress): a cinema and other places to watch in, built from original designs and CC0 assets
+- **Plex** (in progress): your server's own rows and artwork, Plex Home users, and every server linked once
+- **No forced SteamVR settings**: the launcher leaves SteamVR's own video settings alone
 
 ---
 
@@ -58,7 +66,12 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
   <a href="https://jimas21.github.io/frameplex/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 </p>
 
-1. **Install FramePlayerX** with one of the buttons above, or from a terminal:
+> [!IMPORTANT]
+> This fork has only **beta** releases so far, and the buttons above install the latest **stable** release, so they don't work yet. Until the first stable release, install a beta: from a PC with `frameplayerx-install --channel beta`, or in Desktop Mode's Konsole with
+> `curl -fsSL https://github.com/jimas21/frameplex/releases/download/v0.18.0-beta.1/frameplayerx-desktop-install.py -o /tmp/fpi.py && python3 /tmp/fpi.py --beta`.
+> Then set **Settings › Updates** to **Beta** to get the next ones.
+
+1. **Install** with one of the buttons above, or from a terminal:
 
    - **Desktop Mode, on the headset**: open this page in the headset's browser and press **Desktop Mode** to download the installer. Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm when Desktop Mode asks whether to trust it. A terminal window opens, installs the latest release and adds FramePlayerX to your Steam library. It may ask to close Steam for a moment; the app then shows up in Gaming Mode.
 
@@ -69,8 +82,8 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
    - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/jimas21/frameplex/releases/latest), then:
 
      ```bash
-     frameplayerx-install pair 192.168.0.68    # once, with the headset's IP address
-     frameplayerx-install                      # installs the latest release
+     frameplayerx-install pair <headset-ip>    # once: the address in Steam Settings › Internet on the headset
+     frameplayerx-install --channel beta       # installs the newest release, betas included
      ```
 
      For `pair`, open Steam Settings › Developer › Pair new host on the headset and keep it showing.
