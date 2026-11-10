@@ -252,8 +252,12 @@ impl App {
     fn anchor(&mut self, input: &FrameInput) -> Mat4 {
         if let Some((pos, rot)) = input.head {
             if self.reanchor || self.anchor.is_none() {
-                // Level at start; a recenter faces where you look.
+                // Level at start; a recenter faces where you look. In a
+                // place it tips the whole room with the gaze past 10 degrees
+                // (watching reclined or lying down), not only turns it.
+                let in_place = self.active_place(input.passthrough_available).is_some();
                 self.anchor = Some(match self.anchor {
+                    Some(_) if in_place => anchor_facing_within(pos, rot, PLACE_LEVEL_WITHIN_DEG),
                     Some(_) => anchor_facing(pos, rot),
                     None => anchor_from_head(pos, rot),
                 });
@@ -705,7 +709,8 @@ impl App {
         let room = in_place.and_then(|pl| {
             let layout = pl.layout();
             let seat = places::seat_index(&self.settings, pl, &layout);
-            places::room_frame(player, &layout, seat)
+            let height = places::seat_height_cm(&self.settings, pl);
+            places::room_frame(player, &layout, seat, height)
         });
         video.env = in_place.map(|place| fp_render::env::EnvFrame {
             place,

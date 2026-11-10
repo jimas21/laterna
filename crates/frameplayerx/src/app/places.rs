@@ -140,6 +140,27 @@ pub fn seat_index(settings: &Settings, place: Place, layout: &Layout) -> usize {
     }
 }
 
+/// How far a viewer's eye can be moved from the seat's own height, in whole
+/// centimetres, and the step between choices.
+pub const HEIGHT_CM: std::ops::RangeInclusive<i32> = -30..=30;
+pub const HEIGHT_STEP_CM: i32 = 5;
+
+/// `cm` held to [`HEIGHT_CM`] and to the nearest [`HEIGHT_STEP_CM`].
+pub fn snap_height_cm(cm: i32) -> i32 {
+    let step = HEIGHT_STEP_CM;
+    let snapped = ((cm as f32 / step as f32).round() as i32) * step;
+    snapped.clamp(*HEIGHT_CM.start(), *HEIGHT_CM.end())
+}
+
+/// How much higher (or lower) than the seat's own eye height the viewer sits
+/// in `place`, centimetres: what was picked for it, else 0.
+pub fn seat_height_cm(settings: &Settings, place: Place) -> i32 {
+    settings
+        .place_height
+        .get(place.id())
+        .map_or(0, |&cm| snap_height_cm(i32::from(cm)))
+}
+
 /// A room placed round the viewer in a seat.
 #[derive(Clone, Copy, Debug)]
 pub struct RoomFrame {
@@ -157,17 +178,25 @@ pub struct RoomFrame {
 
 /// `layout`'s room round a viewer in seat `seat`, turned with
 /// `picture_anchor` (so the whole room tilts and turns with the picture and
-/// a recentre). `None` for a Sky, which has no room and no screen of its own.
-pub fn room_frame(picture_anchor: Mat4, layout: &Layout, seat: usize) -> Option<RoomFrame> {
+/// a recentre, which tips it with the gaze when lying back). The viewer's eye
+/// is `height_cm` above the seat's own (below when negative). `None` for a
+/// Sky, which has no room and no screen of its own.
+pub fn room_frame(
+    picture_anchor: Mat4,
+    layout: &Layout,
+    seat: usize,
+    height_cm: i32,
+) -> Option<RoomFrame> {
     let screen = layout.screen?;
     let seat = layout.seat(seat);
-    let room_to_world = seat.room_to_world(picture_anchor);
+    let eye = seat.eye + Vec3::Y * (height_cm as f32 / 100.0);
+    let room_to_world = picture_anchor * Mat4::from_translation(-eye);
     Some(RoomFrame {
         room_to_world,
         screen_pose: room_to_world * Mat4::from_translation(screen.centre),
         fit: screen.max,
         curvature: screen.curvature,
-        distance: (screen.centre - seat.eye).length(),
+        distance: (screen.centre - eye).length(),
     })
 }
 
@@ -205,6 +234,7 @@ pub fn subtitle_spot(room: &RoomFrame, distance: f32, aspect: f32) -> SubtitleSp
 mod tests {
     use super::*;
     use fp_render::env::SeatName;
+    use glam::Quat;
 
     fn no_vars(_: &str) -> Option<String> {
         None
@@ -370,7 +400,7 @@ mod tests {
     fn a_seat_puts_the_screen_where_the_room_has_it() {
         let layout = Place::Cinema.layout();
         let middle = layout.seat_index(SeatName::Middle).unwrap();
-        let room = room_frame(Mat4::IDENTITY, &layout, middle).unwrap();
+        let room = room_frame(Mat4::IDENTITY, &layout, middle, 0).unwrap();
         // The middle seat's eye is 4.34 m up and 14.15 m from the screen,
         // whose centre is 4.4 m up.
         let centre = room.screen_pose.transform_point3(Vec3::ZERO);
@@ -389,7 +419,7 @@ mod tests {
         let layout = Place::Cinema.layout();
         let distance = |name| {
             let i = layout.seat_index(name).unwrap();
-            room_frame(Mat4::IDENTITY, &layout, i).unwrap().distance
+            room_frame(Mat4::IDENTITY, &layout, i, 0).unwrap().distance
         };
         let (front, middle, back) = (
             distance(SeatName::Front),
@@ -406,15 +436,86 @@ mod tests {
             * Mat4::from_rotation_y(0.7)
             * Mat4::from_rotation_x(0.4);
         for i in 0..layout.seats.len() {
-            let room = room_frame(anchor, &layout, i).unwrap();
+            let room = room_frame(anchor, &layout, i, 0).unwrap();
             let eye = room.room_to_world.transform_point3(layout.seats[i].eye);
             let origin = anchor.transform_point3(Vec3::ZERO);
             assert!((eye - origin).length() < 1e-4, "seat {i}: {eye}");
         }
         // A stale seat index sits in the default seat.
-        let stale = room_frame(anchor, &layout, 99).unwrap();
-        let usual = room_frame(anchor, &layout, layout.default_seat).unwrap();
+        let stale = room_frame(anchor, &layout, 99, 0).unwrap();
+        let usual = room_frame(anchor, &layout, layout.default_seat, 0).unwrap();
         assert_eq!(stale.room_to_world, usual.room_to_world);
+    }
+
+    #[test]
+    fn the_height_step_is_held_to_the_range_and_the_step() {
+        assert_eq!(snap_height_cm(0), 0);
+        assert_eq!(snap_height_cm(5), 5);
+        assert_eq!(snap_height_cm(-30), -30);
+        assert_eq!(snap_height_cm(31), 30);
+        assert_eq!(snap_height_cm(-100), -30);
+        assert_eq!(snap_height_cm(7), 5);
+        assert_eq!(snap_height_cm(-8), -10);
+        let mut s = Settings::default();
+        assert_eq!(seat_height_cm(&s, Place::Cinema), 0);
+        s.place_height.insert("cinema".into(), 15);
+        assert_eq!(seat_height_cm(&s, Place::Cinema), 15);
+        // Another place's pick does not count; a stray stored value is held.
+        assert_eq!(seat_height_cm(&s, Place::Studio), 0);
+        s.place_height.insert("cinema".into(), 120);
+        assert_eq!(seat_height_cm(&s, Place::Cinema), 30);
+    }
+
+    #[test]
+    fn a_higher_eye_sees_the_screen_lower_and_the_seat_height_is_remembered_per_place() {
+        let layout = Place::Cinema.layout();
+        let seat = layout.default_seat;
+        let level = room_frame(Mat4::IDENTITY, &layout, seat, 0).unwrap();
+        let (high, low) = (
+            room_frame(Mat4::IDENTITY, &layout, seat, 30).unwrap(),
+            room_frame(Mat4::IDENTITY, &layout, seat, -30).unwrap(),
+        );
+        let centre = |r: &RoomFrame| r.screen_pose.transform_point3(Vec3::ZERO);
+        // Eye up 30 cm: the screen is 30 cm lower in front of it.
+        assert!((centre(&level).y - centre(&high).y - 0.3).abs() < 1e-4);
+        assert!((centre(&low).y - centre(&level).y - 0.3).abs() < 1e-4);
+        // The seat's own eye is still at the anchor, plus the height.
+        let eye = layout.seat(seat).eye + Vec3::Y * 0.3;
+        let at = high.room_to_world.transform_point3(eye);
+        assert!(at.length() < 1e-4, "{at}");
+        // Sideways and depth are untouched.
+        assert!((centre(&level).x - centre(&high).x).abs() < 1e-5);
+        assert!((centre(&level).z - centre(&high).z).abs() < 1e-5);
+        assert!((high.distance - centre(&high).length()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_room_tipped_with_the_gaze_keeps_the_eye_and_faces_the_viewer() {
+        let layout = Place::Cinema.layout();
+        // Lying back, looking 60 degrees up and a little to the left.
+        let look = Quat::from_euler(glam::EulerRot::YXZ, 0.3, 60f32.to_radians(), 0.0);
+        let head = Vec3::new(0.2, 0.5, -0.1);
+        let anchor =
+            crate::world::anchor_facing_within(head, look, crate::world::PLACE_LEVEL_WITHIN_DEG);
+        let room = room_frame(anchor, &layout, layout.default_seat, 10).unwrap();
+        // The seat's eye (raised 10 cm) is where the head is.
+        let eye = layout.seat(layout.default_seat).eye + Vec3::Y * 0.1;
+        let at = room.room_to_world.transform_point3(eye);
+        assert!((at - head).length() < 1e-4, "{at}");
+        // The screen is where the head looks, facing it.
+        let centre = room.screen_pose.transform_point3(Vec3::ZERO);
+        let dir = (centre - head).normalize();
+        let gaze = look * Vec3::NEG_Z;
+        assert!(dir.dot(gaze) > 0.97, "{dir} {gaze}");
+        let normal = room.screen_pose.transform_vector3(Vec3::Z);
+        assert!(normal.dot(-dir) > 0.97, "{normal}");
+        // Straight up is as good: finite and facing the head.
+        let up = Quat::from_rotation_x(90f32.to_radians());
+        let anchor = crate::world::anchor_facing_within(head, up, 10.0);
+        let room = room_frame(anchor, &layout, layout.default_seat, 0).unwrap();
+        let centre = room.screen_pose.transform_point3(Vec3::ZERO);
+        assert!(centre.is_finite());
+        assert!((centre - head).normalize().dot(Vec3::Y) > 0.97);
     }
 
     /// The subtitle panel's shape in the app: 1600 x 320.
@@ -425,7 +526,7 @@ mod tests {
         let layout = Place::Cinema.layout();
         for name in [SeatName::Front, SeatName::Middle, SeatName::Back] {
             let seat = layout.seat_index(name).unwrap();
-            let room = room_frame(Mat4::IDENTITY, &layout, seat).unwrap();
+            let room = room_frame(Mat4::IDENTITY, &layout, seat, 0).unwrap();
             let d = room.distance.clamp(0.5, 20.0);
             let spot = subtitle_spot(&room, d, ASPECT);
             let centre = room.screen_pose.transform_point3(Vec3::ZERO);
@@ -449,7 +550,7 @@ mod tests {
     fn subtitles_are_not_wider_than_the_distance_allows() {
         let layout = Place::Cinema.layout();
         let front = layout.seat_index(SeatName::Front).unwrap();
-        let room = room_frame(Mat4::IDENTITY, &layout, front).unwrap();
+        let room = room_frame(Mat4::IDENTITY, &layout, front, 0).unwrap();
         // Near the screen the distance is the limit, as with a screen of one's own.
         let near = subtitle_spot(&room, 3.0, ASPECT);
         assert!((near.size.x - 2.7).abs() < 1e-5, "{}", near.size.x);
@@ -465,18 +566,18 @@ mod tests {
         let anchor = Mat4::from_translation(Vec3::new(0.5, 1.2, -0.3))
             * Mat4::from_rotation_y(0.7)
             * Mat4::from_rotation_x(0.4);
-        let room = room_frame(anchor, &layout, layout.default_seat).unwrap();
+        let room = room_frame(anchor, &layout, layout.default_seat, 0).unwrap();
         let spot = subtitle_spot(&room, room.distance, ASPECT);
         let local = room.screen_pose.inverse() * spot.pose;
         let (_, rot, pos) = local.to_scale_rotation_translation();
         let want = Vec3::new(0.0, -SUBTITLE_DROP * room.fit.y, SUBTITLE_LIFT);
         assert!((pos - want).length() < 1e-4, "{pos}");
-        assert!(rot.angle_between(glam::Quat::IDENTITY) < 1e-4);
+        assert!(rot.angle_between(Quat::IDENTITY) < 1e-4);
     }
 
     #[test]
     fn a_sky_has_no_room_to_place() {
         let layout = Place::Studio.layout();
-        assert!(room_frame(Mat4::IDENTITY, &layout, 0).is_none());
+        assert!(room_frame(Mat4::IDENTITY, &layout, 0, 0).is_none());
     }
 }
