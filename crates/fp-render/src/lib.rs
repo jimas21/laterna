@@ -12,7 +12,7 @@
 //! - [`timing`]: per-period duration statistics for the frame loop, and the
 //!   GPU time of each part of a frame.
 //! - `q10c`: shows the Steam Frame decoder's 10-bit (Q10C) pictures.
-//! - [`env`]: the places the picture can be shown in (a cinema, a studio):
+//! - [`mod@env`]: the places the picture can be shown in (a cinema, a studio):
 //!   catalogue, seats, meshes and lighting as plain data, no GPU.
 //! - [`hdr`]: HDR on the SDR screen: tone curve, gamut compression and the
 //!   scene peak, which `peak` measures from the frames.
