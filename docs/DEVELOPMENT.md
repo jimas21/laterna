@@ -522,6 +522,7 @@ Steam can't pass environment variables to an app, so the launcher reads
 | `FRAMEPLAYERX_QUALITY` | | Picture-quality features to turn off, comma-separated: `nodither` (noise against banding in dark gradients), `nosupersample` (four taps where a flat picture is minified), `noedgeaa` (antialiased screen edges). All are on by default; for comparing a look with and without on one build. The start-up log's `A/B switches` line names what is off |
 | `FRAMEPLAYERX_TESTCARD` | | `1080` or `2160` opens the generated test card of that height instead of the library (when no file is named); see [The test card](#the-test-card) |
 | `FRAMEPLAYERX_TESTCARD_LAYER` | | `plain` or `mips` also shows the card as a compositor layer beside it, with one mip level or the whole chain, to compare how the two are filtered |
+| `FRAMEPLAYERX_PLACES` | | `0` (or `off`, `false`, `no`) never shows a place (a room or a sky) around the picture, whatever Settings says; the desktop preview honours it too. It only stops the place from being asked for. It does not undo the change to the eye pass (the depth buffer and the blended picture) that makes places possible, so it is not a way back to how the eyes were drawn before |
 
 ### Steam Frame notes
 

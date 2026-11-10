@@ -193,13 +193,15 @@ impl App {
                 pitch,
                 distance,
             } => {
+                let in_room = self.in_room();
                 if let (Some(p), Some((y0, p0, d0))) = (&mut self.playback, self.drag_start) {
                     // The picture follows the hand; a flat screen comes nearer
                     // as the hand does, and goes further as it goes away (a
-                    // 180°/360° picture has no distance).
+                    // 180°/360° picture has no distance, and a room's screen
+                    // is where the room has it).
                     p.settings.yaw = y0 + yaw;
                     p.settings.pitch = (p0 + pitch).clamp(-90.0, 90.0);
-                    if p.format.projection == Projection::Flat {
+                    if p.format.projection == Projection::Flat && !in_room {
                         p.settings.screen_distance = pushed_distance(d0, distance, SCREEN_DISTANCE);
                     }
                     p.settings_dirty = true;

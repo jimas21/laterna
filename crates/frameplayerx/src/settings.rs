@@ -94,6 +94,17 @@ pub const UI_SCALES: std::ops::RangeInclusive<f32> = 0.8..=1.5;
 /// Settings › Image cache: the sizes offered, in MB.
 pub const IMAGE_CACHE_SIZES: [u32; 5] = [100, 250, 500, 1000, 2000];
 
+/// The id of "no place": the plain background. Any id this build does not
+/// know shows Plain too.
+pub const PLAIN_PLACE: &str = "void";
+
+/// Settings › Places › House lights while playing: the levels offered, as a
+/// share of full light.
+pub const HOUSE_PLAYING: std::ops::RangeInclusive<f32> = 0.0..=0.4;
+
+/// The level the house lights stay at while a video plays, to begin with.
+pub const HOUSE_PLAYING_START: f32 = 0.04;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -176,6 +187,20 @@ pub struct Settings {
     /// [`crate::pin`]). Left out of the file when empty.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub source_pins: std::collections::BTreeMap<String, String>,
+    /// The place around flat videos and the menus: [`PLAIN_PLACE`] or a
+    /// place id (`fp_render::env::Place::id`). A string, so a file from a
+    /// newer build with a place this one lacks still loads; an unknown id
+    /// shows Plain.
+    pub environment: String,
+    /// The seat picked in each room, by place id. Left out of the file when
+    /// empty.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub place_seats: std::collections::BTreeMap<String, u8>,
+    /// How bright a place's house lights stay while a video plays, in
+    /// [`HOUSE_PLAYING`].
+    pub house_lights_playing: f32,
+    /// Rooms take the light of the picture.
+    pub screen_light: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -299,6 +324,10 @@ impl Default for Settings {
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),
             source_pins: Default::default(),
+            environment: PLAIN_PLACE.to_string(),
+            place_seats: Default::default(),
+            house_lights_playing: HOUSE_PLAYING_START,
+            screen_light: true,
         }
     }
 }
@@ -410,6 +439,13 @@ mod tests {
         assert_eq!(p.default_format, fp_core::format::VideoFormat::FALLBACK);
         assert_eq!(p.fisheye_presets, FISHEYE_PRESETS);
         assert_eq!(p.fisheye_start, FISHEYE_START);
+        // Saved before places: Plain, the usual house lights, the picture's
+        // light on.
+        assert_eq!(p.environment, PLAIN_PLACE);
+        assert!(p.place_seats.is_empty());
+        assert_eq!(p.house_lights_playing, HOUSE_PLAYING_START);
+        assert_eq!(HOUSE_PLAYING_START, 0.04);
+        assert!(p.screen_light);
         // Saved before the global chroma key: the old green default goes.
         std::fs::write(
             &path,
@@ -433,6 +469,36 @@ mod tests {
         assert_eq!(Settings::load(&path), s);
         std::fs::write(&path, "garbage").unwrap();
         assert_eq!(Settings::load(&path).volume, 1.0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn places_settings_survive_a_round_trip_and_an_unknown_place() {
+        let name = format!("fp-places-{}", std::process::id());
+        let dir = std::env::temp_dir().join(name);
+        let path = dir.join("settings.json");
+        // Seats are only written once one is picked.
+        Settings::default().save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""environment": "void""#), "{text}");
+        assert!(!text.contains("place_seats"), "{text}");
+        let mut s = Settings {
+            environment: "cinema".into(),
+            house_lights_playing: 0.1,
+            screen_light: false,
+            ..Default::default()
+        };
+        s.place_seats.insert("cinema".into(), 2);
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), s);
+        // A place this build lacks (from a newer one) loads with every other
+        // setting, and shows Plain.
+        std::fs::write(&path, r#"{"volume": 0.25, "environment": "moon"}"#).unwrap();
+        let p = Settings::load(&path);
+        assert_eq!(p.volume, 0.25);
+        assert_eq!(p.environment, "moon");
+        let shown = crate::app::places::active_place(&p.environment, false, true, true);
+        assert_eq!(shown, None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -6,6 +6,7 @@ mod earbuds;
 mod frame;
 mod headset;
 mod input;
+pub mod places;
 mod plex;
 mod remote;
 mod sources;
@@ -29,6 +30,7 @@ use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
 use fp_library::{Library, PlaylistId};
 use fp_media::{PlayerState, VideoFrame};
+use fp_render::env::Place;
 use fp_render::{QuadDraw, Renderer, VideoParams};
 use fp_xr::Hand;
 use glam::{Mat4, Quat, Vec2, Vec3};
@@ -205,6 +207,17 @@ pub struct App {
     headset_paused: bool,
     /// The link to Tragus and the pause-when-an-earbud-comes-out policy.
     earbuds: earbuds::EarbudsRun,
+    /// Whether places may show at all: `FRAMEPLAYERX_PLACES=0` turns them
+    /// off, read once at start (see [`places::KILL_SWITCH`]).
+    places_enabled: bool,
+    /// The place shown around the picture and the menus this frame, if any.
+    place_shown: Option<Place>,
+    /// How far the house lights have come up, 1 full and 0 at the level they
+    /// keep while a video plays (see [`places::house_step`]).
+    house_ease: f32,
+    /// Holds the house lights at this level, 0 dark to 1 full, instead of
+    /// letting playback dim and raise them: for the desktop preview.
+    pub house_override: Option<f32>,
     /// When the web remote's details were last built.
     remote_details_at: Instant,
     /// The open video's picture for the web remote, by its location.
@@ -345,6 +358,10 @@ impl App {
             last_status: None,
             headset_paused: false,
             earbuds: earbuds::EarbudsRun::default(),
+            places_enabled: places::enabled_from_env(),
+            place_shown: None,
+            house_ease: 1.0,
+            house_override: None,
             remote_details_at: Instant::now(),
             remote_picture: None,
             update: None,
