@@ -257,7 +257,7 @@ impl App {
                 distance,
                 width,
             } = step.view;
-            super::input::drag_view(p, yaw, pitch, distance);
+            input::drag_view(p, yaw, pitch, distance);
             p.settings.screen_width = width;
         }
         // Holding one keeps the controls up.

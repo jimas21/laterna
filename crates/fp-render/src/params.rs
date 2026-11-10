@@ -468,7 +468,7 @@ mod tests {
     use super::*;
 
     fn apply(rows: &[Vec4; 3], off: Vec4, yuv: [f32; 3]) -> [f32; 3] {
-        let v = glam::Vec3::new(yuv[0], yuv[1], yuv[2]) * off.w - off.truncate();
+        let v = Vec3::new(yuv[0], yuv[1], yuv[2]) * off.w - off.truncate();
         [
             rows[0].truncate().dot(v),
             rows[1].truncate().dot(v),
