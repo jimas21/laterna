@@ -764,7 +764,7 @@ fn slanted_edge(samples: u32) -> Option<([Vec<u8>; 2], u32)> {
         place: Place::Cinema,
         room_to_world: Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0)),
         house: 1.0,
-        screen_light: false,
+        screen_light: 0.0,
         time: 0.0,
     });
     let eyes = eyes_looking(EYE_HEIGHT, Quat::from_rotation_z(0.3));
