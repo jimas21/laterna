@@ -122,6 +122,13 @@ settings-flat-videos = Flat videos
 settings-screen-distance = Screen distance
 settings-screen-width = Screen width
 settings-screen-width-desc = Its longer side: a portrait video's height.
+# How wide the screen looks: its angle across the eye.
+screen-size = Size
+screen-size-desc = How wide the screen looks. Moving it nearer or further keeps the size.
+screen-size-small = Small
+screen-size-medium = Medium
+screen-size-large = Large
+screen-now-degrees = Now { $degrees }° across.
 settings-screen-curvature = Screen curvature
 settings-vr-videos = 180° and 360° videos
 settings-height = Height

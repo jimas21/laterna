@@ -909,6 +909,66 @@ impl Rows<'_> {
     }
 }
 
+/// The flat screen's size controls: Small, Medium and Large (what the
+/// screen spans across the eye), then distance and width, which show the
+/// angle they make. While a size is picked, moving the screen nearer or
+/// further keeps its angle (the width follows). `names` are the distance
+/// and width labels, `defaults` what their reset buttons go back to.
+pub fn screen_size_rows(
+    r: &mut Rows,
+    names: (&str, &str),
+    distance: &mut f32,
+    width: &mut f32,
+    defaults: (f32, f32),
+) {
+    use fp_core::view::{
+        SCREEN_DISTANCE, SCREEN_WIDTH, ScreenSize, screen_degrees, screen_width_for,
+    };
+    let keep = ScreenSize::of(*width, *distance);
+    let fit = |degrees: f32, distance: f32| {
+        screen_width_for(degrees, distance).clamp(*SCREEN_WIDTH.start(), *SCREEN_WIDTH.end())
+    };
+    r.row(tr!("screen-size"), Some(tr!("screen-size-desc")), |ui| {
+        // Laid out right to left.
+        for size in ScreenSize::ALL.into_iter().rev() {
+            let name = match size {
+                ScreenSize::Small => tr!("screen-size-small"),
+                ScreenSize::Medium => tr!("screen-size-medium"),
+                ScreenSize::Large => tr!("screen-size-large"),
+            };
+            if chip(ui, name, keep == Some(size)).clicked() {
+                *width = fit(size.degrees(), *distance);
+            }
+        }
+    });
+    let moved = r.slider(
+        names.0,
+        None,
+        distance,
+        SCREEN_DISTANCE,
+        defaults.0,
+        " m",
+        1,
+    );
+    if let (true, Some(size)) = (moved, keep) {
+        *width = fit(size.degrees(), *distance);
+    }
+    let now = tr!(
+        "screen-now-degrees",
+        degrees = format!("{:.0}", screen_degrees(*width, *distance))
+    );
+    let desc = format!("{} {now}", tr!("settings-screen-width-desc"));
+    r.slider(
+        names.1,
+        Some(&desc),
+        width,
+        SCREEN_WIDTH,
+        defaults.1,
+        " m",
+        1,
+    );
+}
+
 /// The line between rows: a hairline, or a groove when dimensional.
 fn separator(ui: &Ui) {
     let x = ui.max_rect().x_range();

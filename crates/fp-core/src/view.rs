@@ -8,6 +8,55 @@ pub const BACKGROUND: [f32; 3] = [0.086, 0.086, 0.11];
 /// Metres a flat screen may be from the viewer.
 pub const SCREEN_DISTANCE: std::ops::RangeInclusive<f32> = 1.0..=20.0;
 
+/// A flat screen's size as the angle its long side spans at the eye. The
+/// three presets are Sony's cinematic sizes, rounded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl ScreenSize {
+    pub const ALL: [ScreenSize; 3] = [ScreenSize::Small, ScreenSize::Medium, ScreenSize::Large];
+
+    /// Degrees across the long side.
+    pub fn degrees(self) -> f32 {
+        match self {
+            ScreenSize::Small => 58.0,
+            ScreenSize::Medium => 72.0,
+            ScreenSize::Large => 90.0,
+        }
+    }
+
+    /// The preset a screen of `width` metres at `distance` metres is (to
+    /// within a degree), if it is one.
+    pub fn of(width: f32, distance: f32) -> Option<ScreenSize> {
+        let a = screen_degrees(width, distance);
+        Self::ALL
+            .into_iter()
+            .find(|s| (s.degrees() - a).abs() < 1.0)
+    }
+}
+
+/// Degrees a screen `width` metres across spans from `distance` metres.
+pub fn screen_degrees(width: f32, distance: f32) -> f32 {
+    2.0 * (width / (2.0 * distance.max(0.01))).atan().to_degrees()
+}
+
+/// Metres across a screen must be to span `degrees` from `distance` metres.
+pub fn screen_width_for(degrees: f32, distance: f32) -> f32 {
+    2.0 * distance * (degrees.to_radians() / 2.0).tan()
+}
+
+/// Largest and smallest a flat screen's width may be, metres.
+pub const SCREEN_WIDTH: std::ops::RangeInclusive<f32> = 0.5..=30.0;
+
+/// Metres a flat screen is from the viewer unless told otherwise, and the
+/// width that makes it Medium (72 degrees) there.
+pub const DEFAULT_SCREEN_DISTANCE: f32 = 4.0;
+pub const DEFAULT_SCREEN_WIDTH: f32 = 5.81;
+
 /// Everything the viewer can adjust about how a video is shown. Defaults are
 /// neutral. Persisted per video by the library and applied by the renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,8 +144,8 @@ impl Default for ViewSettings {
             saturation: 1.0,
             gamma: 1.0,
             sharpen: 0.0,
-            screen_distance: 4.0,
-            screen_width: 6.0,
+            screen_distance: DEFAULT_SCREEN_DISTANCE,
+            screen_width: DEFAULT_SCREEN_WIDTH,
             screen_curvature: 0.0,
             background: BACKGROUND,
             subtitle_distance: 2.5,
@@ -257,6 +306,39 @@ mod tests {
         k.insert(10.0, ViewSettings { zoom: 3.0, ..base });
         assert_eq!(k.frames.len(), 2);
         assert_eq!(k.at(10.0, &base).zoom, 3.0);
+    }
+
+    #[test]
+    fn the_default_screen_is_medium() {
+        let d = ViewSettings::default();
+        assert_eq!(
+            ScreenSize::of(d.screen_width, d.screen_distance),
+            Some(ScreenSize::Medium)
+        );
+        assert!((screen_degrees(d.screen_width, d.screen_distance) - 72.0).abs() < 0.1);
+        // 2 * 4 * tan(36 deg)
+        assert!(
+            (DEFAULT_SCREEN_WIDTH - screen_width_for(72.0, DEFAULT_SCREEN_DISTANCE)).abs() < 0.01
+        );
+    }
+
+    #[test]
+    fn presets_round_trip_and_keep_their_angle_at_any_distance() {
+        for size in ScreenSize::ALL {
+            for d in [1.0, 2.5, 4.0, 9.0, 20.0] {
+                let w = screen_width_for(size.degrees(), d);
+                assert!((screen_degrees(w, d) - size.degrees()).abs() < 1e-3);
+                assert_eq!(ScreenSize::of(w, d), Some(size));
+            }
+        }
+        // 58 degrees at 4 m is 4.44 m; 90 degrees is 8 m.
+        assert!((screen_width_for(58.0, 4.0) - 4.435).abs() < 0.01);
+        assert!((screen_width_for(90.0, 4.0) - 8.0).abs() < 1e-3);
+        assert_eq!(
+            ScreenSize::of(6.5, 4.0),
+            None,
+            "an in-between size is no preset"
+        );
     }
 
     #[test]

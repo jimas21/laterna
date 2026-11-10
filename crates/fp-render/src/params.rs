@@ -649,13 +649,16 @@ mod tests {
         let near = |(w, h, t): (f32, f32, u32), want: (f32, f32, u32)| {
             (w - want.0).abs() < 1e-3 && (h - want.1).abs() < 1e-3 && t == want.2
         };
-        // The default 6 m width: a phone clip stored sideways stands 6 m tall.
-        assert!(near(screen(0, 1.0), (6.0, 3.375, 0)));
-        assert!(near(screen(90, 1.0), (3.375, 6.0, 1)));
-        assert!(near(screen(270, 1.0), (3.375, 6.0, 3)));
-        assert!(near(screen(180, 1.0), (6.0, 3.375, 2)));
+        // The default width (Medium, 72 degrees at 4 m): a phone clip stored
+        // sideways stands that tall.
+        let w = ViewSettings::default().screen_width;
+        let h = w * 9.0 / 16.0;
+        assert!(near(screen(0, 1.0), (w, h, 0)));
+        assert!(near(screen(90, 1.0), (h, w, 1)));
+        assert!(near(screen(270, 1.0), (h, w, 3)));
+        assert!(near(screen(180, 1.0), (w, h, 2)));
         // 4:3 pixels widen a 16:9 frame to 2.37:1.
-        assert!(near(screen(0, 4.0 / 3.0), (6.0, 6.0 * 1080.0 / 2560.0, 0)));
+        assert!(near(screen(0, 4.0 / 3.0), (w, w * 1080.0 / 2560.0, 0)));
     }
 
     #[test]
