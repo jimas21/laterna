@@ -20,6 +20,7 @@
 //! | `grip V` / `trigger V` | hold the grip / trigger at V (0..1) until changed |
 //! | `status` | print what is playing and the view settings |
 //! | `dashboard` | press the dashboard button's action (`status` counts them) |
+//! | `multitask` | press the bar's Multitask key's action: the screen and the library side by side, or back (`status` shows `multitask=1`) |
 //! | `expect-dashboard N` | fail the script unless the dashboard button was pressed N times |
 //! | `expect FIELD OP VALUE` | fail the script unless the number after `FIELD=` in the status line (`width`, `distance`, `yaw`, ...) is `<` or `>` VALUE, `==` it (to 0.01) or `~` it (within 10 %) |
 //! | `open LOCATION` | open a file or URL |
@@ -583,6 +584,12 @@ impl Sim {
             Some("dashboard") => {
                 self.app.apply(crate::ui::Action::OpenDashboard);
                 self.run_frames(2)?;
+            }
+            // Browse beside the video, or back (the key itself is clicked with
+            // `point` and `click`).
+            Some("multitask") => {
+                self.app.apply(crate::ui::Action::ToggleMultitask);
+                self.run_frames(6)?;
             }
             // Fails the script unless the dashboard button was pressed N times.
             Some("expect-dashboard") => {

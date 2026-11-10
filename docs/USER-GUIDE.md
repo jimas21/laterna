@@ -826,6 +826,14 @@ stay out of sight inside a room (Cinema), whose screen is where the room puts
 it: pick a seat to change how big it looks. They return with the Studio or
 Plain.
 
+To pick another video while one plays, press **Browse beside the video** on
+the control bar (flat videos only, not inside a room). The screen moves to
+the left and gets a little narrower if it needs to, and the browse panel
+comes up to the right of it. Both stay up and nothing hides on its own.
+Choose a video in the browse panel and it plays on the screen. Press the key
+again, **Back to video**, Back or the menu button to put the screen and the
+panel back where they were. Closing the video ends it too. It is never saved.
+
 The same grip also moves them nearer or further: with a grip held on a panel
 (the browse panel, control bar, adjust panel or performance overlay), move
 your hand towards your head to bring it closer, or away from it to push it

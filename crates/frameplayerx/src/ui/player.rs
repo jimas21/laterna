@@ -649,7 +649,7 @@ struct ViewKeys {
     place_shown: Option<Place>,
 }
 
-/// Close, hide, room, place, follow, bookmark and adjust.
+/// Close, hide, room, place, follow, multitask, bookmark and adjust.
 fn view_keys(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
@@ -712,6 +712,18 @@ fn view_keys(
         {
             actions.push(Action::ToggleFollow);
         }
+    }
+    // Browse beside the video: only a flat screen, and not inside a room (the
+    // room sets where its screen is).
+    if flat
+        && !keys
+            .place_shown
+            .is_some_and(|p| p.kind() == PlaceKind::Room)
+        && widgets::key(ui, icons::FOLDERS, 52.0, state.multitask)
+            .tip(tr!("player-multitask"))
+            .clicked()
+    {
+        actions.push(Action::ToggleMultitask);
     }
     if widgets::key(ui, icons::BOOKMARK_SIMPLE, 52.0, false)
         .tip(tr!("player-bookmark"))

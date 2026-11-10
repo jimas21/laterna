@@ -443,9 +443,10 @@ impl App {
     /// One line about the open video and the UI, for the preview harness.
     pub fn status_line(&self) -> String {
         let ui = format!(
-            "ui_visible={} browser={} adjust={} tracks={} dashboard_requests={}",
+            "ui_visible={} browser={} multitask={} adjust={} tracks={} dashboard_requests={}",
             self.ui_visible,
             self.show_browser,
+            u8::from(self.multitasking()),
             self.ui.adjust_open,
             self.ui.tracks_open,
             self.dashboard_requests

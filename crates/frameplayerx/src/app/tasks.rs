@@ -610,12 +610,14 @@ impl App {
                 if let Some(h) = self.services.haptics() {
                     h.load(o.scripts);
                 }
+                // Side by side, it is placed where the library was before.
+                let at = self.placed_from();
                 self.playback = Some(o.playback);
                 if let Some(r) = &mut self.perf_readings {
                     r.new_video();
                 }
                 if let Some(p) = &mut self.playback {
-                    p.place_flat(self.offsets.main[0]);
+                    p.place_flat(at);
                 }
                 self.ui.open_error = None;
                 self.ui.adjust_open = false;
@@ -625,6 +627,9 @@ impl App {
                 self.last_activity = Instant::now();
                 self.sub_key.clear();
                 self.ui.invalidate();
+                // Browsing beside the video goes on: the new one takes the
+                // screen's place.
+                self.multitask_new_video();
             }
             Err(e) => {
                 log::warn!("open failed: {e}");

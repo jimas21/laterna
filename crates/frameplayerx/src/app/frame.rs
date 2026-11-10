@@ -16,7 +16,6 @@ impl App {
         self.chrome.cancel();
         self.offsets.main = [0.0, 0.0];
         self.offsets.depth.main = 0.0;
-        self.settings.panel_offsets = self.offsets;
         if let Some(p) = &mut self.playback
             && p.format.projection == Projection::Flat
             && (p.settings.yaw, p.settings.pitch) != (0.0, 0.0)
@@ -25,6 +24,9 @@ impl App {
             p.settings.pitch = 0.0;
             p.settings_dirty = true;
         }
+        // Side by side, they stay side by side, facing where you look now.
+        self.recenter_multitask();
+        self.settings.panel_offsets = self.kept_offsets();
     }
 
     /// A flat screen, and the panels that move, back where they start,
@@ -32,6 +34,7 @@ impl App {
     /// picture's turn is the video's own adjustment and stays (its Reset
     /// puts that back).
     pub(super) fn reset_placement(&mut self) {
+        self.end_multitask(false);
         self.panel_drag = None;
         self.chrome.cancel();
         self.adjust_hold = None;
@@ -161,7 +164,7 @@ impl App {
             }
         } else {
             self.panel_drag = None;
-            self.settings.panel_offsets = self.offsets;
+            self.settings.panel_offsets = self.kept_offsets();
         }
     }
 
@@ -435,7 +438,15 @@ impl App {
     /// Which panels show: the controls hide on their own while a video
     /// plays.
     fn update_visibility(&mut self) {
+        self.check_multitask();
         let playing = self.playback.is_some();
+        // Side by side, the library and the player's controls both stay up.
+        let multitask = self.multitasking();
+        if multitask {
+            self.show_browser = true;
+            self.ui_visible = true;
+        }
+        self.ui.multitask = multitask;
         let paused = self
             .playback
             .as_ref()
@@ -456,7 +467,7 @@ impl App {
         if browser && let Some(notice) = self.update_notice.take() {
             self.ui.toast(notice);
         }
-        self.panels[BAR].visible = playing && self.ui_visible && !self.show_browser;
+        self.panels[BAR].visible = playing && self.ui_visible && (!self.show_browser || multitask);
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
         self.panels[TRACKS].visible = self.panels[BAR].visible && self.ui.tracks_open;
         self.show_window_controls();

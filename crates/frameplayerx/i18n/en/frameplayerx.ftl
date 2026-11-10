@@ -1498,6 +1498,9 @@ place-screen-light-desc = The walls and seats take on the colours of the picture
 place-sets-screen = This place sets the screen. Pick a seat to change how big it looks.
 # A tooltip: opens the place picker.
 player-place = Place
+# A tooltip: puts the library beside the playing video, so you can pick another
+# while it plays; press again to put it back.
+player-multitask = Browse beside the video
 # A tooltip on the bed button while a place shows.
 player-follow-place = Screen follows you (not inside a place)
 
