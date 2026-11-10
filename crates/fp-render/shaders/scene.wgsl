@@ -506,9 +506,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var cov = 1.0;
     if (kind == 0u || kind == 2u) {
         if ((params.display.y & QUALITY_EDGE_AA) != 0u) {
-            let fw = max(abs(duv_dx) + abs(duv_dy), vec2<f32>(1e-6));
+            // display.w: the blend's width (low 16 bits) and curve (high), in
+            // hundredths; 0 means the old one-pixel linear blend.
+            let ew = max(f32(params.display.w & 0xffffu) / 100.0, 1.0);
+            let eg = select(1.0, f32(params.display.w >> 16u) / 100.0, (params.display.w >> 16u) > 0u);
+            let fw = max(abs(duv_dx) + abs(duv_dy), vec2<f32>(1e-6)) * ew;
             let e = clamp(min(uv, vec2<f32>(1.0) - uv) / fw + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
-            cov = e.x * e.y;
+            // Smoothstep over the wider ramp: no corner where it meets full
+            // cover or the background, which the lenses' resampling shows.
+            let es = e * e * (vec2<f32>(3.0) - 2.0 * e);
+            cov = pow(es.x * es.y, eg);
             if (kind == 2u) {
                 cov = min(cov, clamp(inside / max(dinside, 1e-6) + 0.5, 0.0, 1.0));
             }

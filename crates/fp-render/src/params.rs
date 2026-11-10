@@ -57,6 +57,14 @@ pub struct Quality {
     /// the four taps hold. Built per video frame, so it costs GPU time
     /// (logged as the `pyramid` part), and it is left out where it can't fit.
     pub pyramid: bool,
+    /// How wide the picture's edge blend is, in eye pixels (1 = one pixel).
+    /// Wider hides the stair steps a nearly level edge shows through the
+    /// lenses (`FRAMEPLAYERX_EDGE`).
+    pub edge_px: f32,
+    /// The edge blend's curve: 1 is linear in light; above 1 darkens the
+    /// partly covered pixels, which looks evener for a bright picture on a
+    /// dark surround (`FRAMEPLAYERX_EDGE_GAMMA`).
+    pub edge_gamma: f32,
 }
 
 impl Default for Quality {
@@ -66,6 +74,8 @@ impl Default for Quality {
             supersample: true,
             dither: true,
             pyramid: true,
+            edge_px: 1.75,
+            edge_gamma: 1.6,
         }
     }
 }
@@ -87,6 +97,13 @@ impl Quality {
             bits |= 8;
         }
         bits
+    }
+
+    /// The edge blend for the shader (`SceneParams::display[3]`): its width
+    /// and curve in hundredths, the width in the low 16 bits.
+    pub(crate) fn edge_bits(self) -> u32 {
+        let h = |v: f32, lo: f32, hi: f32| (v.clamp(lo, hi) * 100.0).round() as u32;
+        h(self.edge_px, 0.5, 6.0) | (h(self.edge_gamma, 0.5, 3.0) << 16)
     }
 
     /// The default with the features named in `list` turned off: `nodither`,
