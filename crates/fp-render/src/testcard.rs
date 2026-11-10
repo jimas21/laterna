@@ -438,8 +438,8 @@ mod tests {
     #[test]
     fn checker_alternates_by_cell() {
         let one = checker(8, 8, 1);
-        for y in 0..8 {
-            for x in 0..8 {
+        for y in 0..8u32 {
+            for x in 0..8u32 {
                 let want = if (x + y).is_multiple_of(2) { 255 } else { 0 };
                 assert_eq!(grey(&one, 8, x, y), want, "({x}, {y})");
             }
