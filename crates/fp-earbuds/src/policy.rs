@@ -136,7 +136,13 @@ impl EarbudPolicy {
         self.hold = None;
         self.unpaused_frames = 0;
         let fresh = r.usable && self.epoch == Some(r.epoch);
-        let out = self.seen.is_some_and(|w| cx.rule.pauses_on(w));
+        // The reading that comes with the open wins over the last one seen; a closed-case or
+        // unknown report says nothing new, so the last meaningful reading stands.
+        let now = match r.wear {
+            Some(Wear::NotAvailable | Wear::Unknown) | None => self.seen,
+            known => known,
+        };
+        let out = now.is_some_and(|w| cx.rule.pauses_on(w));
         if fresh && out {
             self.pause_if_playing(cx)
         } else {
@@ -292,8 +298,10 @@ mod tests {
     fn after(rule: PauseRule, first: Wear, then: Wear) -> Decision {
         let mut rig = Rig::new(rule);
         assert_eq!(rig.feed(first, Playing, 0), Nothing);
-        // Late enough for a closed-case report to have lasted.
-        rig.feed(then, Playing, 400)
+        // Sent twice, so that a closed-case report has lasted past the debounce.
+        let early = rig.feed(then, Playing, 100);
+        let late = rig.feed(then, Playing, 400);
+        if early == Nothing { late } else { early }
     }
 
     fn check(rule: PauseRule, cases: &[(Wear, Wear, Decision)]) {
