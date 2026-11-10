@@ -85,10 +85,10 @@ impl Tragus {
                 let end = run(&|msg| set(Phase::Running(msg)));
                 set(end);
             });
-        if let Err(e) = spawned {
-            if let Ok(mut p) = self.phase.lock() {
-                *p = Phase::Failed(e.to_string());
-            }
+        if let Err(e) = spawned
+            && let Ok(mut p) = self.phase.lock()
+        {
+            *p = Phase::Failed(e.to_string());
         }
     }
 }
