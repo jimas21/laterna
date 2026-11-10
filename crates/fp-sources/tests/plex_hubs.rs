@@ -386,7 +386,11 @@ fn a_librarys_recommended_rows_are_its_section_hubs() {
     let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
     assert_eq!(
         titles,
-        ["Continue Watching", "Recently Released Movies", "Staff Picks"],
+        [
+            "Continue Watching",
+            "Recently Released Movies",
+            "Staff Picks"
+        ],
         "the library's own Continue Watching stays"
     );
     for row in &rows {
