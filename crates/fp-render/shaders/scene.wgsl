@@ -542,10 +542,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     g = mix(vec3<f32>(luma), g, params.picture.z);
     g = pow(max(g, vec3<f32>(0.0)), vec3<f32>(1.0 / max(params.picture.w, 0.05)));
     var col = srgb_to_linear(clamp(g, vec3<f32>(0.0), vec3<f32>(1.0)));
-    // Dither last, in the target's code space (dither.wgsl); the right eye's
-    // pattern is shifted so the two eyes' noise does not coincide.
+    // Dither last, in the target's code space (dither.wgsl).
     if ((params.display.y & QUALITY_DITHER) != 0u) {
-        col = dither_linear(col, in.pos.xy + vec2<f32>(f32(eye) * 37.0, 0.0));
+        col = dither_linear(col, in.pos.xy);
     }
     // Over the (premultiplied) background: keyed-out pixels show it.
     // Premultiplied, like bg_color and the pipeline (blending is off), so a

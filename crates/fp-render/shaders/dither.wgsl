@@ -27,8 +27,8 @@ fn dither_decode(c: vec3<f32>) -> vec3<f32> {
 
 // `lin` (linear light, about to be written to an sRGB-format target) with
 // +-0.5 of an 8-bit code of noise. `frag` is the fragment's pixel position
-// (`@builtin(position).xy`); callers that draw both eyes should offset it per
-// eye so the two eyes' noise differs. Pure black and white keep their codes.
+// (`@builtin(position).xy`). Both eyes get the same pattern, so a picture that
+// is the same in both stays the same. Pure black and white keep their codes.
 fn dither_linear(lin: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
     let code = dither_encode(clamp(lin, vec3<f32>(0.0), vec3<f32>(1.0)));
     let noise = (dither_ign(frag) - 0.5) / 255.0;

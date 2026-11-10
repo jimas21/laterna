@@ -998,12 +998,20 @@ fn stereo_alignment_stays_vertical_when_recentred_sideways() {
 // Dither and sharpen. These need no test-card module: the ramp and the checker
 // below are all they use.
 
-/// A `w` x `h` picture of greys rising one level per column from `lo`.
+/// A `w` x `h` picture of greys rising one level per column from `lo`, as a
+/// 10-bit frame: the software Vulkan device filters 8-bit planes with 8-bit
+/// arithmetic, so only a 10-bit plane magnifies to a gradient that is smooth
+/// before it is quantised, as it is on a headset's GPU.
 fn ramp(w: u32, h: u32, lo: u8) -> Arc<fp_media::VideoFrame> {
-    frame(w, h, |u, _| {
-        let level = lo + (u * w as f32) as u8;
-        [level; 3]
-    })
+    let mut rgba = Vec::new();
+    for _ in 0..h {
+        for x in 0..w {
+            let level = lo + x as u8;
+            rgba.extend_from_slice(&[level, level, level, 255]);
+        }
+    }
+    let f = fp_media::VideoFrame::from_rgba_as(w, h, &rgba, PixelLayout::P010, true);
+    Arc::new(f.expect("frame"))
 }
 
 /// A black and white checker of `cell`-texel squares.
@@ -1093,14 +1101,14 @@ fn a_dark_ramp_is_dithered_not_banded() {
     r.set_quality(Quality::default());
     let [dithered, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
 
-    let (bands, smooth) = (
-        roughness(&column_means(&plain)),
-        roughness(&column_means(&dithered)),
-    );
+    let (plain_cols, dithered_cols) = (column_means(&plain), column_means(&dithered));
+    let (bands, smooth) = (roughness(&plain_cols), roughness(&dithered_cols));
     assert!(bands > 10.0, "the undithered ramp has steps: {bands}");
     assert!(
         smooth * 2.0 < bands,
-        "dither smooths the steps out: {smooth} against {bands}"
+        "dither smooths the steps out: {smooth} against {bands}\nplain {:?}\ndithered {:?}",
+        &plain_cols[..24],
+        &dithered_cols[..24]
     );
     // Noise of half a code: no pixel moves more than a level, and the mean
     // stays where it was.
