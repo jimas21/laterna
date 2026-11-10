@@ -441,6 +441,10 @@ struct Switches {
     /// preview sees it too); it is here so the log says it is set. It does
     /// not undo the change to the eye pass that makes places possible.
     no_places: bool,
+    /// `FRAMEPLAYERX_MSAA=4`: draw the eye passes with 4x multisampling, so
+    /// a room's edges are smooth (1, the default, is none). It costs GPU
+    /// time: the log's "eyes" median says how much, against a run without.
+    msaa: Option<u32>,
 }
 
 impl Switches {
@@ -469,6 +473,7 @@ impl Switches {
                 get("FRAMEPLAYERX_TESTCARD_LAYER").as_deref(),
             ),
             no_places: !app::places::enabled(&get),
+            msaa: parse_msaa(get("FRAMEPLAYERX_MSAA").as_deref()),
         }
     }
 
@@ -505,12 +510,21 @@ impl Switches {
         if self.no_places {
             on.push("FRAMEPLAYERX_PLACES=0".to_string());
         }
+        if let Some(n) = self.msaa {
+            on.push(format!("FRAMEPLAYERX_MSAA={n}"));
+        }
         if on.is_empty() {
             "none".into()
         } else {
             on.join(", ")
         }
     }
+}
+
+/// The samples a pixel `FRAMEPLAYERX_MSAA` asks for: 4 for "4", and none
+/// (one sample) for "1", nothing or anything else.
+fn parse_msaa(value: Option<&str>) -> Option<u32> {
+    (value.map(str::trim) == Some("4")).then_some(4)
 }
 
 /// What the runtime hands the app each frame, summarised every 10 s. A
@@ -750,7 +764,8 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         (Some(now), Some(all)) => log::info!("display refresh rate {now} Hz; supported {all:?}"),
         _ => log::info!("display refresh rates: not available"),
     }
-    let mut renderer = Renderer::new(gpu.clone(), session.format)?;
+    let mut renderer =
+        Renderer::with_samples(gpu.clone(), session.format, switches.msaa.unwrap_or(1))?;
     renderer.set_quality(switches.quality);
     if let Some(secs) = switches.bare_loop {
         log::info!("bare frame loop for {secs} s: no app, panels or layers");
@@ -828,6 +843,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     // over ~9 ms the compositor starts synthesising frames.
     let mut frame_ms: Vec<f32> = Vec::new();
     let mut gpu_ms = perf::GpuWindow::default();
+    gpu_ms.set_samples(renderer.samples());
     let mut last_frame_ms = None;
     let mut timing_since = Instant::now();
     let layers = session.supports_quad_layers() && !switches.ui_in_eyes;
@@ -1157,6 +1173,20 @@ mod tests {
             "FRAMEPLAYERX_QUALITY=nodither,noedgeaa",
         ];
         assert_eq!(s.describe(), want.join(", "));
+    }
+
+    #[test]
+    fn msaa_is_four_samples_or_none() {
+        assert_eq!(with("FRAMEPLAYERX_MSAA", "4").msaa, Some(4));
+        assert_eq!(with("FRAMEPLAYERX_MSAA", " 4 ").msaa, Some(4));
+        for off in ["", "1", "0", "2", "no"] {
+            assert_eq!(with("FRAMEPLAYERX_MSAA", off).msaa, None, "{off:?}");
+        }
+        assert_eq!(Switches::parse(env(&[])).msaa, None);
+        assert_eq!(
+            with("FRAMEPLAYERX_MSAA", "4").describe(),
+            "FRAMEPLAYERX_MSAA=4"
+        );
     }
 
     #[test]

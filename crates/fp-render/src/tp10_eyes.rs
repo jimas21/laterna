@@ -52,11 +52,13 @@ unsafe impl Send for Tp10Eyes {}
 impl Tp10Eyes {
     /// The pipeline and `slots` frame slots' buffers, drawing into
     /// `color_format` (with a depth attachment of `depth_format` in the
-    /// instance, which it ignores) and sampling through `sampler`.
+    /// instance, which it ignores) and `samples` samples a pixel, and sampling
+    /// through `sampler`.
     pub fn new(
         gpu: &Gpu,
         color_format: vk::Format,
         depth_format: vk::Format,
+        samples: vk::SampleCountFlags,
         sampler: vk::Sampler,
         slots: usize,
     ) -> Result<Tp10Eyes> {
@@ -72,7 +74,7 @@ impl Tp10Eyes {
             sampled_size: 0,
             slots: Vec::new(),
         };
-        if let Err(e) = t.create(gpu, color_format, depth_format, sampler, slots) {
+        if let Err(e) = t.create(gpu, color_format, depth_format, samples, sampler, slots) {
             t.destroy(gpu);
             return Err(e);
         }
@@ -84,6 +86,7 @@ impl Tp10Eyes {
         gpu: &Gpu,
         color_format: vk::Format,
         depth_format: vk::Format,
+        samples: vk::SampleCountFlags,
         sampler: vk::Sampler,
         slots: usize,
     ) -> Result<()> {
@@ -151,6 +154,7 @@ impl Tp10Eyes {
                 blend: true,
                 descriptor_buffer: true,
                 depth: Depth::Ignore(depth_format),
+                samples,
             },
         )?;
         for _ in 0..slots {

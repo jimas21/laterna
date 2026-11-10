@@ -17,6 +17,12 @@ pub const SIZE: u32 = 128;
 /// A renderer and eyes `size` pixels square, or `None` where there is no
 /// Vulkan device (the test then skips).
 pub fn setup_sized(size: u32) -> Option<(Renderer, OffscreenEyes)> {
+    setup_samples(size, 1)
+}
+
+/// Like `setup_sized`, with the eye passes at `samples` samples a pixel
+/// (`Renderer::samples` says how many the device gave).
+pub fn setup_samples(size: u32, samples: u32) -> Option<(Renderer, OffscreenEyes)> {
     let gpu = match Gpu::headless() {
         Ok(g) => Arc::new(g),
         Err(e) => {
@@ -24,7 +30,8 @@ pub fn setup_sized(size: u32) -> Option<(Renderer, OffscreenEyes)> {
             return None;
         }
     };
-    let mut r = Renderer::new(gpu, ash::vk::Format::R8G8B8A8_SRGB).expect("renderer");
+    let mut r =
+        Renderer::with_samples(gpu, ash::vk::Format::R8G8B8A8_SRGB, samples).expect("renderer");
     // A frame that shows a place shows it: the tests draw one at a time.
     r.set_inline_places(true);
     let eyes = OffscreenEyes::new(&r, size, size).expect("eyes");

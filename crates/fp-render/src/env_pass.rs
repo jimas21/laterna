@@ -213,12 +213,13 @@ fn vertex_attributes() -> [vk::VertexInputAttributeDescription; 6] {
 
 impl EnvPass {
     /// The pipelines, drawing into `color_format` with a depth attachment of
-    /// `depth` in the instance, and a uniform buffer for each of `slots`
-    /// frame slots.
+    /// `depth` in the instance, `samples` samples a pixel, and a uniform
+    /// buffer for each of `slots` frame slots.
     pub fn new(
         gpu: &Gpu,
         color_format: vk::Format,
         depth: vk::Format,
+        samples: vk::SampleCountFlags,
         slots: usize,
     ) -> Result<EnvPass> {
         let mut p = EnvPass {
@@ -230,7 +231,7 @@ impl EnvPass {
             slots: Vec::new(),
             loaded: None,
         };
-        if let Err(e) = p.create(gpu, color_format, depth, slots) {
+        if let Err(e) = p.create(gpu, color_format, depth, samples, slots) {
             p.destroy(gpu);
             return Err(e);
         }
@@ -242,6 +243,7 @@ impl EnvPass {
         gpu: &Gpu,
         color_format: vk::Format,
         depth: vk::Format,
+        samples: vk::SampleCountFlags,
         slots: usize,
     ) -> Result<()> {
         let d = &gpu.device;
@@ -259,6 +261,7 @@ impl EnvPass {
                 blend: false,
                 descriptor_buffer: false,
                 depth: Depth::TestWrite(depth),
+                samples,
             },
         )?;
         self.sky_pipe = pipeline::create(
@@ -272,6 +275,7 @@ impl EnvPass {
                 blend: false,
                 descriptor_buffer: false,
                 depth: Depth::Test(depth),
+                samples,
             },
         )?;
         let n = slots as u32;

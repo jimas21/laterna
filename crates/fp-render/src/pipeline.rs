@@ -55,6 +55,9 @@ pub(crate) struct PipelineDesc<'a> {
     pub descriptor_buffer: bool,
     /// The depth attachment's format, and what this pipeline does with it.
     pub depth: Depth,
+    /// Samples a pixel of the instance it is bound in: every pipeline bound
+    /// in one instance names the same count.
+    pub samples: vk::SampleCountFlags,
 }
 
 pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
@@ -96,8 +99,7 @@ pub(crate) fn create_entry(gpu: &Gpu, d: &PipelineDesc, fragment: &CStr) -> Resu
         .polygon_mode(vk::PolygonMode::FILL)
         .cull_mode(vk::CullModeFlags::NONE)
         .line_width(1.0);
-    let ms = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+    let ms = vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(d.samples);
     let att = [if d.blend {
         vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(true)

@@ -207,6 +207,11 @@ pub struct Renderer {
     /// (grown to the largest target; see `Renderer::depth_for`).
     depth_format: vk::Format,
     depth: Option<Image>,
+    /// Samples a pixel in the eye passes (1: no multisampling), and, when
+    /// above 1, the one multisampled colour image both eyes draw into, which
+    /// each pass resolves into its eye target (grown like `depth`).
+    samples: vk::SampleCountFlags,
+    msaa: Option<Image>,
     pool: vk::CommandPool,
     dpool: vk::DescriptorPool,
     sampler: vk::Sampler,
@@ -302,6 +307,22 @@ pub struct Renderer {
 impl Renderer {
     /// `color_format` is the sRGB format of the eye targets.
     pub fn new(gpu: Arc<Gpu>, color_format: vk::Format) -> Result<Renderer> {
+        Renderer::with_samples(gpu, color_format, 1)
+    }
+
+    /// Like [`Renderer::new`], with the eye passes drawn at `wanted` samples
+    /// a pixel (MSAA: 1 or 4; the nearest lower count the device has when it
+    /// lacks it). The scene shader still runs once a pixel: the samples only
+    /// smooth the room's geometric edges. The glow and pyramid passes keep
+    /// one sample, in instances of their own.
+    pub fn with_samples(gpu: Arc<Gpu>, color_format: vk::Format, wanted: u32) -> Result<Renderer> {
+        let samples = crate::gpu::pick_samples(wanted, gpu.framebuffer_samples);
+        if wanted > 1 {
+            log::info!(
+                "eye passes: {}x multisampling (asked {wanted}x)",
+                crate::gpu::sample_count(samples)
+            );
+        }
         let d = &gpu.device;
         // SAFETY: plain object creation on a valid device.
         unsafe {
@@ -394,6 +415,7 @@ impl Renderer {
                     blend: true,
                     descriptor_buffer: false,
                     depth: Depth::Ignore(depth_format),
+                    samples,
                 },
             )?;
             let tex_layout = pipeline::set_layout(
@@ -435,6 +457,7 @@ impl Renderer {
                     blend: true,
                     descriptor_buffer: false,
                     depth: Depth::Ignore(depth_format),
+                    samples,
                 },
             )?;
             let egui_pl = pipeline::layout(&gpu, tex_layout, 8)?;
@@ -469,6 +492,7 @@ impl Renderer {
                     blend: true,
                     descriptor_buffer: false,
                     depth: Depth::None,
+                    samples: vk::SampleCountFlags::TYPE_1,
                 },
             )?;
 
@@ -477,6 +501,8 @@ impl Renderer {
                 color_format,
                 depth_format,
                 depth: None,
+                samples,
+                msaa: None,
                 pool,
                 dpool,
                 sampler,
@@ -577,6 +603,7 @@ impl Renderer {
                 &r.gpu,
                 color_format,
                 depth_format,
+                samples,
                 r.sampler,
                 r.q10c.is_some(),
             );
@@ -1680,6 +1707,7 @@ impl Renderer {
         let width = targets[0].extent.width.max(targets[1].extent.width);
         let height = targets[0].extent.height.max(targets[1].extent.height);
         let (depth_image, depth_view) = self.depth_for(width, height)?;
+        let msaa = self.msaa_for(width, height)?;
         let inv = [
             (eyes[0].proj * eyes[0].view).inverse(),
             (eyes[1].proj * eyes[1].view).inverse(),
@@ -1797,14 +1825,40 @@ impl Renderer {
                 mem::TOP,
                 mem::COLOR_WRITE,
             );
-            let attachment = [vk::RenderingAttachmentInfo::default()
-                .image_view(t.view)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .clear_value(vk::ClearValue {
-                    color: vk::ClearColorValue { float32: bg },
-                })];
+            let clear = vk::ClearValue {
+                color: vk::ClearColorValue { float32: bg },
+            };
+            let attachment = [match msaa {
+                // Drawn into the multisampled image, which is averaged into
+                // the eye target and never stored itself.
+                Some((image, view)) => {
+                    mem::barrier(
+                        gpu,
+                        cmd,
+                        image,
+                        mem::range(0, 1),
+                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                        mem::COLOR_WRITE,
+                        mem::COLOR_WRITE,
+                    );
+                    vk::RenderingAttachmentInfo::default()
+                        .image_view(view)
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .resolve_mode(vk::ResolveModeFlags::AVERAGE)
+                        .resolve_image_view(t.view)
+                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .load_op(vk::AttachmentLoadOp::CLEAR)
+                        .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                        .clear_value(clear)
+                }
+                None => vk::RenderingAttachmentInfo::default()
+                    .image_view(t.view)
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(clear),
+            }];
             // Both eyes (and every frame) share one depth image: cleared at
             // the start of each pass, never stored, so each pass begins
             // with a transition that discards it.
@@ -1990,7 +2044,13 @@ impl Renderer {
             return false;
         }
         if self.env.is_none() {
-            match EnvPass::new(&self.gpu, self.color_format, self.depth_format, SLOTS) {
+            match EnvPass::new(
+                &self.gpu,
+                self.color_format,
+                self.depth_format,
+                self.samples,
+                SLOTS,
+            ) {
                 Ok(pass) => self.env = Some(pass),
                 Err(e) => {
                     log::warn!("places aren't shown: {e}");
@@ -2228,7 +2288,14 @@ impl Renderer {
     fn depth_for(&mut self, width: u32, height: u32) -> Result<(vk::Image, vk::ImageView)> {
         let fits = |i: &Image| i.extent.width >= width && i.extent.height >= height;
         if !self.depth.as_ref().is_some_and(fits) {
-            let bigger = Image::depth(&self.gpu, width, height, self.depth_format, "eye depth")?;
+            let bigger = Image::depth(
+                &self.gpu,
+                width,
+                height,
+                self.depth_format,
+                self.samples,
+                "eye depth",
+            )?;
             // Frames still in flight may use the old one: it goes with the
             // slot's garbage.
             if let Some(old) = self.depth.replace(bigger) {
@@ -2239,6 +2306,36 @@ impl Renderer {
             Some(i) => Ok((i.image, i.views[0])),
             None => Err(crate::Error::Unsupported("no depth image".into())),
         }
+    }
+
+    /// The multisampled colour image both eyes render into and its view
+    /// (`None` at one sample): made, or made again bigger, like the depth
+    /// image.
+    fn msaa_for(&mut self, width: u32, height: u32) -> Result<Option<(vk::Image, vk::ImageView)>> {
+        if self.samples == vk::SampleCountFlags::TYPE_1 {
+            return Ok(None);
+        }
+        let fits = |i: &Image| i.extent.width >= width && i.extent.height >= height;
+        if !self.msaa.as_ref().is_some_and(fits) {
+            let bigger = Image::multisampled(
+                &self.gpu,
+                width,
+                height,
+                self.color_format,
+                self.samples,
+                "eye msaa",
+            )?;
+            // Frames still in flight may use the old one.
+            if let Some(old) = self.msaa.replace(bigger) {
+                self.slots[self.current].garbage.push(old);
+            }
+        }
+        Ok(self.msaa.as_ref().map(|i| (i.image, i.views[0])))
+    }
+
+    /// The samples a pixel of the eye passes: 1 without multisampling.
+    pub fn samples(&self) -> u32 {
+        crate::gpu::sample_count(self.samples)
     }
 
     /// Ends recording and submits the frame.
@@ -2542,6 +2639,7 @@ fn tp10_eyes(
     gpu: &Gpu,
     color_format: vk::Format,
     depth_format: vk::Format,
+    samples: vk::SampleCountFlags,
     sampler: vk::Sampler,
     has_q10c: bool,
 ) -> Option<Tp10Eyes> {
@@ -2549,7 +2647,7 @@ fn tp10_eyes(
     if !has_q10c || gpu.memory_fd.is_none() || !allowed {
         return None;
     }
-    match Tp10Eyes::new(gpu, color_format, depth_format, sampler, SLOTS) {
+    match Tp10Eyes::new(gpu, color_format, depth_format, samples, sampler, SLOTS) {
         Ok(t) => {
             log::info!("10-bit HEVC read in place is sampled by the eye passes, not converted");
             Some(t)
@@ -2733,6 +2831,9 @@ impl Drop for Renderer {
                 }
             }
             if let Some(mut i) = self.depth.take() {
+                i.destroy(&gpu);
+            }
+            if let Some(mut i) = self.msaa.take() {
                 i.destroy(&gpu);
             }
             self.white.image.destroy(&gpu);

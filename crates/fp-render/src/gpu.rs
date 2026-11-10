@@ -99,6 +99,11 @@ pub struct Gpu {
     /// where the device has `samplerAnisotropy` and it was enabled; with
     /// `None` samplers must not ask for it.
     pub max_anisotropy: Option<f32>,
+    /// The sample counts a colour attachment and a depth attachment can both
+    /// have (`framebuffer_color_sample_counts` and
+    /// `framebuffer_depth_sample_counts`): what multisampling the eye passes
+    /// may ask for ([`pick_samples`]).
+    pub framebuffer_samples: vk::SampleCountFlags,
 }
 
 /// Device extensions [`crate::q10c`] needs.
@@ -176,6 +181,33 @@ pub(crate) fn pick_depth_format(supported: impl Fn(vk::Format) -> bool) -> vk::F
 /// limit above 1 (a limit of 1 filters nothing extra).
 fn anisotropy_limit(supported: bool, max: f32) -> Option<f32> {
     (supported && max > 1.0).then_some(max)
+}
+
+/// The sample count to render the eyes with: `wanted` (1, 2, 4 or 8) when
+/// `supported` has it, else the nearest lower one it has (1 at the least,
+/// which every device can do). Anything that is not a sample count is 1.
+pub fn pick_samples(wanted: u32, supported: vk::SampleCountFlags) -> vk::SampleCountFlags {
+    [
+        (8, vk::SampleCountFlags::TYPE_8),
+        (4, vk::SampleCountFlags::TYPE_4),
+        (2, vk::SampleCountFlags::TYPE_2),
+    ]
+    .into_iter()
+    .find(|&(n, flag)| n <= wanted && supported.contains(flag))
+    .map_or(vk::SampleCountFlags::TYPE_1, |(_, flag)| flag)
+}
+
+/// How many samples a pixel `flags` is (1 for anything but 2, 4 and 8).
+pub fn sample_count(flags: vk::SampleCountFlags) -> u32 {
+    if flags == vk::SampleCountFlags::TYPE_8 {
+        8
+    } else if flags == vk::SampleCountFlags::TYPE_4 {
+        4
+    } else if flags == vk::SampleCountFlags::TYPE_2 {
+        2
+    } else {
+        1
+    }
 }
 
 impl Gpu {
@@ -300,6 +332,8 @@ impl Gpu {
                 vk::QUEUE_FAMILY_EXTERNAL
             },
             max_anisotropy,
+            framebuffer_samples: props.limits.framebuffer_color_sample_counts
+                & props.limits.framebuffer_depth_sample_counts,
         })
     }
 
@@ -389,5 +423,38 @@ mod tests {
         // None offered: 16-bit, which every device can attach.
         let none = pick_depth_format(|_| false);
         assert_eq!(none, vk::Format::D16_UNORM);
+    }
+
+    #[test]
+    fn samples_are_what_was_asked_when_the_device_has_them() {
+        let all = vk::SampleCountFlags::TYPE_1
+            | vk::SampleCountFlags::TYPE_2
+            | vk::SampleCountFlags::TYPE_4;
+        assert_eq!(pick_samples(4, all), vk::SampleCountFlags::TYPE_4);
+        assert_eq!(pick_samples(1, all), vk::SampleCountFlags::TYPE_1);
+        assert_eq!(pick_samples(0, all), vk::SampleCountFlags::TYPE_1);
+        // 8 is not there: the nearest lower one is.
+        assert_eq!(pick_samples(8, all), vk::SampleCountFlags::TYPE_4);
+        // 4 is not there: 2 is, then 1.
+        let no_4 = vk::SampleCountFlags::TYPE_1 | vk::SampleCountFlags::TYPE_2;
+        assert_eq!(pick_samples(4, no_4), vk::SampleCountFlags::TYPE_2);
+        assert_eq!(
+            pick_samples(4, vk::SampleCountFlags::TYPE_1),
+            vk::SampleCountFlags::TYPE_1
+        );
+        assert_eq!(
+            pick_samples(4, vk::SampleCountFlags::empty()),
+            vk::SampleCountFlags::TYPE_1
+        );
+    }
+
+    #[test]
+    fn a_sample_flag_counts_back_to_its_number() {
+        for n in [1, 2, 4, 8] {
+            assert_eq!(
+                sample_count(pick_samples(n, vk::SampleCountFlags::from_raw(0xF))),
+                n
+            );
+        }
     }
 }
