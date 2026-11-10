@@ -1,8 +1,12 @@
 //! The cinema: a stadium hall of our own design, built from the kit with no
-//! assets. Twelve rows of seats climb away from a 14 m wide screen; the walls
-//! are fabric panels between wood strips with light slots, the ceiling has a
-//! grid of downlights, and the aisle steps have amber lights. Nothing in it
-//! carries a name or a logo.
+//! assets. A 14 m wide screen stands on a low stage; in front of it is a flat
+//! floor, two steps, and then nine rows of seats that climb steeply away. The
+//! first row is over 6.5 m from the screen. The rake is set so that from every
+//! seat the whole bottom edge of the picture shows over the heads of every row
+//! in front, with a hand's breadth to spare. The walls are fabric panels
+//! between wood strips with light slots, the ceiling has a grid of downlights,
+//! and the aisle steps have amber lights. Nothing in it carries a name or a
+//! logo.
 //!
 //! Room space: the screen is the plane z = 0 facing +z, the stage floor is
 //! y = 0, and the audience sits towards +z, up the steps.
@@ -15,41 +19,49 @@ use glam::{Vec2, Vec3};
 pub const HALF_WIDTH: f32 = 9.0;
 /// The front wall, 5 cm behind the screen panel.
 pub const FRONT_Z: f32 = -0.05;
-pub const BACK_Z: f32 = 17.5;
-pub const CEILING_Y: f32 = 10.0;
+pub const BACK_Z: f32 = 16.2;
+pub const CEILING_Y: f32 = 11.5;
 /// Rows of seats.
-pub const ROWS: usize = 12;
+pub const ROWS: usize = 9;
 /// An eye's height above the floor of its row.
 pub const EYE_HEIGHT: f32 = 1.15;
-pub const SCREEN_CENTRE: Vec3 = Vec3::new(0.0, 4.4, 0.0);
+pub const SCREEN_CENTRE: Vec3 = Vec3::new(0.0, 4.0, 0.0);
 /// The largest picture: 14 m wide, 7.2 m tall.
 pub const SCREEN_MAX: Vec2 = Vec2::new(14.0, 7.2);
 
 const CELL: f32 = kit::GRID_CELL;
 /// Depth of a row's tread.
-const TREAD: f32 = 0.95;
-/// How much each row's floor stands above the one in front, and the first
-/// row's height. Steep enough that every eye looks up at the picture by no
-/// more than the angle a neck likes.
-const RISE: f32 = 0.4;
-const FIRST_FLOOR: f32 = 1.0;
-/// Where the first riser stands; the floor is flat in front of it.
-const FIRST_RISER_Z: f32 = 2.5;
+const TREAD: f32 = 0.93;
+/// The floor height of each row, front to back. Each is the least that keeps
+/// the picture's bottom edge in view over the heads of the row in front with
+/// 13.5 cm to spare (a seated head tops out 10 cm above the eye, and the test asks for 12), from the
+/// eye 1.15 m over it; the tests check it for every seat. The first row is
+/// high enough that its eye looks up at the top edge by under 35 degrees.
+const FLOORS: [f32; ROWS] = [1.71, 2.32, 2.95, 3.61, 4.29, 4.99, 5.71, 6.45, 7.21];
+/// Where the first row's tread starts: its riser stands here. Two steps lead
+/// up to it, and the floor in front of them is flat.
+const FIRST_RISER_Z: f32 = 6.3;
+/// The two approach steps: depth, and the floor height of each (the first
+/// row's riser is the third step up).
+const APPROACH_DEPTH: f32 = 1.0;
+const APPROACH_FLOORS: [f32; 2] = [0.57, 1.14];
+/// Where the first approach step starts.
+const APPROACH_Z: f32 = FIRST_RISER_Z - APPROACH_DEPTH * APPROACH_FLOORS.len() as f32;
 const STAGE_HALF_WIDTH: f32 = 8.0;
 const STAGE_DEPTH: f32 = 2.0;
-const STAGE_HEIGHT: f32 = 0.5;
+const STAGE_HEIGHT: f32 = 0.35;
 /// The aisles' left and right edges. The seats leave them clear: the centre
 /// block ends with its armrest at 4.09, and the side blocks start at 5.13.
 const AISLES: [[f32; 2]; 2] = [[-5.13, -4.1], [4.1, 5.13]];
 /// The first seat's centre and the seat count of each block of a row.
 const BLOCKS: [(f32, usize); 3] = [(-3.72, 13), (-7.98, 5), (5.5, 5)];
 /// Wood strips on each side wall.
-const STRIPS: usize = 8;
+const STRIPS: usize = 7;
 const STRIP_PITCH: f32 = 2.45;
 const STRIP_WIDTH: f32 = 0.12;
 const STRIP_DEPTH: f32 = 0.06;
 const DOWNLIGHT_X: [f32; 5] = [-6.0, -3.0, 0.0, 3.0, 6.0];
-const DOWNLIGHT_Z: [f32; 5] = [3.0, 6.5, 10.0, 13.5, 16.5];
+const DOWNLIGHT_Z: [f32; 5] = [3.5, 6.5, 9.5, 12.5, 15.5];
 const DOWNLIGHT_POWER: f32 = 30.0;
 const SLOT_POWER: f32 = 12.0;
 /// The bake sum that counts as fully lit.
@@ -75,7 +87,7 @@ mod mat {
 
 /// Floor height of row `k`, counting from the front.
 fn row_floor(k: usize) -> f32 {
-    FIRST_FLOOR + RISE * k as f32
+    FLOORS[k]
 }
 
 /// Where row `k`'s seats stand, front to back.
@@ -90,8 +102,12 @@ fn rear_start() -> f32 {
 
 /// The floor height at depth `z`.
 pub fn floor_at(z: f32) -> f32 {
-    if z < FIRST_RISER_Z {
+    if z < APPROACH_Z {
         return 0.0;
+    }
+    if z < FIRST_RISER_Z {
+        let step = ((z - APPROACH_Z) / APPROACH_DEPTH) as usize;
+        return APPROACH_FLOORS[step.min(APPROACH_FLOORS.len() - 1)];
     }
     let row = ((z - FIRST_RISER_Z) / TREAD) as usize;
     row_floor(row.min(ROWS - 1))
@@ -102,10 +118,12 @@ fn seat(name: SeatName, row: usize) -> Seat {
     Seat { name, eye }
 }
 
-/// The rows the three seats are in, from the front. Chosen so a 16:9 film that
-/// fills the frame's height (12.8 m wide) spans about 85 (front), 72 (middle)
-/// and 58 (back) degrees from the eye; a test checks it.
-const SEAT_ROWS: [usize; 3] = [4, 6, 9];
+/// The rows the three seats are in, from the front. The front seat is in the
+/// first row, with nothing in front of it. Chosen so a 16:9 film that fills
+/// the frame's height (12.8 m wide) spans about 85 (front), 72 (middle) and
+/// 58 (back) degrees from the eye, with rows behind the back seat; a test
+/// checks it.
+const SEAT_ROWS: [usize; 3] = [0, 2, 5];
 
 /// The seats (front, middle and back) and the screen's frame.
 pub fn layout() -> Layout {
@@ -211,7 +229,7 @@ fn hall(m: &mut MeshBuilder) {
 /// platform behind the last row.
 fn floor_and_stage(m: &mut MeshBuilder) {
     let v = Vec3::new;
-    let (l, r, f, n) = (-HALF_WIDTH, HALF_WIDTH, FRONT_Z, FIRST_RISER_Z);
+    let (l, r, f, n) = (-HALF_WIDTH, HALF_WIDTH, FRONT_Z, APPROACH_Z);
     let flat = [v(l, 0.0, n), v(r, 0.0, n), v(r, 0.0, f), v(l, 0.0, f)];
     m.grid(flat, Vec3::Y, mat::CARPET, CELL);
     let (rear, s, k) = (row_floor(ROWS - 1), rear_start(), BACK_Z);
@@ -243,11 +261,19 @@ fn screen_panel(m: &mut MeshBuilder) {
 /// Treads, risers and the seats on them.
 fn seating(m: &mut MeshBuilder) {
     let floors: Vec<f32> = (0..ROWS).map(row_floor).collect();
+    let approach = Stair {
+        x: [-HALF_WIDTH, HALF_WIDTH],
+        z_front: APPROACH_Z,
+        depth: APPROACH_DEPTH,
+        base_y: 0.0,
+        floors: &APPROACH_FLOORS,
+    };
+    m.steps(approach, mat::CARPET);
     let stair = Stair {
         x: [-HALF_WIDTH, HALF_WIDTH],
         z_front: FIRST_RISER_Z,
         depth: TREAD,
-        base_y: 0.0,
+        base_y: APPROACH_FLOORS[APPROACH_FLOORS.len() - 1],
         floors: &floors,
     };
     m.steps(stair, mat::CARPET);
@@ -324,7 +350,8 @@ fn wall_strips(m: &mut MeshBuilder) {
 /// on every aisle step's nose.
 fn glows(m: &mut MeshBuilder) {
     let v = Vec3::new;
-    let (l, r, b, t, z) = (-0.6, 0.6, 8.0, 8.8, BACK_Z - 0.005);
+    let rear = row_floor(ROWS - 1);
+    let (l, r, b, t, z) = (-0.6, 0.6, rear + 2.3, rear + 3.1, BACK_Z - 0.005);
     let window = [v(r, b, z), v(l, b, z), v(l, t, z), v(r, t, z)];
     let n = Vec3::NEG_Z;
     m.quad(window, n, kit::planar_uv(window, n), mat::BOOTH);
@@ -341,10 +368,14 @@ fn glows(m: &mut MeshBuilder) {
     }
 
     let n = Vec3::Y;
-    for row in 0..ROWS {
-        let y = row_floor(row) + 0.004;
-        let f = FIRST_RISER_Z + TREAD * row as f32;
-        let k = f + 0.06;
+    let mut noses: Vec<(f32, f32)> = APPROACH_FLOORS
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| (y, APPROACH_Z + APPROACH_DEPTH * i as f32))
+        .collect();
+    noses.extend((0..ROWS).map(|row| (row_floor(row), FIRST_RISER_Z + TREAD * row as f32)));
+    for (y, f) in noses {
+        let (y, k) = (y + 0.004, f + 0.06);
         for [l, r] in AISLES {
             let nose = [v(l, y, k), v(r, y, k), v(r, y, f), v(l, y, f)];
             let uv = kit::planar_uv(nose, n);
@@ -364,9 +395,19 @@ fn ao_planes() -> Vec<AoPlane> {
         AoPlane::new(v(-w, 0.0, f), v(w, top, f), Vec3::Z),
         AoPlane::new(v(-w, 0.0, k), v(w, top, k), Vec3::NEG_Z),
         AoPlane::new(v(-w, top, f), v(w, top, k), Vec3::NEG_Y),
-        AoPlane::new(v(-w, 0.0, f), v(w, 0.0, FIRST_RISER_Z), Vec3::Y),
+        AoPlane::new(v(-w, 0.0, f), v(w, 0.0, APPROACH_Z), Vec3::Y),
     ];
     let mut prev = 0.0;
+    for (i, &y) in APPROACH_FLOORS.iter().enumerate() {
+        let z = APPROACH_Z + APPROACH_DEPTH * i as f32;
+        planes.push(AoPlane::new(v(-w, prev, z), v(w, y, z), Vec3::NEG_Z));
+        planes.push(AoPlane::new(
+            v(-w, y, z),
+            v(w, y, z + APPROACH_DEPTH),
+            Vec3::Y,
+        ));
+        prev = y;
+    }
     for row in 0..ROWS {
         let y = row_floor(row);
         let z = FIRST_RISER_Z + TREAD * row as f32;
@@ -421,22 +462,60 @@ mod tests {
         boxes
     }
 
-    /// Everything between the audience and the screen that can block a view:
-    /// the seats, the risers and the stage.
+    /// How far above the eye a seated head reaches.
+    const HEAD_ABOVE_EYE: f32 = 0.10;
+    /// The room the picture's bottom edge must clear over every head and seat
+    /// back in front of an eye.
+    const SIGHT_MARGIN: f32 = 0.12;
+
+    /// A seated head at the eye of the seat at `x` in `row`: the eye is at its
+    /// front, and the head reaches 18 cm behind it.
+    fn head(x: f32, row: usize) -> Aabb {
+        let (eye_y, z) = (row_floor(row) + EYE_HEIGHT, row_z(row) + 0.1);
+        let min = Vec3::new(x - 0.1, eye_y - 0.1, z - 0.02);
+        let max = Vec3::new(x + 0.1, eye_y + HEAD_ABOVE_EYE, z + 0.18);
+        Aabb::new(min, max)
+    }
+
+    /// The centres of every seat in a row.
+    fn seat_xs() -> Vec<f32> {
+        let mut xs = Vec::new();
+        for (start, count) in BLOCKS {
+            xs.extend((0..count).map(|i| start + kit::SEAT_PITCH * i as f32));
+        }
+        xs
+    }
+
+    /// Everything between the audience and the screen that can block a view
+    /// apart from heads: the seats (each `SIGHT_MARGIN` taller, for the margin
+    /// the picture's edge must clear them by), the risers and the stage.
     fn obstacles() -> Vec<Aabb> {
         let v = Vec3::new;
         let w = HALF_WIDTH;
-        let mut boxes = seat_boxes();
+        let mut boxes: Vec<Aabb> = seat_boxes().iter().map(with_margin).collect();
+        let mut risers = Vec::new();
+        let mut prev = 0.0;
+        for (i, &y) in APPROACH_FLOORS.iter().enumerate() {
+            risers.push((APPROACH_Z + APPROACH_DEPTH * i as f32, prev, y));
+            prev = y;
+        }
         for row in 0..ROWS {
-            let prev = row.checked_sub(1).map_or(0.0, row_floor);
-            let zr = FIRST_RISER_Z + TREAD * row as f32;
-            let (min, max) = (v(-w, prev, zr), v(w, row_floor(row), zr + 0.01));
-            boxes.push(Aabb::new(min, max));
+            risers.push((FIRST_RISER_Z + TREAD * row as f32, prev, row_floor(row)));
+            prev = row_floor(row);
+        }
+        for (zr, lo, hi) in risers {
+            boxes.push(Aabb::new(v(-w, lo, zr), v(w, hi, zr + 0.01)));
         }
         let sw = STAGE_HALF_WIDTH;
         let (min, max) = (v(-sw, 0.0, 0.0), v(sw, STAGE_HEIGHT, STAGE_DEPTH));
         boxes.push(Aabb::new(min, max));
         boxes
+    }
+
+    /// `b` made `SIGHT_MARGIN` taller, so a line that misses it clears the
+    /// real thing by at least that.
+    fn with_margin(b: &Aabb) -> Aabb {
+        Aabb::new(b.min, b.max + Vec3::new(0.0, SIGHT_MARGIN, 0.0))
     }
 
     /// Whether the segment from `a` to `b` passes through the box.
@@ -477,6 +556,72 @@ mod tests {
                 assert!(blocked.is_none(), "{name:?} to x {x}: {blocked:?}");
             }
         }
+    }
+
+    #[test]
+    fn every_seat_in_every_row_sees_the_whole_bottom_edge_over_the_heads_in_front() {
+        let screen = layout().screen.unwrap();
+        let bottom = screen.centre.y - screen.max.y / 2.0;
+        let obstacles = obstacles();
+        // The heads of every seat in every row, 12 cm taller for the margin.
+        let heads: Vec<(usize, Aabb)> = (0..ROWS)
+            .flat_map(|row| {
+                seat_xs()
+                    .into_iter()
+                    .map(move |x| (row, with_margin(&head(x, row))))
+            })
+            .collect();
+        let half = screen.max.x / 2.0;
+        let targets: Vec<f32> = (-4..=4).map(|i| half * i as f32 / 4.0).collect();
+        for row in 0..ROWS {
+            let eye_y = row_floor(row) + EYE_HEIGHT;
+            for x in seat_xs() {
+                let eye = Vec3::new(x, eye_y, row_z(row) + 0.1);
+                for &tx in &targets {
+                    let target = Vec3::new(tx, bottom, screen.centre.z);
+                    let in_front = heads.iter().filter(|(r, _)| *r < row).map(|(_, b)| b);
+                    let hit = obstacles
+                        .iter()
+                        .chain(in_front)
+                        .find(|b| segment_hits(eye, target, b));
+                    assert!(hit.is_none(), "row {row} seat x {x} to x {tx}: {hit:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_rake_is_no_steeper_than_the_sight_lines_need() {
+        // Every row but the first stands on about the least floor that keeps
+        // the bottom edge 12 cm over the head in front: 3 cm lower would
+        // not. (A cinema is not built taller than its picture asks.)
+        let screen = layout().screen.unwrap();
+        let bottom = screen.centre.y - screen.max.y / 2.0;
+        for row in 1..ROWS {
+            let eye_y = row_floor(row) - 0.03 + EYE_HEIGHT;
+            let z = row_z(row) + 0.1;
+            let ahead = head(0.0, row - 1);
+            let at = z - (row_z(row - 1) + 0.1);
+            let y = eye_y + (bottom - eye_y) * at / z;
+            assert!(y < ahead.max.y + SIGHT_MARGIN, "row {row}: {y}");
+        }
+    }
+
+    #[test]
+    fn the_front_row_is_far_from_the_screen_with_nothing_in_front() {
+        let layout = layout();
+        let front = layout.seat(layout.seat_index(SeatName::Front).unwrap());
+        assert_eq!(SEAT_ROWS[0], 0);
+        // The first row's seats start 6.5 m or more from the screen.
+        for (start, _) in BLOCKS {
+            for b in kit::seat_boxes(start, row_floor(0), row_z(0)) {
+                assert!(b.min.z >= 6.5, "{b:?}");
+            }
+        }
+        assert!(front.eye.z >= 6.5);
+        // In front of it there is only flat floor, the stage and two steps.
+        const { assert!(APPROACH_Z > STAGE_DEPTH + 2.0) };
+        assert_eq!(floor_at(APPROACH_Z - 0.5), 0.0);
     }
 
     #[test]
@@ -549,10 +694,14 @@ mod tests {
             // The top edge is under 35 degrees above the eye.
             let top = up(screen.centre.y + screen.max.y / 2.0);
             assert!(top < 35.0, "{name:?}: top edge {top}");
-            // The centre is level with the eye or lower, by up to 10 degrees;
-            // the front row's is a few degrees above it.
+            // The centre is level with the eye or lower, by up to about 10
+            // degrees; the front row's is just under 10 above it (its top
+            // edge could not stay under 35 otherwise).
             let centre = up(screen.centre.y);
-            assert!((-10.0..=6.0).contains(&centre), "{name:?}: centre {centre}");
+            assert!(
+                (-11.0..=10.0).contains(&centre),
+                "{name:?}: centre {centre}"
+            );
         }
     }
 
@@ -586,9 +735,9 @@ mod tests {
     }
 
     #[test]
-    fn there_are_276_seats_and_the_aisles_stay_clear() {
+    fn there_are_207_seats_and_the_aisles_stay_clear() {
         let seats: usize = BLOCKS.iter().map(|b| b.1).sum();
-        assert_eq!(seats * ROWS, 276);
+        assert_eq!(seats * ROWS, 207);
         assert_eq!(seat_boxes().len(), (seats * 3 + BLOCKS.len()) * ROWS);
         for b in seat_boxes() {
             for [lo, hi] in AISLES {

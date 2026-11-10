@@ -117,7 +117,7 @@ release.
 | `passthrough` | | Today's passthrough |
 | `studio` | Sky | Soft gradient backdrop, matte floor that takes the screen's glow |
 | **Theaters** | | |
-| `cinema` | Room | Modern multiplex: large curved screen, raked rows, aisle lights, dimming house lights |
+| `cinema` | Room | Stadium cinema: a large flat screen on a low stage, a flat floor then steps up to steeply raked rows (every seat sees the whole picture over the heads in front), aisle lights, dimming house lights |
 | `movie-palace` | Room | 1930s picture house: proscenium, red curtain, gilt plaster, a balcony seat |
 | `giant-screen` | Room | Steep stadium seating, a tall wall-to-wall screen close to the viewer |
 | `screening-room` | Room | Private room: a dozen armchairs, wood and fabric walls |

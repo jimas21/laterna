@@ -526,8 +526,9 @@ fn region_mean(img: &[u8], cols: std::ops::Range<u32>, rows: std::ops::Range<u32
 }
 
 /// The first row below the picture and its edge from the middle seat: from
-/// here down the eye sees only the seats in front (the picture spans 72
-/// degrees, so it reaches row 91 and hides the stage behind the rows).
+/// here down the eye sees the floor and the seats in front of it, with the
+/// stage above them (the picture spans 72 degrees, so it reaches row 91; the
+/// hall's rebuilt rake leaves this edge where it was).
 const BELOW: u32 = 94;
 
 /// What the middle seat sees of the room the picture lights: the ceiling
@@ -580,10 +581,12 @@ fn a_dark_scene_does_not_black_the_room_out() {
     let (off, _) = ceiling_and_seats(&watch(&mut r, &mut e, &black, 1, false));
     let (on, _) = ceiling_and_seats(&watch(&mut r, &mut e, &black, 5, true));
     // The light's floor keeps some of it on the ceiling even with nothing on
-    // the screen (about 2 codes a channel on lavapipe), and never takes any
-    // away.
+    // the screen, and never takes any away. The ceiling is 11.5 m up now, to
+    // clear the steeper rake, and the floor's lift reaches it more thinly: 0.2
+    // of a code a channel on lavapipe (it was about 2 in the old, lower hall),
+    // so the sum must clear 0.3, not 1.
     let lifted: f32 = (0..3).map(|c| on[c] - off[c]).sum();
-    assert!(lifted > 1.0, "off {off:?}, on {on:?}");
+    assert!(lifted > 0.3, "off {off:?}, on {on:?}");
     for c in 0..3 {
         assert!(on[c] >= off[c], "off {off:?}, on {on:?}");
     }
