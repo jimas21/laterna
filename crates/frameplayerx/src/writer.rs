@@ -209,9 +209,11 @@ fn run(shared: &Shared, report: &Sender<Done>) {
         // wait for ever.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job))
             .unwrap_or_else(|_| Err("the write panicked".into()));
+        // Reported before it counts as ended, so that whoever waited for the
+        // queue to empty (a barrier) finds every result in `poll`.
+        let _ = report.send(Done { key, result });
         lock(&shared.state).running = None;
         shared.changed.notify_all();
-        let _ = report.send(Done { key, result });
     }
 }
 
