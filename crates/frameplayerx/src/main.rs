@@ -1087,7 +1087,10 @@ mod tests {
         let before = startup_summary(&frames, None);
         assert!(before.ends_with("first throttled frame 42 at 0.4 s, before FOCUSED"));
         let steady = startup_summary(&frames[..42], Some(0.0));
-        assert!(steady.ends_with("[13.9x42]; no throttled frame"), "{steady}");
+        assert!(
+            steady.ends_with("[13.9x42]; no throttled frame"),
+            "{steady}"
+        );
     }
 
     #[test]
