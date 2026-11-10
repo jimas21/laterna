@@ -419,6 +419,8 @@ impl Tp10Eyes {
                 blend: false,
                 descriptor_buffer: true,
                 depth: Depth::None,
+                // The pyramid's levels are single-sampled.
+                samples: vk::SampleCountFlags::TYPE_1,
             };
             match pipeline::create_entry(gpu, &desc, c"fs_pyramid") {
                 Ok(p) => self.pyramid_pipeline = p,
