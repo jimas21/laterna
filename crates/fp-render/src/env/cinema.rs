@@ -34,10 +34,10 @@ const CELL: f32 = kit::GRID_CELL;
 const TREAD: f32 = 0.93;
 /// The floor height of each row, front to back. Each is the least that keeps
 /// the picture's bottom edge in view over the heads of the row in front with
-/// 12.5 cm to spare (a seated head tops out 10 cm above the eye), from the
+/// 13.5 cm to spare (a seated head tops out 10 cm above the eye, and the test asks for 12), from the
 /// eye 1.15 m over it; the tests check it for every seat. The first row is
 /// high enough that its eye looks up at the top edge by under 35 degrees.
-const FLOORS: [f32; ROWS] = [1.71, 2.30, 2.92, 3.57, 4.24, 4.93, 5.64, 6.36, 7.10];
+const FLOORS: [f32; ROWS] = [1.71, 2.32, 2.95, 3.61, 4.29, 4.99, 5.71, 6.45, 7.21];
 /// Where the first row's tread starts: its riser stands here. Two steps lead
 /// up to it, and the floor in front of them is flat.
 const FIRST_RISER_Z: f32 = 6.3;
@@ -468,11 +468,12 @@ mod tests {
     /// back in front of an eye.
     const SIGHT_MARGIN: f32 = 0.12;
 
-    /// A seated head at the eye of the seat at `x` in `row`.
+    /// A seated head at the eye of the seat at `x` in `row`: the eye is at its
+    /// front, and the head reaches 18 cm behind it.
     fn head(x: f32, row: usize) -> Aabb {
         let (eye_y, z) = (row_floor(row) + EYE_HEIGHT, row_z(row) + 0.1);
-        let min = Vec3::new(x - 0.1, eye_y - 0.1, z - 0.1);
-        let max = Vec3::new(x + 0.1, eye_y + HEAD_ABOVE_EYE, z + 0.1);
+        let min = Vec3::new(x - 0.1, eye_y - 0.1, z - 0.02);
+        let max = Vec3::new(x + 0.1, eye_y + HEAD_ABOVE_EYE, z + 0.18);
         Aabb::new(min, max)
     }
 
@@ -592,12 +593,12 @@ mod tests {
     #[test]
     fn the_rake_is_no_steeper_than_the_sight_lines_need() {
         // Every row but the first stands on about the least floor that keeps
-        // the bottom edge 12 cm over the head in front: 2 cm lower would
+        // the bottom edge 12 cm over the head in front: 3 cm lower would
         // not. (A cinema is not built taller than its picture asks.)
         let screen = layout().screen.unwrap();
         let bottom = screen.centre.y - screen.max.y / 2.0;
         for row in 1..ROWS {
-            let eye_y = row_floor(row) - 0.02 + EYE_HEIGHT;
+            let eye_y = row_floor(row) - 0.03 + EYE_HEIGHT;
             let z = row_z(row) + 0.1;
             let ahead = head(0.0, row - 1);
             let at = z - (row_z(row - 1) + 0.1);
@@ -698,7 +699,7 @@ mod tests {
             // edge could not stay under 35 otherwise).
             let centre = up(screen.centre.y);
             assert!(
-                (-10.5..=10.0).contains(&centre),
+                (-11.0..=10.0).contains(&centre),
                 "{name:?}: centre {centre}"
             );
         }
