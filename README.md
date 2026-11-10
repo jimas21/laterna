@@ -77,12 +77,12 @@ The name comes from the *laterna magica*, the magic lantern: the first projector
 ## Quick Start
 
 <p align="center">
-  <a href="https://github.com/jimas21/laterna/releases/latest/download/Install-Laterna.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+  <a href="https://jimas21.github.io/laterna/Install-Laterna.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
   <a href="https://jimas21.github.io/laterna/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 </p>
 
 > [!IMPORTANT]
-> Laterna's installers ship with its next beta, and the buttons above work from its first stable release. Until then it is in testing.
+> Laterna is in testing. Until its first stable release, the Desktop Mode button installs the newest beta.
 
 1. **Install** with one of the buttons above, or from a terminal:
 

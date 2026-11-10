@@ -50,8 +50,10 @@
   </main>
   <script>
     (() => {
-      const MANIFEST = "https://github.com/jimas21/laterna/releases/latest/download/frameplayerx.json";
-      const link = "frame-control://install?manifest=" + encodeURIComponent(MANIFEST);
+      const REPO = "https://github.com/jimas21/laterna/releases";
+      const linkFor = (tag) => "frame-control://install?manifest=" + encodeURIComponent(
+        tag ? `${REPO}/download/${tag}/frameplayerx.json` : `${REPO}/latest/download/frameplayerx.json`);
+      let link = linkFor(null);
       const button = document.getElementById("install");
       button.href = link;
       // When Frame Control opens, this page loses focus; when it doesn't,
@@ -66,8 +68,17 @@
         }, 2000);
       };
       button.addEventListener("click", tryOpen);
-      tryOpen();
-      location.href = link;
+      // The newest stable release, or the newest beta while there is none yet.
+      const pick = async () => {
+        try {
+          const r = await fetch("https://api.github.com/repos/jimas21/laterna/releases?per_page=30");
+          const found = (await r.json()).filter(
+            (x) => !x.draft && x.assets.some((f) => f.name === "frameplayerx.json"));
+          const rel = found.find((x) => !x.prerelease) || found[0];
+          if (rel) { link = linkFor(rel.tag_name); button.href = link; }
+        } catch (e) { /* keep the latest-release link */ }
+      };
+      pick().then(() => { tryOpen(); location.href = link; });
     })();
   </script>
 </body>

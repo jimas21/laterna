@@ -379,14 +379,16 @@ class DesktopLauncher(unittest.TestCase):
             text = f.read()
         self.assertTrue(text.startswith('[Desktop Entry]\n'))
         line = next(line for line in text.splitlines() if line.startswith('Exec='))
-        url = f'https://github.com/{fai.REPO}/releases/latest/download/frameplayerx-desktop-install.py'
+        owner, name = fai.REPO.split('/')
+        # Served by the project's GitHub Pages site, which works before the first stable release.
+        url = f'https://{owner}.github.io/{name}/frameplayerx-desktop-install.py'
         self.assertIn(url, line)
         self.assertTrue(os.path.isfile(os.path.join(here, url.rsplit('/', 1)[1])))
         # Characters the desktop entry spec would need escaped inside quotes.
         self.assertFalse(any(c in line for c in '$`\\%'))
         return line
 
-    def test_install_and_uninstall_run_this_installer_from_the_latest_release(self):
+    def test_install_and_uninstall_run_this_installer_from_the_web_page(self):
         self.assertTrue(self.exec_line('Install-Laterna.desktop').endswith('install.py"'))
         self.assertTrue(self.exec_line('Uninstall-Laterna.desktop').endswith('install.py --remove"'))
 

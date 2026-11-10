@@ -4,10 +4,10 @@ and adds it to the Steam library. No Developer Mode, PC or SSH needed.
 
 Runs on the headset as the normal user, with the Python 3 that SteamOS ships
 (standard library only). Install-Laterna.desktop downloads it from the
-latest release and runs it in a terminal, Uninstall-Laterna.desktop
-the same with --remove; by hand:
+project's web page (GitHub Pages) and runs it in a terminal,
+Uninstall-Laterna.desktop the same with --remove; by hand:
 
-  python3 frameplayerx-desktop-install.py                     # latest stable release
+  python3 frameplayerx-desktop-install.py                     # latest stable release (newest beta if none)
   python3 frameplayerx-desktop-install.py --beta              # newest release, betas too
   python3 frameplayerx-desktop-install.py --zip ~/Downloads/frameplayerx-1.0.0-aarch64.zip
   python3 frameplayerx-desktop-install.py --dir ~/Apps --name-suffix " (test)"
@@ -901,8 +901,18 @@ def main():
                     raise Fail('That zip does not match the published release (SHA-256 differs).')
                 say('  Checked against the published release.')
         else:
-            tag, asset, url, size, digest = latest_release(app, releases(args.repo), args.beta)
-            say(f'  Latest {"release" if args.beta else "stable release"}: {tag}')
+            found = releases(args.repo)
+            beta = args.beta
+            try:
+                tag, asset, url, size, digest = latest_release(app, found, beta)
+            except Fail:
+                if beta:
+                    raise
+                # Before the first stable release there are only betas: take the newest.
+                beta = True
+                tag, asset, url, size, digest = latest_release(app, found, beta)
+                say('  No stable release yet, so this installs the newest beta.')
+            say(f'  Latest {"release" if beta else "stable release"}: {tag}')
             zip_path = os.path.join(cache, asset)
             if not (os.path.isfile(zip_path) and digest and sha256(zip_path) == digest):
                 download(url, zip_path, size)
