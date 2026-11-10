@@ -378,9 +378,8 @@ pub fn box_mips(rgba: &[u8], w: u32, h: u32) -> Vec<(u32, u32, Vec<u8>)> {
 /// The level below a `w`x`h` one.
 fn halve(src: &[u8], w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-    let texel = |x: u32, y: u32, c: usize| {
-        u32::from(src[(y as usize * w as usize + x as usize) * 4 + c])
-    };
+    let texel =
+        |x: u32, y: u32, c: usize| u32::from(src[(y as usize * w as usize + x as usize) * 4 + c]);
     let mut out = Vec::with_capacity(nw as usize * nh as usize * 4);
     for y in 0..nh {
         let (y0, y1) = (2 * y, (2 * y + 1).min(h - 1));
