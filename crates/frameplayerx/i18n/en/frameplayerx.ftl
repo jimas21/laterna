@@ -108,7 +108,7 @@ settings-fisheye-presets = Fisheye presets
 settings-fisheye-presets-desc = The angles offered under Fisheye lens. Add one from a fisheye video's Fisheye lens settings; press one here to remove it.
 # Before the fisheye presets: the angle a video gets when Fisheye is picked for it.
 settings-fisheye-start = Fisheye starts at
-settings-video-position-desc = Where videos start. A video you adjust in the player keeps its own.
+settings-video-position-desc = Where videos start, and where the open video is now, unless you saved adjustments for it in the player: that video keeps its own.
 settings-flat-videos = Flat videos
 settings-screen-distance = Screen distance
 settings-screen-width = Screen width
@@ -388,7 +388,7 @@ adjust-pitch = Pitch
 adjust-roll = Roll
 adjust-zoom = Zoom
 adjust-height-desc = Raise or lower yourself in the scene.
-adjust-position-hint = Or hold a grip and the trigger and drag the picture; press the thumbstick to undo. Right grip and thumbstick up / down changes your height.
+adjust-position-hint = Or hold a grip and the trigger and drag the picture; move your hand towards or away from you to bring a flat screen nearer or further. Press the thumbstick to undo. Right grip and thumbstick up / down changes your height.
 adjust-depth = Depth
 adjust-depth-desc = Eye separation; lower if it's hard to fuse.
 adjust-vertical-align = Vertical align
