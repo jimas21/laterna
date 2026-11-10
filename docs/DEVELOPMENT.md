@@ -497,9 +497,14 @@ switches on a line; where the picture is magnified (under 1.0) the picture is
 exactly what it was.
 
 - It covers frames copied into the renderer's planes, hardware 8-bit frames
-  read in place (NV12 in the decoder's buffer) and 10-bit HDR frames
-  converted to P010. 10-bit SDR frames read in place keep the four taps until
-  they get a pyramid of their own. 180/360 and fisheye pictures have none.
+  read in place (NV12 in the decoder's buffer), 10-bit HDR frames
+  converted to P010 and 10-bit SDR frames read in place (TP10: the first level
+  is drawn from the same bands the eye passes read, through a second pipeline
+  from `scene_tp10` in the same descriptor buffer, whose bindings 20 and 21
+  are the pyramid and its sampler). 180/360 and fisheye pictures have none.
+  Only the Frame's Turnip driver runs the TP10 path, so CI compiles it but
+  cannot draw it: compare `card_2160p_hevc10` on the headset with
+  `FRAMEPLAYERX_TP10_EYES=0` (the converted path).
 - The first level is made by a small pass over the frame the eyes are about
   to read (one bilinear tap per 2x2 luma texels), the rest by a chain of blits.
   A frame is built once however many refreshes show it (24p at 72 Hz builds on

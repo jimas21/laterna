@@ -368,7 +368,8 @@ impl Renderer {
 
             let depth_format = gpu.depth_format();
             // Bindings 20 and 21 are the video pyramid and its sampler
-            // (planes.wgsl); the TP10 pipeline's layout has neither.
+            // (planes.wgsl); the TP10 pipeline's layout has them too, in its
+            // descriptor buffer (tp10_eyes.rs).
             let scene_layout = pipeline::set_layout(
                 &gpu,
                 &[
@@ -577,7 +578,7 @@ impl Renderer {
                 &r.gpu,
                 color_format,
                 depth_format,
-                r.sampler,
+                (r.sampler, r.aniso_sampler, r.dummy.views[0]),
                 r.q10c.is_some(),
             );
             for _ in 0..SLOTS {
@@ -962,11 +963,12 @@ impl Renderer {
         self.stamp(Mark::Video);
         let r = self.show_video(frame);
         self.stamp(Mark::VideoDone);
-        // The pyramid is made from planes: a frame read in TP10 bands, a failed
-        // one or none has no id to make it for.
+        // The pyramid is made from planes or, for a frame read in TP10 bands,
+        // from those (where the eye passes read them: `tp10_eyes`); a failed
+        // frame or none has no id to make it for.
         let in_bands = self.slots[self.current].tp10_bound.is_some();
         self.shown_id = match frame {
-            Some(f) if r.is_ok() && !in_bands => Some(f.id),
+            Some(f) if r.is_ok() && (!in_bands || self.tp10_eyes.is_some()) => Some(f.id),
             _ => None,
         };
         r
@@ -1717,6 +1719,17 @@ impl Renderer {
         let plan = self.prepare_pyramid(&p, frame_desc, tp10, footprint);
         p.display[2] = plan.map_or(0, |(_, levels)| levels);
         self.pyramid_levels = p.display[2];
+        if tp10 {
+            // Its parameters went in before the pyramid's levels were known.
+            let view = self
+                .pyramid
+                .as_ref()
+                .and_then(PyramidPass::view)
+                .unwrap_or(self.dummy.views[0]);
+            if let Some(t) = self.tp10_eyes.as_mut() {
+                t.finish(slot_idx, &p, view);
+            }
+        }
         self.update_scene_set();
         // Quad vertices: two triangles per quad.
         let mut verts: Vec<QuadVertex> = Vec::with_capacity(quads.len() * 6);
@@ -1774,8 +1787,18 @@ impl Renderer {
             self.stamp(Mark::Pyramid);
             let slot = &self.slots[slot_idx];
             let (cmd, set) = (slot.cmd, slot.scene_set);
+            let reads = match self.tp10_eyes.as_ref().filter(|_| tp10) {
+                Some(eyes) => pyramid::Reads::Tp10 {
+                    eyes,
+                    slot: slot_idx,
+                },
+                None => pyramid::Reads::Planes {
+                    layout: self.scene_pl,
+                    set,
+                },
+            };
             if let Some(pass) = self.pyramid.as_mut() {
-                pass.record(&self.gpu, cmd, self.scene_pl, set, id);
+                pass.record(&self.gpu, cmd, reads, id);
             }
             self.stamp(Mark::PyramidDone);
         }
@@ -1954,7 +1977,13 @@ impl Renderer {
         let source = (desc.width, desc.height);
         let on = self.quality.pyramid && slot.has_video && !pass.left_out(source);
         let flat = p.mode[0] == 0;
-        let changed = if pyramid::wanted(on, flat, tp10, source, footprint) {
+        // A picture read in TP10 bands is built from by the eye passes' own
+        // descriptors: that needs the pipeline for it.
+        let tp10_ready = match self.tp10_eyes.as_mut() {
+            Some(t) if tp10 && on => t.ensure_pyramid(&self.gpu, pass.format()),
+            _ => false,
+        };
+        let changed = if pyramid::wanted(on, flat, (tp10, tp10_ready), source, footprint) {
             match pass.ensure(&self.gpu, slot.cmd, &mut slot.garbage, source) {
                 Ok(changed) => changed,
                 Err(e) => {
@@ -2542,14 +2571,22 @@ fn tp10_eyes(
     gpu: &Gpu,
     color_format: vk::Format,
     depth_format: vk::Format,
-    sampler: vk::Sampler,
+    (sampler, aniso, dummy): (vk::Sampler, vk::Sampler, vk::ImageView),
     has_q10c: bool,
 ) -> Option<Tp10Eyes> {
     let allowed = std::env::var("FRAMEPLAYERX_TP10_EYES").map_or(true, |v| v.trim() != "0");
     if !has_q10c || gpu.memory_fd.is_none() || !allowed {
         return None;
     }
-    match Tp10Eyes::new(gpu, color_format, depth_format, sampler, SLOTS) {
+    match Tp10Eyes::new(
+        gpu,
+        color_format,
+        depth_format,
+        sampler,
+        aniso,
+        dummy,
+        SLOTS,
+    ) {
         Ok(t) => {
             log::info!("10-bit HEVC read in place is sampled by the eye passes, not converted");
             Some(t)
