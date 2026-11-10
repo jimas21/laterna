@@ -1305,3 +1305,66 @@ fn sharpen_sharpens_a_magnified_edge_without_halo() {
     );
     e.destroy(&r);
 }
+
+/// A green screen turned a little over a blue background, so the picture,
+/// its blended edge and the surround are all there to compare.
+fn turned_green_screen() -> VideoParams {
+    let mut p = params(
+        Projection::Flat,
+        StereoLayout::Mono,
+        ViewSettings::default(),
+    );
+    p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0)) * Mat4::from_rotation_y(0.3);
+    p.background = [0.0, 0.0, 1.0, 1.0];
+    p
+}
+
+#[test]
+fn rendering_twice_gives_the_same_picture() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // The depth image is shared by both eyes and reused by every frame:
+    // nothing in it may leak into the next pass.
+    let green = frame(160, 90, |_, _| [0, 255, 0]);
+    let p = turned_green_screen();
+    let first = render(&mut r, &mut e, Some(&green), &p, &[]);
+    let (corner, mid) = (px(&first[0], 2, 2), centre(&first[0]));
+    assert!(is_blue(corner), "surround {corner:?}");
+    assert!(mid[1] > 200, "screen {mid:?}");
+    for round in 1..=3 {
+        let again = render(&mut r, &mut e, Some(&green), &p, &[]);
+        assert!(again == first, "frame {round} differs from the first");
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn a_bigger_eye_target_gets_a_new_depth_image() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let green = frame(160, 90, |_, _| [0, 255, 0]);
+    let p = turned_green_screen();
+    let small = render(&mut r, &mut e, Some(&green), &p, &[]);
+    assert!(centre(&small[0])[1] > 200);
+
+    // 192 px does not fit the 128 px depth image made so far.
+    let mut big = OffscreenEyes::new(&r, 192, 192).expect("bigger eyes");
+    r.begin_frame().unwrap();
+    r.set_video(Some(&green)).unwrap();
+    r.draw(&big.targets(), &eyes_at(1.6), &p, &[]).unwrap();
+    r.end_frame().unwrap();
+    let img = big.read(&r, 0).unwrap();
+    let mid = ((96 * 192 + 96) * 4) as usize;
+    let centre_px = &img[mid..mid + 3];
+    assert!(centre_px[1] > 200, "bigger target's centre {centre_px:?}");
+    let corner = [img[0], img[1], img[2]];
+    assert!(is_blue(corner), "bigger target's surround {corner:?}");
+
+    // The smaller targets render the same with the bigger depth image.
+    let again = render(&mut r, &mut e, Some(&green), &p, &[]);
+    assert!(again == small, "the 128 px picture changed");
+    big.destroy(&r);
+    e.destroy(&r);
+}

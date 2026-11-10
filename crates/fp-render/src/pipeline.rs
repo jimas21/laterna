@@ -4,6 +4,19 @@ use crate::gpu::Gpu;
 use crate::{Result, VkContext};
 use ash::vk;
 
+/// What a pipeline does with the depth attachment of the rendering instance it
+/// is bound in. Vulkan wants every pipeline bound in one instance to name the
+/// instance's depth format (dynamic rendering without
+/// `VK_EXT_dynamic_rendering_unused_attachments`), whether or not it uses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Depth {
+    /// No depth attachment in the instance.
+    None,
+    /// A depth attachment of this format is there; the pipeline neither tests
+    /// against it nor writes it.
+    Ignore(vk::Format),
+}
+
 pub(crate) struct PipelineDesc<'a> {
     pub spv: &'a [u8],
     pub layout: vk::PipelineLayout,
@@ -14,6 +27,8 @@ pub(crate) struct PipelineDesc<'a> {
     pub blend: bool,
     /// Its descriptors come from descriptor buffers, not sets.
     pub descriptor_buffer: bool,
+    /// The depth attachment's format, and what this pipeline does with it.
+    pub depth: Depth,
 }
 
 pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
@@ -70,12 +85,19 @@ pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
     let formats = [d.color_format];
     let mut rendering =
         vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
+    if let Depth::Ignore(format) = d.depth {
+        rendering = rendering.depth_attachment_format(format);
+    }
+    // Testing and writing stay off.
+    let depth_state = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(false)
+        .depth_write_enable(false);
     let flags = if d.descriptor_buffer {
         vk::PipelineCreateFlags::DESCRIPTOR_BUFFER_EXT
     } else {
         vk::PipelineCreateFlags::empty()
     };
-    let info = vk::GraphicsPipelineCreateInfo::default()
+    let mut info = vk::GraphicsPipelineCreateInfo::default()
         .flags(flags)
         .stages(&stages)
         .vertex_input_state(&vertex_input)
@@ -87,6 +109,9 @@ pub(crate) fn create(gpu: &Gpu, d: &PipelineDesc) -> Result<vk::Pipeline> {
         .dynamic_state(&dynamic)
         .layout(d.layout)
         .push_next(&mut rendering);
+    if d.depth != Depth::None {
+        info = info.depth_stencil_state(&depth_state);
+    }
     // SAFETY: all referenced state lives until the call returns.
     let result = unsafe {
         gpu.device

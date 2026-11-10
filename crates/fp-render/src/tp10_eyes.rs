@@ -8,7 +8,7 @@
 
 use crate::gpu::Gpu;
 use crate::params::SceneParams;
-use crate::pipeline::{self, PipelineDesc};
+use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::q10c::{self, MAX_CHROMA_BANDS, MAX_LUMA_BANDS, Sampled};
 use crate::{Error, Result, VkContext};
 use ash::vk;
@@ -47,10 +47,12 @@ unsafe impl Send for Tp10Eyes {}
 
 impl Tp10Eyes {
     /// The pipeline and `slots` frame slots' buffers, drawing into
-    /// `color_format` and sampling through `sampler`.
+    /// `color_format` (with a depth attachment of `depth_format` in the
+    /// instance, which it ignores) and sampling through `sampler`.
     pub fn new(
         gpu: &Gpu,
         color_format: vk::Format,
+        depth_format: vk::Format,
         sampler: vk::Sampler,
         slots: usize,
     ) -> Result<Tp10Eyes> {
@@ -64,7 +66,7 @@ impl Tp10Eyes {
             sampled_size: 0,
             slots: Vec::new(),
         };
-        if let Err(e) = t.create(gpu, color_format, sampler, slots) {
+        if let Err(e) = t.create(gpu, color_format, depth_format, sampler, slots) {
             t.destroy(gpu);
             return Err(e);
         }
@@ -75,6 +77,7 @@ impl Tp10Eyes {
         &mut self,
         gpu: &Gpu,
         color_format: vk::Format,
+        depth_format: vk::Format,
         sampler: vk::Sampler,
         slots: usize,
     ) -> Result<()> {
@@ -139,8 +142,9 @@ impl Tp10Eyes {
                 color_format,
                 vertex_stride: 0,
                 attributes: &[],
-                blend: false,
+                blend: true,
                 descriptor_buffer: true,
+                depth: Depth::Ignore(depth_format),
             },
         )?;
         for _ in 0..slots {
