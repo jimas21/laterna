@@ -845,7 +845,7 @@ fn par_map<T: Sync, R: Send>(
         }
     };
     let helpers = std::thread::available_parallelism()
-        .map_or(1, |n| n.get())
+        .map_or(1, std::num::NonZero::get)
         .clamp(1, 8)
         .min(items.len())
         .saturating_sub(1);
@@ -1595,7 +1595,7 @@ mod tests {
                 let edge = (COLOR_SIZE as usize >> mip).max(1);
                 assert_eq!(level.len(), edge * edge * 4);
                 assert!(
-                    level.chunks_exact(4).all(|p| p == want),
+                    level.as_chunks::<4>().0.iter().all(|p| *p == want),
                     "layer {layer} level {mip}"
                 );
             }

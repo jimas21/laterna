@@ -232,11 +232,9 @@ pub fn decode_astc(
     // The library asserts on some corrupt blocks.
     let decoded = catch_unwind(AssertUnwindSafe(|| {
         let mut bad = 0u32;
-        for (i, chunk) in data.chunks_exact(16).enumerate() {
-            let mut raw = [0u8; 16];
-            raw.copy_from_slice(chunk);
+        for (i, raw) in data.as_chunks::<16>().0.iter().enumerate() {
             let (x0, y0) = ((i % across) as u32 * block.0, (i / across) as u32 * block.1);
-            let ok = astc_decode::astc_decode_block(&raw, footprint, |x, y, c| {
+            let ok = astc_decode::astc_decode_block(raw, footprint, |x, y, c| {
                 let (px, py) = ((x0 + x) as usize, (y0 + y) as usize);
                 if px < w && py < h {
                     out[(py * w + px) * 4..][..4].copy_from_slice(&c);
@@ -388,7 +386,7 @@ mod tests {
         assert!(h.srgb);
         assert_eq!(h.levels.len(), 6);
         // 32 -> 4x4 blocks of 16 bytes, then 16 -> 2x2, 8 -> 1, 4, 2, 1.
-        let lens: Vec<usize> = h.levels.iter().map(|r| r.len()).collect();
+        let lens: Vec<usize> = h.levels.iter().map(ExactSizeIterator::len).collect();
         assert_eq!(lens, [4 * 4 * 16, 2 * 2 * 16, 16, 16, 16, 16]);
         assert_eq!(level_bytes(&bytes, &h)[5], void_block([1, 2, 3, 255]));
         let plain = rgba8(8, VK_R8G8B8A8_UNORM);
@@ -482,7 +480,12 @@ mod tests {
         let (rgba, bad) = decode_astc(&levels[0], 32, 32, (10, 10)).expect("decodes");
         assert_eq!(bad, 0);
         assert_eq!(rgba.len(), 32 * 32 * 4);
-        assert!(rgba.chunks_exact(4).all(|p| p == [200, 120, 40, 255]));
+        assert!(
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [200, 120, 40, 255])
+        );
         // The 1 x 1 level of the same colour: one texel out of a 10 x 10 block.
         let (last, _) = decode_astc(&levels[5], 1, 1, (10, 10)).expect("decodes");
         assert_eq!(last, [200, 120, 40, 255]);
