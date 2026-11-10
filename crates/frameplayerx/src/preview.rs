@@ -36,6 +36,7 @@
 //! | `tracks` | open the audio and subtitles picker |
 //! | `filters` | open the Filters drawer of the source page shown (a Jellyfin grid, a feed) |
 //! | `chroma` | turn chroma key on for the open video |
+//! | `flat` / `flat off` | show the open video as flat 2D, or back as detected |
 //! | `place ID` | choose a place as the picker's chips do: `cinema`, `studio`, `void` (Plain) or `room` (Your room) |
 //! | `seat N` | sit in the chosen place's seat N (a number from 0, or `front`, `middle`, `back`) |
 //! | `house LEVEL` / `house auto` | hold the house lights at LEVEL (0 dark to 1 full), or let playback dim and raise them again |
@@ -481,6 +482,20 @@ impl Sim {
                 self.app.ui.languages_open = true;
                 self.app.repaint_all();
                 self.run_frames(3)?;
+            }
+            // The open video as a flat 2D picture (the test clips are named
+            // as 180° videos), which is what a place surrounds; `flat off`
+            // goes back to the format the video's name gives.
+            Some("flat") => {
+                use fp_core::format::{Projection, StereoLayout, VideoFormat};
+                let format = if parts.get(1) == Some(&"off") {
+                    None
+                } else {
+                    Some(VideoFormat::new(Projection::Flat, StereoLayout::Mono))
+                };
+                self.app.apply(crate::ui::Action::SetFormat(format));
+                self.app.repaint_all();
+                self.run_frames(4)?;
             }
             // `place cinema`, `place studio`, `place void` or `place room`, as
             // the picker's chips choose.

@@ -434,10 +434,18 @@ frames 8
 panel bar player-bar
 sbs player-scene
 # Places, round the paused video. The room shows once the room renderer is in
-# the build: until then these are the plain background. The cinema with the
-# house lights down and up, from above and from the front seat, then the
-# studio. The lights are held at a level, since the short clip ends and would
-# raise them; Plain again after, so every later shot is unchanged.
+# the build: until then these are the plain background. The clip is named as a
+# 180 degree video and a place shows round flat ones only, so it is shown flat
+# here. The bar's film button, then the cinema with the house lights down and
+# up, from above and from the front seat, then the studio. The lights are held
+# at a level, since the short clip ends and would raise them; Plain and the
+# detected format again after, so every later shot is unchanged.
+flat
+frames 6
+panel bar player-bar-flat
+point bar 0.806 0.69
+frames 10
+panel bar player-bar-place-tip
 place cinema
 house 0
 frames 8
@@ -458,6 +466,7 @@ frames 8
 sbs place-studio
 house auto
 place void
+flat off
 frames 4
 # A hover label: the Hide button. (The bar's keys are counted from the right.)
 point bar 0.894 0.69
@@ -474,10 +483,16 @@ frames 8
 panel adjust adjust-position
 # The place picker tops that tab. With the cinema chosen it adds the seats,
 # the house lights and the screen light, and the room sets the screen.
+flat
+panel adjust place-picker-plain
 place cinema
 frames 4
 panel adjust place-picker
+place studio
+frames 4
+panel adjust place-picker-studio
 place void
+flat off
 frames 4
 look -21 -3
 point bar 0.52 0.65
