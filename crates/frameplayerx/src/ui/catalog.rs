@@ -2374,7 +2374,10 @@ mod tests {
         assert_eq!((queued.len(), at), (3, 1));
         // A folder opens whichever way, a click elsewhere on the card is no play.
         let folder = [item("c1", CatalogKind::BoxSet)];
-        assert!(matches!(card_go(click, &folder, 0, true), Some(Go::Open(_))));
+        assert!(matches!(
+            card_go(click, &folder, 0, true),
+            Some(Go::Open(_))
+        ));
         assert!(card_go(page::CardResponse::default(), &list, 0, true).is_none());
 
         let h = home_with(vec![row("a", "Row", CatalogKind::Movie)]);
