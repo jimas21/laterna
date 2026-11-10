@@ -1188,7 +1188,15 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                         };
                         let moved = v.settings.panel_offsets != Default::default()
                             || (flat && (pb.settings.yaw, pb.settings.pitch) != (0.0, 0.0));
-                        position_tab(ui, &mut pb.settings, flat, moved, place, v.actions);
+                        position_tab(
+                            ui,
+                            &mut pb.settings,
+                            flat,
+                            moved,
+                            place,
+                            v.docked,
+                            v.actions,
+                        );
                     }
                     2 => stereo_tab(ui, &mut pb.settings),
                     3 => picture_tab(ui, &mut pb.settings),
@@ -1349,6 +1357,7 @@ fn position_tab(
     flat: bool,
     moved: bool,
     place: Option<Place>,
+    docked: Option<usize>,
     actions: &mut Vec<Action>,
 ) {
     let d = ViewSettings::default();
@@ -1468,6 +1477,7 @@ fn position_tab(
                 2,
             );
         });
+        dock_row(ui, docked, actions);
     }
     // A place fills the background.
     if place.is_none() {
@@ -1475,6 +1485,34 @@ fn position_tab(
         widgets::section_label(ui, tr!("settings-background"));
         background_controls(ui, &mut s.background);
     }
+}
+
+/// Docking the screen to a controller, or letting go of it.
+fn dock_row(ui: &mut egui::Ui, docked: Option<usize>, actions: &mut Vec<Action>) {
+    widgets::rows(ui, |r| {
+        r.row(
+            tr!("adjust-dock"),
+            Some(tr!("adjust-dock-desc")),
+            |ui| match docked {
+                Some(_) => {
+                    if widgets::button(ui, None, tr!("adjust-undock"), Kind::Secondary).clicked() {
+                        actions.push(Action::Undock);
+                    }
+                }
+                None => {
+                    if widgets::button(ui, None, tr!("adjust-dock-right"), Kind::Secondary)
+                        .clicked()
+                    {
+                        actions.push(Action::DockScreen(1));
+                    }
+                    if widgets::button(ui, None, tr!("adjust-dock-left"), Kind::Secondary).clicked()
+                    {
+                        actions.push(Action::DockScreen(0));
+                    }
+                }
+            },
+        );
+    });
 }
 
 /// What the place picker chooses between.

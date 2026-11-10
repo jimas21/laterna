@@ -430,6 +430,11 @@ pub enum Action {
     /// Open SteamVR's dashboard over the app, which keeps running (and the
     /// video keeps playing).
     OpenDashboard,
+    /// Dock the flat screen to a controller (0 left, 1 right): a small
+    /// screen in your hand.
+    DockScreen(usize),
+    /// Let go of the docked screen: the floating one comes back.
+    Undock,
     Quit,
     /// Quit and start again, to run an installed update or use a setting
     /// that is read at start.
@@ -1031,6 +1036,8 @@ pub struct View<'a> {
     pub place_shown: Option<fp_render::env::Place>,
     /// SteamVR's dashboard can be opened from the app.
     pub dashboard: bool,
+    /// The hand the video's screen is docked to (0 left, 1 right), if it is.
+    pub docked: Option<usize>,
     pub devices: &'a [fp_haptics::DeviceStatus],
 }
 

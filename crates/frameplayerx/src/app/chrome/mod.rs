@@ -6,7 +6,12 @@
 //! [`layout`] works out where they go and `drag` what holding them does,
 //! both as plain maths; this module wires them to the app's panels, input
 //! and the open video's view.
+//!
+//! The screen can also be docked to a controller (`dock`): a small screen
+//! held above the hand. Its window controls go with it: the bar tears it off
+//! into the room and the handle resizes it.
 
+pub mod dock;
 pub mod layout;
 
 mod drag;
@@ -15,7 +20,8 @@ use super::*;
 use crate::controls::{Damped, GRIP};
 use crate::ui::window::{self, HandleState};
 use crate::world::{Grab, GrabBy};
-use drag::{Frame, Part, ScreenDrag, ScreenView, Start};
+use dock::Dock;
+use drag::{Frame, Limits, Part, ScreenDrag, ScreenView, Start};
 use layout::{BAR_DROP, Body, Sky};
 
 /// Where the move bar and the resize handle come in the slice
@@ -37,6 +43,9 @@ const BAR_EASE: f32 = 0.15;
 pub struct ScreenChrome {
     pub bar: Panel,
     pub corner: Panel,
+    /// The screen docked to a hand, if it is (kept for the session, never
+    /// saved: the floating screen's settings are left alone).
+    pub dock: Option<Dock>,
     drag: Option<ScreenDrag>,
     /// How far below level the control bar's middle hangs (see
     /// [`layout::bar_pose`]), easing to `bar_drop_to`.
@@ -61,6 +70,7 @@ impl Default for ScreenChrome {
         ScreenChrome {
             bar,
             corner,
+            dock: None,
             drag: None,
             bar_drop: Damped::at([BAR_DROP]),
             bar_drop_to: BAR_DROP,
@@ -103,6 +113,73 @@ impl ScreenChrome {
 }
 
 impl App {
+    /// The screen's dock while it holds: a flat video is open and no room is
+    /// shown (a room's screen is where the room has it).
+    pub(super) fn docked(&self) -> Option<&Dock> {
+        self.chrome.dock.as_ref().filter(|_| !self.in_room())
+    }
+
+    /// Which hand the screen is docked to.
+    pub(super) fn docked_hand(&self) -> Option<usize> {
+        self.docked().map(|d| d.hand)
+    }
+
+    /// Docks the open flat video's screen to `hand` (0 left, 1 right). It is
+    /// hidden until the hand is tracked, then rides it.
+    pub(super) fn dock_screen(&mut self, hand: usize) {
+        let flat = self
+            .playback
+            .as_ref()
+            .is_some_and(|p| p.format.projection == Projection::Flat);
+        if !flat || self.in_room() {
+            return;
+        }
+        self.chrome.cancel();
+        let width = self.chrome.dock.map_or(dock::WIDTH, |d| d.width);
+        let mut docked = Dock::new(hand.min(1));
+        docked.width = width;
+        self.chrome.dock = Some(docked);
+    }
+
+    /// Puts the screen back where it floated: the floating screen's settings
+    /// were never touched.
+    pub(super) fn undock(&mut self) {
+        self.chrome.cancel();
+        self.chrome.dock = None;
+    }
+
+    /// Follows the hand for a frame; lets the dock go when the video is gone
+    /// or no longer flat.
+    pub(super) fn update_dock(&mut self, input: &FrameInput) {
+        let flat = self
+            .playback
+            .as_ref()
+            .is_some_and(|p| p.format.projection == Projection::Flat);
+        if !flat {
+            if self.chrome.dock.take().is_some() {
+                self.chrome.cancel();
+            }
+            return;
+        }
+        if let Some(d) = &mut self.chrome.dock {
+            d.track(input.hands[d.hand].aim, input.dt);
+        }
+    }
+
+    /// Where the docked screen is and how wide it is drawn, if it is.
+    pub(super) fn docked_screen(&self) -> Option<(Mat4, f32)> {
+        self.docked().map(|d| (d.pose(), d.shown_width()))
+    }
+
+    /// The frame the window controls are placed in: the picture's, or the
+    /// docked screen's own.
+    fn controls_frame(&self, anchor: Mat4) -> Mat4 {
+        match self.docked() {
+            Some(d) => dock::picture(d.pose()),
+            None => self.picture_anchor(anchor),
+        }
+    }
+
     /// The window controls can show: a flat video is open, Settings has
     /// them on, and no room is shown (a room's screen is where the room has
     /// it).
@@ -121,7 +198,9 @@ impl App {
     pub(super) fn show_window_controls(&mut self) {
         let part = self.chrome.drag.map(|d| d.part);
         let with_bar = self.panels[BAR].visible || part.is_some();
-        let shown = self.window_controls_allowed() && with_bar;
+        // A docked screen whose hand is not tracked is not where they would be.
+        let hand_lost = self.docked().is_some_and(Dock::lost);
+        let shown = self.window_controls_allowed() && with_bar && !hand_lost;
         self.chrome.bar.visible = shown;
         let under_adjust = self.ui.adjust_open && part != Some(Part::Resize);
         self.chrome.corner.visible = shown && !under_adjust;
@@ -140,7 +219,7 @@ impl App {
         };
         let (least, most) = (*UI_SCALES.start(), *UI_SCALES.end());
         let scale = self.settings.ui_scale.clamp(least, most);
-        let picture = self.picture_anchor(anchor);
+        let picture = self.controls_frame(anchor);
         let bar = layout::move_bar_spot(&shape, distance, scale);
         let corner = layout::corner_spot(&shape, distance, scale);
         self.chrome.bar.pose = picture * bar.pose;
@@ -161,8 +240,12 @@ impl App {
             size: Vec2::new(points.x - left - right, points.y - top - bottom) * per_point,
             centre: Vec2::new((left - right) / 2.0, (bottom - top) / 2.0) * per_point,
         };
-        // Held, the bar stays where it is: it must not jump mid-drag.
-        if self.chrome.drag.is_none() {
+        // Docked, the screen is in your hand and the control bar in front of
+        // you, as for a 180 degree video: nothing to keep it clear of. Held,
+        // the bar stays where it is: it must not jump mid-drag.
+        if self.chrome.dock.is_some() {
+            self.chrome.bar_drop_to = BAR_DROP;
+        } else if self.chrome.drag.is_none() {
             let [yaw, pitch] = self.offsets.bar;
             let bar_frame = place_around(Mat4::IDENTITY, yaw, pitch, 0.0, 0.0);
             let mut avoid = Vec::new();
@@ -197,15 +280,45 @@ impl App {
         let Some(aim) = input.hands[grab.hand].aim else {
             return;
         };
+        // Taking hold of a docked screen's bar tears it off into the room: it
+        // floats where it is, and the drag goes on from there.
+        if part == Part::Move
+            && let Some(d) = self.docked().copied()
+        {
+            let (yaw, pitch, distance) = dock::tear_off(d.pose(), anchor);
+            if let Some(p) = &mut self.playback {
+                input::drag_view(p, yaw, pitch, distance);
+            }
+            self.chrome.dock = None;
+        }
         let Some((shape, _)) = self.screen_geometry() else {
             return;
         };
-        let Some(p) = &self.playback else { return };
-        let view = ScreenView {
-            yaw: p.settings.yaw,
-            pitch: p.settings.pitch,
-            distance: p.settings.screen_distance,
-            width: p.settings.screen_width,
+        let (picture, view, limits) = match self.docked() {
+            Some(d) => {
+                let view = ScreenView {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    distance: dock::EYE,
+                    width: d.width,
+                };
+                let widths = (*dock::WIDTHS.start(), *dock::WIDTHS.end());
+                (
+                    dock::picture(d.pose()),
+                    view,
+                    Limits::docked(widths, dock::EYE),
+                )
+            }
+            None => {
+                let Some(p) = &self.playback else { return };
+                let view = ScreenView {
+                    yaw: p.settings.yaw,
+                    pitch: p.settings.pitch,
+                    distance: p.settings.screen_distance,
+                    width: p.settings.screen_width,
+                };
+                (self.picture_anchor(anchor), view, Limits::floating())
+            }
         };
         let start = Start {
             part,
@@ -214,9 +327,10 @@ impl App {
             aim,
             room: anchor.to_scale_rotation_translation().1,
             head: input.head.map(|(pos, _)| pos),
-            picture: self.picture_anchor(anchor),
+            picture,
             view,
             shape,
+            limits,
         };
         self.chrome.drag = Some(ScreenDrag::begin(start));
         buzz.push((grab.hand, 0.3, 14));
@@ -248,17 +362,22 @@ impl App {
             stick_y: hand.stick.y,
             head: input.head.map(|(pos, _)| pos),
             room: anchor.to_scale_rotation_translation().1,
-            picture: self.picture_anchor(anchor),
+            picture: self.controls_frame(anchor),
             dt: input.dt,
         });
         self.chrome.drag = Some(drag);
-        if let Some(p) = &mut self.playback {
-            let ScreenView {
-                yaw,
-                pitch,
-                distance,
-                width,
-            } = step.view;
+        let ScreenView {
+            yaw,
+            pitch,
+            distance,
+            width,
+        } = step.view;
+        if self.docked().is_some() {
+            // A docked screen is resized; the floating one is left as it is.
+            if let Some(d) = &mut self.chrome.dock {
+                d.width = width;
+            }
+        } else if let Some(p) = &mut self.playback {
             input::drag_view(p, yaw, pitch, distance);
             p.settings.screen_width = width;
         }
@@ -322,6 +441,25 @@ impl App {
             Some(Part::Resize) => "resize",
             None if self.chrome.bar.visible => "shown",
             None => "hidden",
+        }
+    }
+
+    /// For the preview harness's status line: whether the screen is docked
+    /// (1 or 0) and where its middle is, metres in the room.
+    pub(super) fn dock_status(&self) -> String {
+        match self.docked() {
+            Some(d) => {
+                let at = d.pose().w_axis;
+                format!(
+                    "docked=1 dock_hand={} dock_x={:.2} dock_y={:.2} dock_z={:.2} dock_width={:.2}",
+                    d.hand,
+                    at.x,
+                    at.y,
+                    at.z,
+                    d.shown_width()
+                )
+            }
+            None => "docked=0".to_string(),
         }
     }
 }

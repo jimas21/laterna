@@ -143,7 +143,15 @@ impl App {
                 }
             }
             Cmd::Zoom(d) => {
-                if let Some(p) = &mut self.playback {
+                // A docked screen is resized in your hand; the floating one
+                // is left alone.
+                if self.docked().is_some() {
+                    if let Some(dock) = &mut self.chrome.dock {
+                        let (least, most) =
+                            (*chrome::dock::WIDTHS.start(), *chrome::dock::WIDTHS.end());
+                        dock.width = (dock.width * (1.0 + d)).clamp(least, most);
+                    }
+                } else if let Some(p) = &mut self.playback {
                     // A flat screen's size is its width.
                     if p.format.projection == Projection::Flat {
                         p.settings.screen_width =
@@ -186,6 +194,9 @@ impl App {
                     self.ui.toast(tr!("toast-view-reset"));
                 }
             }
+            // The picture is not dragged while it is in your hand: take hold of
+            // its bar to tear it off.
+            Cmd::DragBegin if self.docked().is_some() => {}
             Cmd::DragBegin => {
                 let view = self.playback.as_ref().map(|p| p.settings);
                 self.drag_start = view.map(|s| (s.yaw, s.pitch, s.screen_distance));

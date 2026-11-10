@@ -733,6 +733,29 @@ trigger 0
 frames 3
 expect width < 6.8
 shot window-chrome-back
+# Docked to the left hand (held 0.25 m left of and 0.35 m below the head, 0.35 m
+# ahead): the screen is above the hand, and goes where the hand goes. The
+# floating screen's settings are not touched, so its width stays. Then
+# the bar tears it off into the room.
+hand -0.25 -0.35 0.35
+dock left
+frames 6
+expect docked == 1
+expect dock_y > 1.3
+expect dock_y < 1.4
+expect dock_width ~ 0.3
+shot docked-left
+hand 0.0 -0.2 0.5
+frames 4
+expect dock_y > 1.45
+point window-bar 0.5 0.5
+trigger 1
+frames 3
+expect docked == 0
+expect width < 6.8
+trigger 0
+frames 3
+shot docked-torn-off
 EOF
   HOME="$card_home" XDG_CONFIG_HOME="$card_home/.config" XDG_DATA_HOME="$card_home/.local/share" \
     XDG_CACHE_HOME="$card_home/.cache" \

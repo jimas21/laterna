@@ -326,6 +326,8 @@ impl App {
                 }
             }
             Action::Quit => self.quit = true,
+            Action::DockScreen(hand) => self.dock_screen(hand),
+            Action::Undock => self.undock(),
             Action::OpenDashboard => {
                 self.open_dashboard = true;
                 self.dashboard_requests += 1;

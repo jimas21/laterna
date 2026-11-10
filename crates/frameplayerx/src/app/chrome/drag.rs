@@ -18,6 +18,33 @@ use std::ops::RangeInclusive;
 /// thumbstick allows.
 pub const WIDTH: RangeInclusive<f32> = 0.5..=30.0;
 
+/// How wide and how far away a drag may make the screen, each as (least,
+/// most). A floating screen has the ranges settings give it; a docked one
+/// is held at one distance from the eye and is smaller.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limits {
+    pub width: (f32, f32),
+    pub distance: (f32, f32),
+}
+
+impl Limits {
+    /// A floating screen's.
+    pub fn floating() -> Limits {
+        Limits {
+            width: (*WIDTH.start(), *WIDTH.end()),
+            distance: (*SCREEN_DISTANCE.start(), *SCREEN_DISTANCE.end()),
+        }
+    }
+
+    /// A docked screen's: its width within `width`, held `distance` away.
+    pub fn docked(width: (f32, f32), distance: f32) -> Limits {
+        Limits {
+            width,
+            distance: (distance, distance),
+        }
+    }
+}
+
 /// How fast the thumbstick, tilted all the way, pushes the screen away (or
 /// pulls it near): its distance is multiplied by e to this power each second,
 /// about three times as far after one.
@@ -74,6 +101,7 @@ pub struct Start {
     pub picture: Mat4,
     pub view: ScreenView,
     pub shape: ScreenShape,
+    pub limits: Limits,
 }
 
 /// What a frame brings to a drag.
@@ -104,6 +132,7 @@ pub struct ScreenDrag {
     pub by: GrabBy,
     from: ScreenView,
     now: ScreenView,
+    limits: Limits,
     /// The thumbstick's push on the distance, as a factor.
     gain: f32,
     /// Moving: the hand's yaw and pitch when it took hold, how far it was
@@ -155,6 +184,7 @@ impl ScreenDrag {
             picture,
             view,
             shape,
+            limits,
         } = start;
         // The corner (the screen's bottom right) in the picture's frame,
         // away from the screen's middle.
@@ -176,6 +206,7 @@ impl ScreenDrag {
             by,
             from: view,
             now: view,
+            limits,
             gain: 1.0,
             start: angles(aim.1, room),
             reach: head.map(|head| reach(head, aim.0)),
@@ -209,7 +240,7 @@ impl ScreenDrag {
     /// within the screen's range. (The push stops growing at a limit, so
     /// pushing on does not have to be undone first.)
     fn distance(&mut self, base: f32) -> f32 {
-        let (near, far) = (*SCREEN_DISTANCE.start(), *SCREEN_DISTANCE.end());
+        let (near, far) = self.limits.distance;
         self.gain = self.gain.clamp(near / base, far / base);
         (base * self.gain).clamp(near, far)
     }
@@ -226,7 +257,8 @@ impl ScreenDrag {
         };
         let target = [wrap(yaw - self.start.0), pitch - self.start.1, moved];
         let [dy, dp, dz] = self.follow.step(target, DRAG_TAU, f.dt);
-        let base = pushed_distance(self.from.distance, dz, SCREEN_DISTANCE);
+        let (near, far) = self.limits.distance;
+        let base = pushed_distance(self.from.distance, dz, near..=far);
         self.now = ScreenView {
             yaw: wrap(self.from.yaw + dy),
             pitch: (self.from.pitch + dp).clamp(-90.0, 90.0),
@@ -264,7 +296,7 @@ impl ScreenDrag {
             let ratio = g.dot(self.chord) / self.grabbed;
             let [scale] = self.scale.step([ratio], DRAG_TAU, f.dt);
             let wanted = self.from.width * scale;
-            width = wanted.clamp(*WIDTH.start(), *WIDTH.end());
+            width = wanted.clamp(self.limits.width.0, self.limits.width.1);
             let at_limit = width != wanted;
             limit = at_limit && !self.limited;
             self.limited = at_limit;
@@ -322,6 +354,7 @@ mod tests {
             picture: Mat4::IDENTITY,
             view: view(),
             shape,
+            limits: Limits::floating(),
         }
     }
 
@@ -542,5 +575,45 @@ mod tests {
         // The hand lost for a moment changes nothing.
         let step = d.step(&frame(None, 0.0));
         assert_eq!(step.view.width, 0.5);
+    }
+
+    #[test]
+    fn a_docked_screen_resizes_within_its_own_range_and_is_not_pushed_away() {
+        let s = ScreenShape {
+            width: 0.3,
+            height: 0.169,
+            arc: 0.0,
+        };
+        let docked = ScreenView {
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 0.5,
+            width: 0.3,
+        };
+        let corner = Vec3::new(0.0, 0.0, -0.5) + s.point(1.0, -1.0);
+        let towards = |times: f32| aim(Vec3::new(corner.x * times, corner.y * times, corner.z));
+        let mut d = ScreenDrag::begin(Start {
+            part: Part::Resize,
+            hand: 1,
+            by: GrabBy::Trigger,
+            aim: towards(1.0),
+            room: Quat::IDENTITY,
+            head: Some(Vec3::ZERO),
+            picture: Mat4::IDENTITY,
+            view: docked,
+            shape: s,
+            limits: Limits::docked((0.12, 0.8), 0.5),
+        });
+        // Half as far again out: half as wide again, no nearer or further,
+        // even with the stick pushed (its depth is the eye's, not the screen's).
+        let step = hold(&mut d, towards(1.5), 1.0, 1.0);
+        assert!(near(step.view.width, 0.45, 0.01), "{:?}", step.view);
+        assert_eq!(step.view.distance, 0.5);
+        // Far out and right in: its own widest and narrowest, not the floating
+        // screen's.
+        let step = hold(&mut d, towards(20.0), 0.0, 3.0);
+        assert_eq!(step.view.width, 0.8);
+        let step = hold(&mut d, towards(0.01), 0.0, 3.0);
+        assert_eq!(step.view.width, 0.12);
     }
 }
