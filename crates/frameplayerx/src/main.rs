@@ -527,6 +527,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     }
     let mut renderer = Renderer::new(gpu.clone(), session.format)?;
     fp_media::set_hevc_10bit_hardware(renderer.shows_q10c());
+    fp_media::set_shared_frames(renderer.reads_decoder_buffers());
     let mut app = make_app()?;
     app.set_about(vec![
         ("OpenXR runtime".into(), ctx.runtime.clone()),
@@ -571,6 +572,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     // Render-thread time per frame (after xrWaitFrame), logged every 10 s:
     // over ~9 ms the compositor starts synthesising frames.
     let mut frame_ms: Vec<f32> = Vec::new();
+    let mut gpu_ms = perf::GpuWindow::default();
     let mut last_frame_ms = None;
     let mut timing_since = Instant::now();
     let layers = session.supports_quad_layers() && !switches.ui_in_eyes;
@@ -629,6 +631,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         let dt = last.elapsed().as_secs_f32().min(0.1);
         last = Instant::now();
         renderer.begin_frame()?;
+        gpu_ms.push(renderer.gpu_times());
         let out = app.frame(
             &mut renderer,
             FrameInput {
@@ -716,10 +719,17 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                 at(1.0),
                 frame_ms.len()
             );
+            if let Some(line) = gpu_ms.take_line() {
+                log::info!("{line}");
+            }
             if let Some(pb) = &app.playback {
                 let st = pb.player.stats();
+                let hdr = renderer
+                    .hdr_scene()
+                    .map(|(t, peak)| format!(", {t:?} scene peak {peak:.0} nits"))
+                    .unwrap_or_default();
                 log::info!(
-                    "video {} ({}): {} shown, {} dropped, {} stalls, {} queued",
+                    "video {} ({}): {} shown, {} dropped, {} stalls, {} queued{hdr}",
                     st.video_decoder,
                     if st.hardware { "hardware" } else { "software" },
                     st.frames_shown,
