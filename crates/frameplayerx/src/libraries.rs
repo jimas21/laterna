@@ -23,7 +23,7 @@ pub fn config_in(
     path: &Path,
 ) -> Result<LibraryConfig, String> {
     if !path.is_absolute() {
-        return Err("Enter the folder's full path".into());
+        return Err(tr!("library-error-full-path").into());
     }
     let path: PathBuf = path.components().collect();
     let removable = Path::new(volume::REMOVABLE_ROOT);

@@ -276,7 +276,7 @@ pub fn builtin_sources() -> Vec<SourceConfig> {
     // Always offered, so a card inserted later shows up without a restart.
     out.push(SourceConfig::Local(fp_sources::LocalConfig {
         id: REMOVABLE_SOURCE.into(),
-        name: "microSD and USB drives".into(),
+        name: tr!("sources-removable").into(),
         root: PathBuf::from(REMOVABLE_ROOT),
     }));
     out
