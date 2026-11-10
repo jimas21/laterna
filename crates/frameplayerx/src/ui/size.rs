@@ -83,8 +83,12 @@ pub fn apply(
         }
         None => {
             let width = fit(size.degrees(), view.screen_distance);
-            let changed = view.screen_width != width;
-            view.screen_width = width;
+            // The default width is the Cinema one to two decimals: no change.
+            let changed = ScreenSize::of(view.screen_width, view.screen_distance) != Some(size)
+                || (view.screen_width - width).abs() > 0.05;
+            if changed {
+                view.screen_width = width;
+            }
             changed
         }
     }
