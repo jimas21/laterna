@@ -252,6 +252,30 @@ for now: they are copied by hand, and nothing downloads or signs them yet.
   place builder's worker thread; `env_baked` uploads the textures; the shader
   is `env_baked.wgsl`.
 
+### Shipping a pack
+
+The Blender exporter writes a pack as PNGs (format 1, about 70 MB for the
+Cinema). To ship one it is turned into format 2, ASTC texture files, about
+13 MB:
+
+    tools/pack-encode.py SRC_PACK OUT_PACK --zip RELEASE_DIR
+
+It needs Python 3 with Pillow and numpy, and `astcenc` 5.x. The defaults are
+4096 pixels at ASTC 10x10 for the house and dark pictures and 2048 at 12x12 for
+the eight screen pictures; `--size`, `--basis-size`, `--block`,
+`--basis-block` and `--preset` change them. Mip levels are made in linear
+light. The tool prints each texture's size, block, megabytes and PSNR, checks
+the KTX2 files it wrote, and with `--zip` writes `<id>-<version>.zip` and prints
+its sha256.
+
+The zip is uploaded as a release asset of the public `jimas21/laterna-places`
+repository, and one line in `packaging/places.lock` pins it: the pack id, the
+asset's https url and the zip's sha256. CI runs `tools/fetch-places.sh`, which
+downloads each pinned pack, refuses a wrong sha256 or any file outside
+`<id>/`, and unpacks it; `tools/package.sh` then bundles the packs into
+`places/` in the install archive and prints which ones and how large. With no
+lines in the lock file nothing is bundled.
+
 The Studio is not in the picker for now. Its code and a stored choice of it
 still work.
 
