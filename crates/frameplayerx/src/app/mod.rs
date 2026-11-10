@@ -474,7 +474,7 @@ impl App {
         match &self.playback {
             Some(p) => format!(
                 "{} playing={} state={:?} pos={:.1}/{:.1} vol={:.2} zoom={:.2} yaw={:.1} pitch={:.1} \
-                 queue={}/{} paused={} width={:.2} distance={:.2} curvature={:.2} chrome={} {ui}",
+                 queue={}/{} paused={} width={:.2} distance={:.2} curvature={:.2} chrome={} {} {ui}",
                 p.title,
                 p.transcoding.as_ref().map_or("file", |t| t.label.as_str()),
                 p.player.state(),
@@ -490,7 +490,8 @@ impl App {
                 p.settings.screen_width,
                 p.settings.screen_distance,
                 p.settings.screen_curvature,
-                self.window_controls_status()
+                self.window_controls_status(),
+                self.dock_status()
             ),
             None => format!("no video, screen={:?} {ui}", self.ui.screen),
         }

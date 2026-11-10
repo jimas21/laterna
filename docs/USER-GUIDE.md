@@ -886,6 +886,23 @@ Choose a video in the browse panel and it plays on the screen. Press the key
 again, **Back to video**, Back or the menu button to put the screen and the
 panel back where they were. Closing the video ends it too. It is never saved.
 
+To hold the screen in your hand, open the adjust panel, go to Position, and
+under Screen press **Dock to a controller**: Left hand or Right hand. A small
+screen (30 cm wide) floats above that controller, tilted back towards your
+face, and goes where your hand goes. The control bar stays in front of you.
+Its bar and handle come with it: point with your other hand and hold the
+trigger on the bar to tear the screen off into the room again, where you let
+go; hold the handle to make it bigger or smaller (12 to 80 cm), or use the
+left grip and thumbstick as for any screen. The big screen's size and place
+are not changed, so **Undock** puts it back as it was. If the controller stops
+being tracked (your other hand covers it, say), the screen waits where it was
+for a second, then shrinks away, and comes back when the controller does.
+Docking is for a flat screen outside a room (Cinema): it waits while a room is
+shown. While docked, Screen follows you is paused and grip + trigger does not
+drag the picture. A docked picture is drawn in the same pass as the rest of the
+view, so it can look less steady than the floating one when you turn your head
+fast; if it does, undock.
+
 The same grip also moves them nearer or further: with a grip held on a panel
 (the browse panel, control bar, adjust panel or performance overlay), move
 your hand towards your head to bring it closer, or away from it to push it

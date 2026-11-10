@@ -404,6 +404,11 @@ adjust-resolution = Resolution
 adjust-placement = Screen and panels
 adjust-placement-desc = Where a flat screen, the control bar, this panel, the browse panel and the performance overlay start.
 adjust-put-back = Put back
+adjust-dock = Dock to a controller
+adjust-dock-desc = A small screen held above the controller, which goes where your hand goes. Hold the trigger on the bar under it to tear it off into the room again.
+adjust-dock-left = Left hand
+adjust-dock-right = Right hand
+adjust-undock = Undock
 # Turning left or right.
 adjust-yaw = Yaw
 # Tilting up or down.

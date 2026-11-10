@@ -44,6 +44,8 @@
 //! | `place ID` | choose a place as the picker's chips do: `cinema`, `studio`, `void` (Plain) or `room` (Your room) |
 //! | `seat N` | sit in the chosen place's seat N (a number from 0, or `front`, `middle`, `back`) |
 //! | `house LEVEL` / `house auto` | hold the house lights at LEVEL (0 dark to 1 full), or let playback dim and raise them again |
+//! | `hand X Y Z` / `hand off` | put the left hand (it points at nothing) X right, Y up and Z ahead of the head, metres, or stop tracking it |
+//! | `dock left` / `dock right` / `dock off` | dock the flat screen to a controller (the right is the one that points, so use `left` with `hand`), or put it back |
 //! | `panel PANEL NAME` | save a panel's image flat, pixel for pixel, as OUT_DIR/NAME.png |
 
 use crate::app::{App, FrameInput};
@@ -68,6 +70,8 @@ struct Sim {
     size: u32,
     head: Quat,
     hand: Hand,
+    /// The left hand: it points at nothing, and is where a screen docks to.
+    left: Hand,
     start: Instant,
     last: Instant,
     frames: u64,
@@ -101,7 +105,7 @@ impl Sim {
         self.last = Instant::now();
         self.renderer.begin_frame()?;
         self.gpu_ms.push(self.renderer.gpu_times());
-        let hands = [Hand::default(), self.hand];
+        let hands = [self.left, self.hand];
         let head = Some((self.head_pos(), self.head));
         let proj = projection(Fov::symmetric(100.0), 0.05, 200.0);
         let out = self.app.frame(
@@ -600,6 +604,27 @@ impl Sim {
                     return Err(format!("{got} dashboard requests, expected {want}").into());
                 }
             }
+            Some("hand") => {
+                self.left.aim = match parts.get(1).copied() {
+                    Some("off") => None,
+                    _ => Some((
+                        self.head_pos() + Vec3::new(num(1)?, num(2)?, -num(3)?),
+                        Quat::IDENTITY,
+                    )),
+                };
+                self.left.active = self.left.aim.is_some();
+                self.run_frames(2)?;
+            }
+            Some("dock") => {
+                let action = match parts.get(1).copied() {
+                    Some("left") => crate::ui::Action::DockScreen(0),
+                    Some("right") => crate::ui::Action::DockScreen(1),
+                    Some("off") => crate::ui::Action::Undock,
+                    _ => return Err("dock needs left, right or off".into()),
+                };
+                self.app.apply(action);
+                self.run_frames(3)?;
+            }
             Some("aim") => {
                 self.hand.aim = Some((self.hand_pos(), dir_quat(num(1)?, num(2)?)));
             }
@@ -1016,6 +1041,7 @@ pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
             aim: None,
             ..Default::default()
         },
+        left: Hand::default(),
         start: Instant::now(),
         last: Instant::now(),
         frames: 0,

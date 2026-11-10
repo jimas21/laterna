@@ -91,7 +91,9 @@ impl App {
             .playback
             .as_ref()
             .is_some_and(|p| p.format.projection == Projection::Flat);
-        let under = if flat {
+        // A docked screen is in your hand: the bar stays in the room, as it does
+        // for a 180°/360° video.
+        let under = if flat && self.docked().is_none() {
             rotation(self.picture_anchor(anchor))
         } else {
             room
@@ -207,6 +209,7 @@ impl App {
         }
         let anchor = self.anchor(&input);
         let eye = input.head.map(|h| h.0).unwrap_or(anchor.w_axis.truncate());
+        self.update_dock(&input);
         self.update_visibility();
         let kb_target = self.keyboard_target();
         self.panels[KEYBOARD].visible = kb_target.is_some();
@@ -329,7 +332,9 @@ impl App {
             || self.drag_start.is_some()
             || self.chrome.dragging()
             || self.panel_chrome.resizing();
+        // A docked screen is where your hand is, and the panels stay in the room.
         follows_head(self.settings.follow, self.flat_or_none(), dragging)
+            && self.docked().is_none()
             && self.active_place(passthrough_available).is_none()
     }
 
@@ -402,7 +407,8 @@ impl App {
         match &self.playback {
             Some(p) => {
                 let s = p.shown_settings(&self.settings.default_view);
-                let flat = p.format.projection == Projection::Flat;
+                // Docked, the screen is in your hand: the bar is in the room.
+                let flat = p.format.projection == Projection::Flat && self.docked().is_none();
                 player_frame(anchor, flat, [s.yaw, s.pitch], self.offsets.bar)
             }
             None => player_frame(anchor, false, [0.0; 2], self.offsets.bar),
@@ -699,6 +705,7 @@ impl App {
         let passthrough_available = input.passthrough_available;
         let (places_enabled, place_shown) = (self.places_enabled, self.place_shown);
         let dashboard = input.dashboard;
+        let docked = self.docked_hand();
         for idx in [MAIN, BAR, ADJUST, TRACKS, TOAST] {
             if !self.panels[idx].needs_paint() {
                 continue;
@@ -725,6 +732,7 @@ impl App {
                 places_enabled,
                 place_shown,
                 dashboard,
+                docked,
                 devices: &devices,
             };
             let r = panels[idx].paint(renderer, input.time, |ctx| match idx {
@@ -809,11 +817,18 @@ impl App {
             video.screen_pose = place(player, 0.0, s.screen_distance, 0.0, 0.0);
             video.anchor = anchor_rot;
             // A room has its own screen: its size, its curve and where it
-            // hangs, whatever the picture's own screen settings say.
+            // hangs, whatever the picture's own screen settings say. A docked
+            // one is small, flat and in your hand (the floating screen's
+            // settings are left alone for when it is undocked).
+            let docked = self.docked_screen().filter(|_| room.is_none());
             if let Some(r) = room {
                 video.screen_pose = r.screen_pose;
                 video.screen_fit = Some(r.fit);
                 video.settings.screen_curvature = r.curvature;
+            } else if let Some((pose, width)) = docked {
+                video.screen_pose = pose;
+                video.settings.screen_width = width;
+                video.settings.screen_curvature = 0.0;
             }
             if let Some((_, rot)) = input.head {
                 let rel = anchor_rot.inverse() * rot;
@@ -845,11 +860,19 @@ impl App {
         if p.format.projection != Projection::Flat || self.in_room() {
             return None;
         }
-        let shown = p.shown_settings(&self.settings.default_view);
+        let mut shown = p.shown_settings(&self.settings.default_view);
+        // A docked screen is as wide as it was docked, flat, and the eye is
+        // taken to be a fixed distance from it.
+        let mut distance = shown.screen_distance;
+        if let Some(d) = self.docked() {
+            shown.screen_width = d.width;
+            shown.screen_curvature = 0.0;
+            distance = chrome::dock::EYE;
+        }
         let mut video = VideoParams::default();
         describe_video(&mut video, p, shown);
         let shape = ScreenShape::of(&video, self.last_frame_size);
-        Some((shape, shown.screen_distance))
+        Some((shape, distance))
     }
 
     /// What the compositor draws: panels back to front, then pointers,
@@ -968,13 +991,32 @@ impl App {
             .collect();
         self.subs.visible = !cues.is_empty();
         let aspect = SUBTITLE_POINTS[1] / SUBTITLE_POINTS[0];
-        let d = room
-            .map_or(s.subtitle_distance, |r| r.distance)
-            .clamp(0.5, 20.0);
+        // A screen in your hand gets its subtitles under it (a room's own
+        // screen takes precedence).
+        let docked = self
+            .docked_screen()
+            .map(|(pose, _)| pose)
+            .filter(|_| room.is_none());
+        let d = match docked {
+            // Held in your hand, the eye is taken to be this far from it.
+            Some(_) if room.is_none() => chrome::dock::EYE,
+            _ => room
+                .map_or(s.subtitle_distance, |r| r.distance)
+                .clamp(0.5, 20.0),
+        };
         if let Some(r) = room {
             let spot = places::subtitle_spot(r, d, aspect);
             self.subs.size = spot.size;
             self.subs.pose = spot.pose;
+        } else if let Some(screen) = docked {
+            // Under the little screen, a little wider than it, in its turn.
+            let (wide, high) = self
+                .screen_geometry()
+                .map_or((chrome::dock::WIDTH, 0.17), |(sh, _)| (sh.width, sh.height));
+            let w = wide * 1.6;
+            self.subs.size = Vec2::new(w, w * aspect);
+            let drop = high / 2.0 + w * aspect / 2.0 + 0.01;
+            self.subs.pose = screen * Mat4::from_translation(Vec3::new(0.0, -drop, 0.004));
         } else {
             let w = 0.9 * d;
             self.subs.size = Vec2::new(w, w * aspect);
