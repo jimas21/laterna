@@ -173,6 +173,18 @@ impl Layout {
     }
 }
 
+/// How far under a sky place's screen its floor lies at least, metres: the
+/// picture is never closer to the floor than this.
+pub const SCREEN_FLOOR_GAP: f32 = 0.15;
+
+/// The height of a sky place's floor when the screen's bottom edge is at
+/// `screen_bottom_y` (the same space as `floor_y`, the floor the place is
+/// built with): the built floor, or lower when a big screen would reach it,
+/// so the picture never sinks into the floor.
+pub fn sky_floor(floor_y: f32, screen_bottom_y: f32) -> f32 {
+    floor_y.min(screen_bottom_y - SCREEN_FLOOR_GAP)
+}
+
 /// One vertex of a place's mesh. 44 bytes, no padding.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -389,6 +401,21 @@ mod tests {
         let back = layout.seat_index(SeatName::Back).unwrap();
         assert_eq!(layout.seat(back).name, SeatName::Back);
         assert_eq!(layout.seat_index(SeatName::Couch), None);
+    }
+
+    #[test]
+    fn sky_floor_drops_under_a_big_screen() {
+        let built = Place::Studio.layout().floor_y;
+        // A screen well above the floor leaves it where it was built.
+        assert_eq!(sky_floor(built, -0.4), built);
+        assert_eq!(sky_floor(built, built + 1.0), built);
+        // One whose bottom edge is lower, or within the gap, takes it down
+        // to the gap under the edge.
+        let low = sky_floor(built, -3.0);
+        assert!((low - (-3.0 - SCREEN_FLOOR_GAP)).abs() < 1e-6);
+        let close = sky_floor(built, built + 0.05);
+        assert!((close - (built + 0.05 - SCREEN_FLOOR_GAP)).abs() < 1e-6);
+        assert!(close < built);
     }
 
     #[test]

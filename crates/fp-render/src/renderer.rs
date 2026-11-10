@@ -6,6 +6,8 @@
 //! garbage list and are destroyed when the slot comes round again, by which
 //! time no submitted frame can still read them.
 
+use crate::env::{Place, PlaceData, PlaceKind, sky_floor};
+use crate::env_pass::{EnvInput, EnvPass};
 use crate::gpu::Gpu;
 use crate::hdr::PeakDetector;
 use crate::mem::{self, Buffer, Image};
@@ -19,6 +21,7 @@ use crate::video::VideoPlanes;
 use crate::{Result, VkContext};
 use ash::vk;
 use egui::epaint::{ClippedPrimitive, Primitive, TextureId, textures::TexturesDelta};
+use fp_core::format::Projection;
 use fp_media::VideoFrame;
 use glam::{Mat4, Vec2, Vec3};
 use gpu_allocator::MemoryLocation;
@@ -198,6 +201,12 @@ pub struct Renderer {
     /// default peak.
     peak: Option<PeakPass>,
     hdr_peak: PeakDetector,
+    /// Draws the place around the picture. Made the first time a frame asks
+    /// for a place, so nobody who never picks one pays for it.
+    env: Option<EnvPass>,
+    /// Making the place pass or loading a place failed: places aren't shown
+    /// (the picture is, as without one), and it is not tried again.
+    env_failed: bool,
     /// Times each frame's parts on the GPU, where it has timestamps.
     timer: Option<FrameTimer>,
     /// The parts of the last frame the GPU finished.
@@ -411,6 +420,8 @@ impl Renderer {
                     .inspect_err(|e| log::warn!("HDR scenes aren't measured: {e}"))
                     .ok(),
                 hdr_peak: PeakDetector::default(),
+                env: None,
+                env_failed: false,
                 timer: FrameTimer::new(&gpu, SLOTS),
                 gpu_times: None,
                 imports: Default::default(),
@@ -1520,6 +1531,7 @@ impl Renderer {
             _ => None,
         }
         .is_some();
+        let env_on = self.prepare_env(slot_idx, video, &p, eyes);
         // Quad vertices: two triangles per quad.
         let mut verts: Vec<QuadVertex> = Vec::with_capacity(quads.len() * 6);
         let mut sets = Vec::with_capacity(quads.len());
@@ -1639,6 +1651,10 @@ impl Renderer {
                     }],
                 );
                 d.cmd_set_scissor(cmd, 0, &[area]);
+                // The place first, with depth: the picture is drawn over it.
+                if let Some(env) = self.env.as_ref().filter(|_| env_on) {
+                    env.record(gpu, cmd, slot_idx, eye as u32);
+                }
                 let scene_pl = match self.tp10_eyes.as_ref().filter(|_| tp10) {
                     Some(t) => {
                         t.bind(gpu, cmd, slot_idx);
@@ -1712,6 +1728,100 @@ impl Renderer {
             }
         }
         Ok(())
+    }
+
+    /// Makes the place pass the first time it is wanted. False when places
+    /// can't be shown (it failed to start, now or before).
+    fn ensure_env(&mut self) -> bool {
+        if self.env.is_none() && !self.env_failed {
+            match EnvPass::new(&self.gpu, self.color_format, self.depth_format, SLOTS) {
+                Ok(pass) => self.env = Some(pass),
+                Err(e) => {
+                    log::warn!("places aren't shown: {e}");
+                    self.env_failed = true;
+                }
+            }
+        }
+        self.env.is_some()
+    }
+
+    /// Gets the place this frame draws around the picture ready, if it draws
+    /// one: loads its meshes when it is a new one, and writes the slot's
+    /// uniform. False when the eye passes draw no place. A spherical or
+    /// fisheye picture fills the view and hides it.
+    fn prepare_env(
+        &mut self,
+        slot_idx: usize,
+        video: &VideoParams,
+        p: &SceneParams,
+        eyes: &[EyeView; 2],
+    ) -> bool {
+        let flat = video.format.projection == Projection::Flat;
+        let Some(frame) = video.env.filter(|_| flat) else {
+            return false;
+        };
+        if !self.ensure_env() {
+            return false;
+        }
+        let Some(env) = self.env.as_mut() else {
+            return false;
+        };
+        let garbage = &mut self.slots[slot_idx].garbage_buffers;
+        if let Err(e) = env.prepare(&self.gpu, frame.place, garbage) {
+            log::warn!("places aren't shown: {e}");
+            self.env_failed = true;
+            return false;
+        }
+        let Some((kind, built_floor)) = env.floor() else {
+            return false;
+        };
+        let room = frame.room_to_world;
+        let to_room = room.inverse();
+        let room_view_proj = eyes.map(|e| e.proj * e.view * room);
+        let eye_pos = eyes.map(|e| {
+            let in_world = e.view.inverse().transform_point3(Vec3::ZERO);
+            to_room.transform_point3(in_world)
+        });
+        // A sky place's floor sinks under a big screen. (A room has its
+        // own screen and its floor stays.)
+        let mut floor_drop = 0.0;
+        if kind == PlaceKind::Sky && p.screen.w >= 0.5 {
+            let edge = Vec3::new(0.0, -0.5 * p.screen.y, 0.0);
+            let bottom = to_room.transform_point3(video.screen_pose.transform_point3(edge));
+            floor_drop = sky_floor(built_floor, bottom.y) - built_floor;
+        }
+        let input = EnvInput {
+            room_view_proj,
+            eye_pos,
+            house: frame.house,
+            floor_drop,
+            time: frame.time,
+        };
+        match env.uniform(&input) {
+            Some(u) => {
+                env.write(slot_idx, &u);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Loads `data` as the meshes, palette and lighting of `place` instead of
+    /// what `place` builds: for tests that draw geometry of their own. A
+    /// frame whose `EnvFrame::place` is `place` then shows it.
+    #[doc(hidden)]
+    pub fn set_place_data(&mut self, place: Place, data: PlaceData) {
+        if !self.ensure_env() {
+            return;
+        }
+        let Some(env) = self.env.as_mut() else {
+            return;
+        };
+        let garbage = &mut self.slots[self.current].garbage_buffers;
+        if let Err(e) = env.load(&self.gpu, place, data, garbage) {
+            log::warn!("places aren't shown: {e}");
+            self.env_failed = true;
+        }
     }
 
     /// The depth image both eyes render with, and its view: made, or made
@@ -2148,6 +2258,9 @@ impl Drop for Renderer {
             }
             if let Some(mut p) = self.peak.take() {
                 p.destroy(&gpu);
+            }
+            if let Some(mut e) = self.env.take() {
+                e.destroy(&gpu);
             }
             if let Some(mut t) = self.timer.take() {
                 t.destroy(&gpu);
