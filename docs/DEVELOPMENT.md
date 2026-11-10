@@ -450,6 +450,40 @@ printf 'open clip_8k.mp4\nwait-playing 30\nwait 2\ngpu\nwait 10\ngpu\n' > /tmp/g
 frameplayerx --preview /tmp/shots --size 2160 --script /tmp/gpu.fps
 ```
 
+### The test card
+
+To judge sharpness and calm objectively, FramePlayerX can make its own test
+card: a zone plate in the middle (a chirp from flat to the finest detail the
+picture holds, at the edges of its square), line wedges of 1 px and 2 px in
+three directions, 1-texel and 2-texel checkers beside a flat grey of what a
+checker should average to, 32 grey steps along the top, colour bars and a
+0-10 % dark ramp along the bottom, and a 1 px white border, corner marks and
+a cross. It is pure Rust (`fp_render::testcard`: `card`, `checker`,
+`zone_plate`, `ramp` and `box_mips`), so tests and the headset draw the same
+pixels.
+
+- `FRAMEPLAYERX_TESTCARD=1080` or `2160` (in the env file, see below) opens
+  the card as a picture, 1920x1080 or 3840x2160, written to
+  `~/.cache/frameplayerx/testcard-<height>p.png`, when no file is named. The
+  player's controls stay up on a one-frame picture: hide them with the Show/hide
+  controls button.
+- `FRAMEPLAYERX_TESTCARD_LAYER=plain` or `mips` also hangs the same card as a
+  compositor layer (a quad layer, the size of the default screen) to the
+  right of where you face once the app has focus, beside the one in the eyes,
+  to compare the two while turning your head slowly. `plain` is a swapchain
+  of one level; `mips` has the whole chain from `box_mips`, and the log says
+  how many levels the runtime gave it (`quad layer 102: ... mip levels`;
+  a runtime that refuses mips gets one level and a warning).
+- In `--preview`, `testcard 2160` makes and opens the card and `hide-controls`
+  hides the player's panels. `tools/ui-preview.sh` uses them for the
+  `testcard-1440.png` and `testcard-2160.png` shots (the card through eyes of
+  those sizes) and keeps the card itself as `testcard-source-2160p.png`.
+- `tools/make-testcards.sh OUT_DIR` makes four 30 s test clips on this
+  computer with ffmpeg, from its own generated sources: the card as 8-bit
+  H.264 1080p and 10-bit HEVC 2160p (the 8-bit hardware path and the 10-bit
+  one), the card panning 2 px a frame at 24 fps (cadence), and a dark ramp in
+  10-bit (banding). Nothing is copied anywhere; the clips are never committed.
+
 ## On the headset
 
 ```bash
@@ -485,6 +519,8 @@ Steam can't pass environment variables to an app, so the launcher reads
 | `FRAMEPLAYERX_ZERO_COPY` | | `0` copies hardware-decoded frames out of the decoder's buffers instead of reading them there, as before; for comparing the two |
 | `FRAMEPLAYERX_TP10_EYES` | | `0` converts SDR 10-bit frames read in place into P010 planes instead of sampling them in the eye passes, as before; for comparing the two |
 | `FRAMEPLAYERX_QUALITY` | | Picture-quality features to turn off, comma-separated: `nodither` (noise against banding in dark gradients), `nosupersample` (four taps where a flat picture is minified), `noedgeaa` (antialiased screen edges). All are on by default; for comparing a look with and without on one build. The start-up log's `A/B switches` line names what is off |
+| `FRAMEPLAYERX_TESTCARD` | | `1080` or `2160` opens the generated test card of that height instead of the library (when no file is named); see [The test card](#the-test-card) |
+| `FRAMEPLAYERX_TESTCARD_LAYER` | | `plain` or `mips` also shows the card as a compositor layer beside it, with one mip level or the whole chain, to compare how the two are filtered |
 
 ### Steam Frame notes
 

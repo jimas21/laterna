@@ -1796,53 +1796,91 @@ impl Renderer {
     /// with `rgba` and leaves it in COLOR_ATTACHMENT_OPTIMAL. Waits for the
     /// GPU; for small, static pictures.
     pub fn upload_rgba(&self, dst: vk::Image, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+        self.upload_rgba_levels(dst, &[(width, height, rgba)])
+    }
+
+    /// Fills the first `levels.len()` mip levels of `dst` (RGBA8, e.g. an
+    /// OpenXR swapchain image made with that many mips) with `levels`, each
+    /// `(width, height, rgba)` and sized as its level of the image, and
+    /// leaves them in COLOR_ATTACHMENT_OPTIMAL. A level the image has beyond
+    /// those is left untouched. Waits for the GPU; for small, static
+    /// pictures.
+    pub fn upload_rgba_levels(&self, dst: vk::Image, levels: &[(u32, u32, &[u8])]) -> Result<()> {
+        if levels.is_empty() {
+            return Err(crate::Error::Unsupported("no levels to upload".into()));
+        }
+        let mut offsets = Vec::with_capacity(levels.len());
+        let mut total = 0usize;
+        for &(width, height, rgba) in levels {
+            let want = width as usize * height as usize * 4;
+            if rgba.len() != want {
+                return Err(crate::Error::Unsupported(format!(
+                    "a {width}x{height} level needs {want} bytes, got {}",
+                    rgba.len()
+                )));
+            }
+            offsets.push(total);
+            total += rgba.len();
+        }
         let mut staging = Buffer::new(
             &self.gpu,
-            rgba.len() as u64,
+            total as u64,
             vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryLocation::CpuToGpu,
             "upload",
         )?;
-        staging.bytes()[..rgba.len()].copy_from_slice(rgba);
+        for (&(_, _, rgba), &at) in levels.iter().zip(&offsets) {
+            staging.bytes()[at..at + rgba.len()].copy_from_slice(rgba);
+        }
         let buf = staging.buffer;
+        let count = levels.len() as u32;
         let r = self.one_shot(|gpu, cmd| {
             mem::barrier(
                 gpu,
                 cmd,
                 dst,
-                mem::range(0, 1),
+                mem::range(0, count),
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 mem::TOP,
                 mem::TRANSFER_WRITE,
             );
-            let region = vk::BufferImageCopy::default()
-                .image_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
+            let regions: Vec<vk::BufferImageCopy> = levels
+                .iter()
+                .zip(&offsets)
+                .enumerate()
+                .map(|(level, (&(width, height, _), &at))| {
+                    vk::BufferImageCopy::default()
+                        .buffer_offset(at as u64)
+                        .image_subresource(vk::ImageSubresourceLayers {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            mip_level: level as u32,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        })
+                        .image_extent(vk::Extent3D {
+                            width,
+                            height,
+                            depth: 1,
+                        })
                 })
-                .image_extent(vk::Extent3D {
-                    width,
-                    height,
-                    depth: 1,
-                });
-            // SAFETY: recording; the buffer holds width*height texels.
+                .collect();
+            // SAFETY: recording; the buffer holds every level's texels at
+            // its region's offset, and each level is in TRANSFER_DST.
             unsafe {
                 gpu.device.cmd_copy_buffer_to_image(
                     cmd,
                     buf,
                     dst,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &[region],
+                    &regions,
                 );
             };
             mem::barrier(
                 gpu,
                 cmd,
                 dst,
-                mem::range(0, 1),
+                mem::range(0, count),
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 mem::TRANSFER_WRITE,
