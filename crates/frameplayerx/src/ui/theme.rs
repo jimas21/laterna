@@ -29,12 +29,18 @@ pub const OK: Color32 = Color32::from_rgb(92, 196, 110);
 pub const WARN: Color32 = Color32::from_rgb(242, 182, 64);
 pub const ERROR: Color32 = Color32::from_rgb(242, 88, 94);
 
-// The logo's colours (assets/logo.svg): the left eye and the right, and
-// its square, top to bottom.
-pub const LOGO_BLUE: Color32 = Color32::from_rgb(92, 160, 255);
-pub const LOGO_VIOLET: Color32 = Color32::from_rgb(170, 110, 255);
-pub const LOGO_SQUARE_TOP: Color32 = Color32::from_rgb(20, 26, 51);
-pub const LOGO_SQUARE_BOTTOM: Color32 = Color32::from_rgb(43, 26, 94);
+// The logo's colours (assets/logo.svg): its soot square top to bottom, the
+// cool afterimage, the beam, the warm disc, the play notch cut from it and
+// the brass lens. The two translucent ones are premultiplied.
+pub const LOGO_SQUARE_TOP: Color32 = Color32::from_rgb(31, 24, 18);
+pub const LOGO_SQUARE_BOTTOM: Color32 = Color32::from_rgb(14, 11, 8);
+pub const LOGO_AFTERIMAGE: Color32 = Color32::from_rgba_premultiplied(19, 55, 60, 77);
+pub const LOGO_BEAM: Color32 = Color32::from_rgba_premultiplied(102, 87, 64, 102);
+pub const LOGO_DISC: Color32 = Color32::from_rgb(255, 203, 128);
+pub const LOGO_NOTCH: Color32 = Color32::from_rgb(26, 20, 16);
+pub const LOGO_LENS: Color32 = Color32::from_rgb(42, 30, 20);
+pub const LOGO_BRASS: Color32 = Color32::from_rgb(184, 137, 74);
+pub const LOGO_LENS_CENTRE: Color32 = Color32::from_rgb(255, 226, 170);
 
 /// Text weights; each is Inter with Phosphor icons as a fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

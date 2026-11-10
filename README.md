@@ -22,7 +22,7 @@ Lineage: [FramePlayer](https://github.com/yellkell/frameplayer) (yellkell) → [
 
 - **Sharper picture**: antialiased screen edges and supersampling when the picture is minified, so distant or tilted screens stop shimmering
 - **Pauses when you take the headset off**, and stays paused until you press play
-- **Earbuds** (in progress): AirPods battery, noise control and pause-when-a-bud-comes-out through the separate open-source MagicPods programs, installed from Settings. They are Steam Frame forks of [MagicPodsCore](https://github.com/jimas21/MagicPodsCore) and [MagicPodsLinux](https://github.com/jimas21/MagicPodsLinux)
+- **Earbuds** (in progress): AirPods battery, noise control and pause-when-a-bud-comes-out through [Tragus](https://github.com/jimas21/tragus), a separate open-source program installed from Settings
 - **Moving the screen closer or further**, and smoother dragging (in progress)
 - **Environments** (in progress): a cinema and other places to watch in, built from original designs and CC0 assets
 - **Plex** (in progress): your server's own rows and artwork, Plex Home users, and every server linked once
@@ -112,7 +112,7 @@ To update later, open **Settings › Updates** and press **Download and install*
 
 Laterna comes in English, German, Spanish, French, Japanese and Simplified Chinese. All but English started as machine drafts, so some wording is likely to be wrong or awkward, and corrections are welcome.
 
-- **Correct or translate** on [Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/), Codeberg's Weblate. No Git needed: sign in with a Codeberg account, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes land in the upstream Laterna repository and reach this fork when it merges upstream.
+- **Correct or translate** on [Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/), Codeberg's Weblate. No Git needed: sign in with a Codeberg account, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes land in the upstream FramePlayerX repository and reach Laterna when it merges upstream.
 - **Report a mistake** without translating: open a [Translation problem](https://github.com/jimas21/laterna/issues/new?template=translation.yml) issue with the language, where it shows and the wording you'd expect.
 - **Add a language**: start it on Codeberg Translate, or ask in an issue. Right-to-left languages (Arabic, Hebrew) and scripts that need shaping (Thai, Hindi and other Indic scripts) can't be shown in the interface yet.
 
