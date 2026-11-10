@@ -472,7 +472,9 @@ sbs player-scene
 # here. The bar's film button, then the cinema with the house lights down and
 # up, from above and from the front seat, then the studio. The lights are held
 # at a level, since the short clip ends and would raise them; Plain and the
-# detected format again after, so every later shot is unchanged.
+# detected format again after, so every later shot is unchanged. The room takes
+# the picture's light after two frames and eases to it over a second, so the
+# first shot of a place waits that long (in real time) before it is taken.
 flat
 frames 6
 panel bar player-bar-flat
@@ -481,7 +483,7 @@ frames 10
 panel bar player-bar-place-tip
 place cinema
 house 0
-frames 8
+wait 1
 sbs place-cinema
 house 1
 frames 2
@@ -495,7 +497,7 @@ frames 2
 sbs place-cinema-front
 seat 1
 place studio
-frames 8
+wait 1
 sbs place-studio
 house auto
 place void

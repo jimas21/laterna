@@ -194,6 +194,19 @@ What shipped first, and where it differs from the sketch above.
   video sampled in place, and only the scene shader can read all three. A
   second entry point in it renders a tiny grid of the picture's colours
   through the same colour chain, and the CPU smooths it.
+- **The room's light is worked out per vertex, not per pixel.** The 4x2 grid
+  of colours (`fs_glow`, `glow.rs`) comes back two frames late, is eased on
+  the CPU over a quarter of a second (`env/light.rs`), and lights each
+  vertex of the place from eight patches of the screen (`env.wgsl`, cosine
+  at the surface and at the screen, over distance squared, no shadows).
+  Per pixel the cost was a loop of eight patches over millions of pixels at
+  144 Hz; per vertex it is a loop over a few tens of thousands. Only a glossy
+  floor (a plain material with sheen: the studio's) reflects the picture per
+  pixel, and the cinema's projector window glows with the picture's mean
+  colour. The measuring pass runs only when the frame shown, or the settings
+  its colours pass through, changed: a paused picture, or a 24 Hz film at
+  144 Hz, does not pay for it every frame. The log's GPU line gives its time
+  as `glow` (inside `eyes`).
 - **Places are string ids.** The setting is a string (`void`, `cinema`,
   `studio`), not an enum: a settings file with a value this build lacks
   would otherwise reset every setting. A place this build does not know shows
