@@ -36,9 +36,10 @@ const CLIENT_IDENTIFIER_MAX: usize = 128;
 /// What [`PlexAuthClient::switch_profile`] reports, inside [`Error::Auth`],
 /// when plex.tv refuses the PIN. Test for it with [`is_wrong_pin`].
 pub const WRONG_PIN: &str = "that Plex PIN";
-/// The status plex.tv is taken to answer a wrong PIN with. A 401 is the
-/// account's own token being dead and is never reported as a wrong PIN. Not
-/// yet confirmed against a live account (see the device check).
+/// The status plex.tv is taken to answer a wrong PIN with. Not yet confirmed
+/// against a live account (see the device check), so a 401 or 403 to a switch
+/// with a PIN is told apart by asking the account's token something cheap
+/// before it is called signed out.
 const WRONG_PIN_STATUS: u16 = 403;
 /// How a signed-out error from the account API names the account.
 const ACCOUNT_NAME: &str = "Plex";
@@ -602,10 +603,11 @@ impl PlexAuthClient {
         }
         let reply = self.send(&self.legacy_base, "POST", &address, account)?;
         match reply.status {
+            // With a PIN, plex.tv's refusal could be the PIN or the account's
+            // own token, and which status says which is not confirmed.
+            401 | WRONG_PIN_STATUS if pin.is_some() => return Err(self.refusal(account)),
             401 => return Err(Error::SignedOut(ACCOUNT_NAME.into())),
-            WRONG_PIN_STATUS if pin.is_some() || user.protected => {
-                return Err(Error::Auth(WRONG_PIN.into()));
-            }
+            WRONG_PIN_STATUS if user.protected => return Err(Error::Auth(WRONG_PIN.into())),
             _ => {}
         }
         // Not the address, which holds the PIN.
@@ -620,6 +622,17 @@ impl PlexAuthClient {
             restricted: user.restricted,
             token,
         })
+    }
+
+    /// What a refused switch with a PIN means: the account's token is asked
+    /// something cheap, and only a refusal of that is "signed out". Anything
+    /// else (the account answers, or plex.tv could not be asked again) means
+    /// the PIN was wrong.
+    fn refusal(&self, account: &PlexCredentials) -> Error {
+        match self.account(account) {
+            Err(e) if token_refused(&e) => Error::SignedOut(ACCOUNT_NAME.into()),
+            _ => Error::Auth(WRONG_PIN.into()),
+        }
     }
 
     /// Lists server resources only. Player devices commonly have null
@@ -701,6 +714,15 @@ impl PlexAuthClient {
                 })
             })
             .collect())
+    }
+}
+
+/// Whether plex.tv refused an account's token (as against an outage).
+fn token_refused(error: &Error) -> bool {
+    match error {
+        Error::Auth(_) | Error::SignedOut(_) => true,
+        Error::HttpStatus { status, .. } => matches!(status, 401 | 498),
+        _ => false,
     }
 }
 

@@ -61,27 +61,36 @@ impl App {
 
     /// What locked sources hide: their videos.
     pub(super) fn locked_hidden(&self) -> fp_library::Hidden {
-        fp_library::Hidden {
-            sources: crate::pin::locked_ids(&self.settings.source_pins, &self.ui.unlocked_sources),
-        }
+        let mut sources =
+            crate::pin::locked_ids(&self.settings.source_pins, &self.ui.unlocked_sources);
+        // Plex profiles that are not the one watching are left out as well.
+        sources.extend(crate::plex_profiles::hidden(
+            &self.services.source_configs,
+            &self.settings.plex_profiles,
+        ));
+        fp_library::Hidden { sources }
     }
 
-    /// Leaves locked sources' videos out of the library's listings (and the
-    /// remotes'); nothing changes while no source has a PIN.
+    /// Leaves locked sources' videos, and those of Plex profiles that are not
+    /// watching, out of the library's listings (and the remotes'); nothing
+    /// changes while no source has a PIN or a profile.
     pub(super) fn sync_locks(&mut self) {
-        if self.settings.source_pins.is_empty() && self.services.library.hidden().is_empty() {
+        if self.settings.source_pins.is_empty()
+            && self.services.library.hidden().is_empty()
+            && !crate::plex_profiles::any(&self.services.source_configs)
+        {
             return;
         }
         let hidden = self.locked_hidden();
         if hidden != self.services.library.hidden() {
+            // What is playing stops when its source is hidden.
+            let stops = self.playback.as_ref().is_some_and(|p| {
+                request_source(&self.services.library, &p.request)
+                    .is_some_and(|source| hidden.sources.contains(&source))
+            });
             self.services.library.set_hidden(hidden);
             self.ui.invalidate();
-            // Locking a source stops its video.
-            if self
-                .playback
-                .as_ref()
-                .is_some_and(|p| self.locked_source_of(&p.request).is_some())
-            {
+            if stops {
                 self.close_playback();
             }
         }
@@ -179,6 +188,25 @@ impl App {
             });
             return;
         }
+        // A profile that is not watching has no page: its server's page for
+        // the one that is, if it has one.
+        let source = match crate::plex_profiles::counterpart(
+            &self.services.source_configs,
+            &self.settings.plex_profiles,
+            &source,
+        ) {
+            Some(active) => active,
+            None if crate::plex_profiles::hidden(
+                &self.services.source_configs,
+                &self.settings.plex_profiles,
+            )
+            .contains(&source) =>
+            {
+                self.ui.toast(tr!("plex-profile-not-shared-here"));
+                return;
+            }
+            None => source,
+        };
         if self.source_locked(&source) {
             self.ask_pin(&source);
             return;
@@ -371,6 +399,10 @@ impl App {
     ) -> crate::services::SourcesChange {
         use std::collections::HashSet;
         let ids: HashSet<String> = new.iter().map(|c| c.id().to_string()).collect();
+        // A source that is replaced may be another profile's or server's now.
+        for id in &ids {
+            self.ui.catalog_cache.forget(id);
+        }
         let change = self.services.replace_sources(|list| {
             for cfg in new {
                 match list.iter_mut().find(|c| c.id() == cfg.id()) {
@@ -425,6 +457,7 @@ impl App {
         }
         // Its browser and saved listing were made with the old details.
         self.close_source_view(&id);
+        self.ui.catalog_cache.forget(&id);
         let _ = std::fs::remove_file(fp_sources::FeedLibrary::cache_path(&id));
         self.ui.home = None;
     }
@@ -447,6 +480,7 @@ impl App {
             self.settings.source_pins.remove(id);
             self.ui.unlocked_sources.remove(id);
             self.close_source_view(id);
+            self.ui.catalog_cache.forget(id);
             let _ = std::fs::remove_file(fp_sources::FeedLibrary::cache_path(id));
             // Its videos go with it, except what was watched or marked.
             match self.services.library.forget_unwatched(id) {

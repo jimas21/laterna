@@ -94,6 +94,19 @@ pub(super) enum Job {
         source: String,
         result: Result<Vec<(String, String)>, String>,
     },
+    /// The members of an account's Plex Home, to choose who is watching.
+    PlexProfilesListed {
+        account: String,
+        result: Result<Vec<fp_sources::plex::auth::PlexHomeUser>, ui::plex::ListError>,
+    },
+    /// Switching to a Home member ended: the profile's sources, or why not.
+    PlexProfileSwitched {
+        account: String,
+        user: fp_sources::plex::auth::PlexHomeUser,
+        /// The member is the account itself.
+        themselves: bool,
+        result: Box<Result<crate::plex_profiles::Siblings, crate::plex_profiles::SwitchError>>,
+    },
     /// The accounts older Plex sources belong to, by pairing identifier.
     PlexAccounts(Vec<(String, fp_sources::plex::auth::PlexAccount)>),
     /// The last run crashed: the report the user may send.
@@ -565,6 +578,15 @@ impl App {
             }
             Job::CatalogLibraries { source, result } => self.libraries_listed(&source, result),
             Job::PlexAccounts(accounts) => self.plex_accounts_named(accounts),
+            Job::PlexProfilesListed { account, result } => {
+                self.plex_profiles_listed(&account, result);
+            }
+            Job::PlexProfileSwitched {
+                account,
+                user,
+                themselves,
+                result,
+            } => self.plex_profile_switched(&account, user, themselves, *result),
             Job::CrashReport(report) => {
                 self.ui.crash = Some(ui::crash::CrashPrompt::new(*report));
                 self.show_browser = true;

@@ -266,7 +266,7 @@ Videos of a source locked with a PIN are left out until it is unlocked.
 | Library | **Videos**: every video in its folder, with thumbnails, search, format filters and sorting (newest, title, length, rating, shuffle). **Folders**: its folder as folders. **Scan now** looks for new and removed videos |
 | Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show), a *People* row of the cast and crew whose names match (tap one to see what they are in), and a *Tagged* row of what carries a tag with your words in it; poster grids searched, sorted (title, date added, release date, rating, length, last watched, shuffle) and filtered by the server: unwatched, in progress, favorites, and **Filters** for genres, decades, resolution, studios and tags; series by season and episode; details with the story, cast, genres and tags (tap a tag to see everything that has it), and a *Version* row when the server keeps more than one version of a video (4K and 1080p, a director's cut): *Automatic* plays the tallest that fits the source's maximum height; pick another and the video plays from it wherever you open it (subtitles included) until the app closes. Each version keeps its own format and adjustments, as a separate video in your history. Watched marks, favorites and resume points are the server's (see [Watch sync](#watch-sync-with-jellyfin-emby-plex-and-heresphere)) |
 | DeoVR feed / HereSphere API | The server's scene groups as chips over a grid of scenes; search the chosen group (or *All*) across titles, studios, performers and tags; order by title, date, rating or length, either way, or shuffle; *Favorites* (and *Scripted*, with haptics on), and **Filters** for studio, people, tags, length, format and rating, each with how many scenes have it (a DeoVR feed's studios, tags and performers come with each scene's details, fetched while you search or filter and kept for next time). ⋯ opens a scene's details: description, performers and tags (tap one to see all their scenes), chapters to start from, and ♡ to make it a favourite on a HereSphere API that takes favourites. The page opens with the scenes from last time while the server sends the current list ("updating…" under the title). A HereSphere API can also sync watch state (see [Watch sync](#watch-sync-with-jellyfin-emby-plex-and-heresphere)) |
-| Plex | Movie, TV and personal-video libraries; Continue watching and recent additions; server search, sorted and shuffled grids, unwatched and in-progress filters, and genre, studio and decade filters. Shows open by season and episode; details include artwork, chapters and available versions. Resume points and watched marks belong to the selected Plex account. Plex server favorites, people and tag browsing are not offered. App playlists, Up next, history and format adjustments work as with other video sources |
+| Plex | Movie, TV and personal-video libraries; Continue watching and recent additions; server search, sorted and shuffled grids, unwatched and in-progress filters, and genre, studio and decade filters. Shows open by season and episode; details include artwork, chapters and available versions. Resume points and watched marks belong to the selected Plex account, or to the person chosen under *Who is watching*. Plex server favorites, people and tag browsing are not offered. App playlists, Up next, history and format adjustments work as with other video sources |
 | SMB, WebDAV, HTTP folders, DLNA, local folders | Folders and files: search the folder you are in, order by name, date or size, *Play all* |
 
 **Filters** opens a drawer on the right: what you pick there applies at
@@ -333,8 +333,26 @@ firewall permission to the server's port.
 
 `app.plex.tv` provides the web app and account sign-in. Laterna uses
 the selected server's media connection; entering `app.plex.tv` in the
-manual address field starts account linking. Plex Home profile switching,
-live TV, music, photos, cloud Watchlist and casting are not supported.
+manual address field starts account linking. Live TV, music, photos, cloud
+Watchlist and casting are not supported.
+
+### Who is watching (Plex Home)
+
+If your Plex account is part of a Plex Home, each person in it has their own
+watched marks and Continue Watching. Open a linked Plex source under
+**Sources**, press the pencil, and under **Who is watching** press
+**Choose who is watching**, then pick a person. If they have a Plex PIN,
+Laterna asks for it once, when you switch to them. It sends the PIN to plex.tv
+to check it and does not keep it.
+
+Laterna remembers who you chose, so nobody is asked at each start. While a
+person is chosen, Sources, Home, History, search and the phone remote show
+only what they may see, and what they watch is marked as theirs. Switching
+back to a person with a PIN asks for it again.
+
+A server you add while someone is chosen shows only for the account itself:
+choose the person again to bring it in. **Forget the other people** removes the saved sign-ins of
+everyone but the account itself.
 
 ### Locking a source with a PIN
 

@@ -21,6 +21,7 @@ mod logger;
 mod perf;
 mod pin;
 mod playback;
+mod plex_profiles;
 mod preview;
 mod prober;
 mod queue;

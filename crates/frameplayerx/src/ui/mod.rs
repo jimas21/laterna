@@ -392,6 +392,22 @@ pub enum Action {
     },
     /// Removes sources together: a Plex server and each profile's source of it.
     RemoveSources(Vec<String>),
+    /// Lists the members of the Plex Home of a linked source's account.
+    PlexProfiles {
+        credentials: fp_sources::plex::auth::PlexCredentials,
+    },
+    /// Plays the account as a Plex Home member. The PIN, when the member has
+    /// one, goes to plex.tv in this one switch and is not kept.
+    PlexSwitchProfile {
+        credentials: fp_sources::plex::auth::PlexCredentials,
+        user: fp_sources::plex::auth::PlexHomeUser,
+        pin: Option<plex::ProfilePin>,
+    },
+    /// Forgets the profiles set up for an account (by its key): their
+    /// sources and the tokens in them. The account plays as itself.
+    PlexForgetProfiles {
+        account: String,
+    },
     /// Lists the libraries of a Plex source, to choose those it shows.
     CatalogLibraries {
         source: String,

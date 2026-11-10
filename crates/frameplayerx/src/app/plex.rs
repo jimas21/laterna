@@ -2,11 +2,14 @@
 
 use super::tasks::PlexListing;
 use super::*;
+use crate::plex_profiles::{self, Siblings, SwitchError};
 use fp_sources::plex::PlexSource;
-use fp_sources::plex::auth::{PlexAccount, PlexAuthClient, PlexCredentials, PlexPin, PlexResource};
+use fp_sources::plex::auth::{
+    PlexAccount, PlexAuthClient, PlexCredentials, PlexHomeUser, PlexPin, PlexResource, is_wrong_pin,
+};
 use fp_sources::{PlexConfig, SourceConfig};
 use std::collections::HashSet;
-use ui::plex::{Libraries, LinkState, ListError, ServerRow};
+use ui::plex::{Libraries, LinkState, ListError, ProfilePin, Profiles, ServerRow};
 
 /// A server of the Plex list, tested: its machine identifier and the source
 /// to add, or why not.
@@ -193,6 +196,53 @@ fn check_servers(configs: Vec<PlexConfig>) -> Vec<Checked> {
         }
         checks
     })
+}
+
+/// The Home members of an account, to choose who is watching.
+fn list_profiles(
+    api: &PlexAuthClient,
+    credentials: &PlexCredentials,
+) -> Result<Vec<PlexHomeUser>, ListError> {
+    api.home_users(credentials).map_err(|e| {
+        if account_refused(&e) {
+            ListError::SignedOut
+        } else {
+            ListError::Other(ui::errors::source(&e))
+        }
+    })
+}
+
+/// Switches to a Home member on plex.tv (the PIN goes there and nowhere
+/// else) and makes the profile's source of each of the account's servers
+/// that the member can reach. `bases` are the account's own sources; with
+/// none, the switch only checks the PIN (the account itself).
+fn switch_profile(
+    api: &PlexAuthClient,
+    credentials: &PlexCredentials,
+    user: &PlexHomeUser,
+    pin: Option<&str>,
+    bases: &[PlexConfig],
+) -> Result<Siblings, SwitchError> {
+    let other = |e: fp_sources::Error| {
+        if is_wrong_pin(&e) {
+            SwitchError::WrongPin
+        } else if account_refused(&e) {
+            SwitchError::SignedOut
+        } else {
+            SwitchError::Other(ui::errors::source(&e))
+        }
+    };
+    let profile = api.switch_profile(credentials, user, pin).map_err(other)?;
+    if bases.is_empty() {
+        return Ok(Siblings {
+            sources: Vec::new(),
+            missing: Vec::new(),
+        });
+    }
+    let servers = api
+        .resources_with(&credentials.client_identifier, &profile.token)
+        .map_err(other)?;
+    Ok(plex_profiles::siblings(bases, &profile, &servers))
 }
 
 impl App {
@@ -586,6 +636,217 @@ impl App {
             Err(error) => Libraries::Failed(error),
         };
         self.panels[MAIN].request_repaint();
+    }
+
+    /// The form of the linked source being edited, when it is of `account`.
+    fn profile_form(&mut self, account: &str) -> Option<&mut ui::SourceForm> {
+        self.ui.source_form.as_mut().filter(|f| {
+            matches!(&f.editing, Some(SourceConfig::Plex(p))
+                if p.account_key().as_deref() == Some(account))
+        })
+    }
+
+    /// Lists the members of the Plex Home of `credentials`' account.
+    pub(super) fn plex_profiles(&mut self, credentials: PlexCredentials) {
+        let account = ui::plex::account_key(&credentials).clone();
+        if let Some(f) = self.profile_form(&account) {
+            f.plex.profiles = Profiles::Loading;
+            f.plex.profile_error = None;
+        }
+        self.jobs.spawn("plex-profiles", move || {
+            let result = list_profiles(&PlexAuthClient::new(), &credentials);
+            Job::PlexProfilesListed { account, result }
+        });
+    }
+
+    pub(super) fn plex_profiles_listed(
+        &mut self,
+        account: &str,
+        result: Result<Vec<PlexHomeUser>, ListError>,
+    ) {
+        let Some(f) = self.profile_form(account) else {
+            return;
+        };
+        match result {
+            Ok(users) => f.plex.profiles = Profiles::Listed(users),
+            Err(ListError::SignedOut) => {
+                f.plex.profiles = Profiles::Failed(tr!("plex-signed-out").into());
+            }
+            Err(ListError::Other(error)) => f.plex.profiles = Profiles::Failed(error),
+        }
+        self.panels[MAIN].request_repaint();
+    }
+
+    /// Plays the account as the Home member `user`. The account itself, and
+    /// a profile that was set up before and has no PIN, take effect at once.
+    /// Anything else asks plex.tv: the PIN is checked there, once, and
+    /// never kept; the profile's token is what is kept, in its sources.
+    pub(super) fn plex_switch_profile(
+        &mut self,
+        credentials: PlexCredentials,
+        user: PlexHomeUser,
+        pin: Option<ProfilePin>,
+    ) {
+        let account = ui::plex::account_key(&credentials).clone();
+        let themselves = credentials
+            .account
+            .as_ref()
+            .is_some_and(|a| a.uuid == user.uuid);
+        let configs = &self.services.source_configs;
+        let at_once = !user.protected
+            && (themselves || plex_profiles::is_set_up(configs, &account, &user.uuid));
+        if at_once {
+            let uuid = if themselves { "" } else { user.uuid.as_str() };
+            self.plex_profile_active(&account, uuid);
+            return;
+        }
+        let bases = if themselves {
+            Vec::new()
+        } else {
+            plex_profiles::own_sources(configs, &account)
+        };
+        if let Some(f) = self.profile_form(&account) {
+            f.plex.switching = true;
+            f.plex.profile_error = None;
+        }
+        self.jobs.spawn("plex-switch", move || {
+            let pin = pin.as_ref().map(ProfilePin::digits);
+            let result = switch_profile(&PlexAuthClient::new(), &credentials, &user, pin, &bases);
+            Job::PlexProfileSwitched {
+                account,
+                user,
+                themselves,
+                result: Box::new(result),
+            }
+        });
+    }
+
+    pub(super) fn plex_profile_switched(
+        &mut self,
+        account: &str,
+        user: PlexHomeUser,
+        themselves: bool,
+        result: Result<Siblings, SwitchError>,
+    ) {
+        if let Some(f) = self.profile_form(account) {
+            f.plex.switching = false;
+        }
+        let found = match result {
+            Ok(found) => found,
+            Err(e) => {
+                let text = match e {
+                    SwitchError::WrongPin => tr!("plex-profile-wrong-pin").to_string(),
+                    SwitchError::SignedOut => tr!("plex-signed-out").to_string(),
+                    SwitchError::Other(error) => error,
+                };
+                self.plex_profile_failed(account, text);
+                return;
+            }
+        };
+        if themselves {
+            self.plex_profile_active(account, "");
+            return;
+        }
+        if found.sources.is_empty() {
+            self.plex_profile_failed(account, tr!("plex-profile-no-servers").to_string());
+            return;
+        }
+        let ids: HashSet<String> = found.sources.iter().map(|p| p.id.clone()).collect();
+        for id in &ids {
+            self.ui.catalog_cache.forget(id);
+        }
+        let sources = found.sources;
+        let change = self.services.replace_sources(|list| {
+            for config in sources {
+                let config = SourceConfig::Plex(config);
+                match list.iter_mut().find(|c| c.id() == config.id()) {
+                    Some(slot) => *slot = config,
+                    None => list.push(config),
+                }
+            }
+            ids
+        });
+        if let Some(error) = change.errors.first() {
+            self.plex_profile_failed(account, error.to_string());
+            return;
+        }
+        if let Some(error) = change.save_error {
+            let text = tr!("source-changed-unsaved", name = "Plex", error = error);
+            self.ui.toast(text);
+        }
+        if !found.missing.is_empty() {
+            let names = found.missing.join(", ");
+            self.ui.toast(tr!("plex-profile-not-shared", names = names));
+        }
+        self.plex_profile_active(account, &user.uuid);
+    }
+
+    fn plex_profile_failed(&mut self, account: &str, text: String) {
+        if let Some(f) = self.profile_form(account) {
+            f.plex.profile_error = Some(text);
+        }
+        self.panels[MAIN].request_repaint();
+    }
+
+    /// Makes `uuid` (empty: the account itself) the profile `account` plays
+    /// as, and remembers it. What the other profiles' sources showed is
+    /// forgotten, and the page open on one of them moves to the active
+    /// profile's source of the same server.
+    fn plex_profile_active(&mut self, account: &str, uuid: &str) {
+        let leaving = self
+            .ui
+            .source_form
+            .as_ref()
+            .and_then(|f| f.editing.as_ref())
+            .map(|c| c.id().to_string())
+            .or_else(|| self.ui.source.as_ref().map(|s| s.source.clone()));
+        if uuid.is_empty() {
+            self.settings.plex_profiles.remove(account);
+        } else {
+            self.settings
+                .plex_profiles
+                .insert(account.to_string(), uuid.to_string());
+        }
+        self.saved.plex_profiles = self.settings.plex_profiles.clone();
+        self.save_settings();
+        self.ui.catalog_cache.clear();
+        self.ui.home = None;
+        self.sync_locks();
+        self.ui.toast(tr!("plex-profile-switched"));
+        let configs = &self.services.source_configs;
+        let chosen = &self.settings.plex_profiles;
+        let target = leaving
+            .as_deref()
+            .and_then(|id| plex_profiles::counterpart(configs, chosen, id));
+        let left_hidden = leaving.as_deref().is_some_and(|id| {
+            plex_profiles::hidden(configs, chosen)
+                .iter()
+                .any(|h| h == id)
+        });
+        self.ui.source_form = None;
+        if let Some(id) = target {
+            self.open_source(id, Screen::Sources);
+        } else if left_hidden {
+            self.ui.source = None;
+        }
+        self.ui.invalidate();
+        self.panels[MAIN].request_repaint();
+    }
+
+    /// Forgets the profiles set up for `account`: their sources, and so the
+    /// tokens they were kept under, go; the account plays as itself. What
+    /// they watched stays, as with any removed source.
+    pub(super) fn plex_forget_profiles(&mut self, account: &str) {
+        let ids = plex_profiles::profile_sources(&self.services.source_configs, account);
+        self.settings.plex_profiles.remove(account);
+        self.saved.plex_profiles = self.settings.plex_profiles.clone();
+        self.save_settings();
+        self.ui.catalog_cache.clear();
+        if self.remove_sources(&ids) {
+            self.ui.toast(tr!("plex-profiles-forgotten"));
+        }
+        self.sync_locks();
+        self.ui.home = None;
     }
 
     /// Names the account of sources linked before accounts were recorded,

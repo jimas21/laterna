@@ -306,6 +306,13 @@ impl App {
             } => self.plex_add_servers(generation, configs),
             Action::PlexListServers { credentials } => self.plex_list_servers(credentials),
             Action::RemoveSources(ids) => self.plex_remove_servers(ids),
+            Action::PlexProfiles { credentials } => self.plex_profiles(credentials),
+            Action::PlexSwitchProfile {
+                credentials,
+                user,
+                pin,
+            } => self.plex_switch_profile(credentials, user, pin),
+            Action::PlexForgetProfiles { account } => self.plex_forget_profiles(&account),
             Action::CatalogLibraries { source } => self.catalog_libraries(source),
             Action::OpenWebPage(address) => self.open_web_page(address.as_str()),
             Action::SendCrashReport => self.send_crash_report(),
