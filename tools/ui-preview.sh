@@ -451,6 +451,10 @@ screen settings updates
 panel main settings-updates
 screen settings about
 panel main settings-about
+# The card shown once after an update (and from About's What's new).
+whats-new
+panel main whats-new
+whats-new off
 # Hover state on the first card of a library's videos.
 open-source videos
 point main 0.12 0.45

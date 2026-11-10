@@ -35,6 +35,7 @@ mod testcard;
 mod tragus;
 mod ui;
 mod watch;
+mod whats_new;
 mod world;
 mod writer;
 

@@ -253,6 +253,16 @@ impl App {
         });
     }
 
+    /// Shows what is new once after an update, and notes this version as the
+    /// one that ran (the settings are saved with the next change check).
+    pub(super) fn note_version(&mut self) {
+        let current = env!("CARGO_PKG_VERSION");
+        self.ui.whats_new = crate::whats_new::to_show(&self.settings.last_version, current);
+        if self.settings.last_version != current {
+            self.settings.last_version = current.to_string();
+        }
+    }
+
     /// Offers a crash report when the last run crashed. Reading its log
     /// and hiding every name in it takes a moment with a big library.
     pub(super) fn check_last_run(&mut self) {

@@ -116,6 +116,10 @@ pub fn screen_light_gain(level: f32) -> f32 {
     level.clamp(0.0, 1.0) / SCREEN_LIGHT_START
 }
 
+/// What [`Settings::last_version`] holds for a settings file from before
+/// versions were kept: some earlier version ran.
+pub const EARLIER_VERSION: &str = "earlier";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -237,6 +241,10 @@ pub struct Settings {
     /// [`screen_light_gain`]. A file from when this was a switch has it off
     /// as 0 (see [`Settings::load`]).
     pub screen_light_level: f32,
+    /// The version that ran last, so an update can show what is new once.
+    /// Empty on a first run; [`EARLIER_VERSION`] for a file saved before
+    /// this was kept (see [`Settings::load`]).
+    pub last_version: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -373,6 +381,7 @@ impl Default for Settings {
             place_height: Default::default(),
             house_lights_playing: HOUSE_PLAYING_START,
             screen_light_level: SCREEN_LIGHT_START,
+            last_version: String::new(),
         }
     }
 }
@@ -446,6 +455,14 @@ impl Settings {
                     if switched_off && !had_level {
                         s.screen_light_level = 0.0;
                     }
+                    // Saved by a build that did not note its version: it ran
+                    // before, so this start is an update, not a first run.
+                    if value
+                        .as_ref()
+                        .is_some_and(|v| v.get("last_version").is_none())
+                    {
+                        s.last_version = EARLIER_VERSION.to_string();
+                    }
                     s.screen_light_level = if s.screen_light_level.is_finite() {
                         s.screen_light_level.clamp(0.0, 1.0)
                     } else {
@@ -477,6 +494,29 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_version_tells_a_first_run_from_an_update() {
+        let dir = std::env::temp_dir().join(format!("fp-last-version-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        // No file: a first run, so no card.
+        assert_eq!(Settings::load(&path).last_version, "");
+        // A file from before versions were kept: it ran, so this is an update.
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, r#"{"volume": 0.25}"#).unwrap();
+        assert_eq!(Settings::load(&path).last_version, EARLIER_VERSION);
+        // Once kept, the version comes back as it was saved.
+        let s = Settings {
+            last_version: "0.18.0-beta.8".into(),
+            ..Default::default()
+        };
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).last_version, "0.18.0-beta.8");
+        // Saved empty (a first run that never finished starting) stays empty.
+        Settings::default().save(&path).unwrap();
+        assert_eq!(Settings::load(&path).last_version, "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn plex_profiles_default_empty_and_round_trip() {

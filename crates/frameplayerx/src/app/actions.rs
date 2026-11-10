@@ -325,6 +325,10 @@ impl App {
             Action::OpenWebPage(address) => self.open_web_page(address.as_str()),
             Action::SendCrashReport => self.send_crash_report(),
             Action::DismissCrashReport => self.ui.crash = None,
+            Action::ShowWhatsNew => {
+                self.ui.whats_new = crate::whats_new::for_about(env!("CARGO_PKG_VERSION"));
+            }
+            Action::DismissWhatsNew => self.ui.whats_new = None,
             Action::Recenter => self.recenter(),
             Action::TogglePassthrough => self.settings.passthrough = !self.settings.passthrough,
             Action::ToggleFollow => self.settings.follow = !self.settings.follow,

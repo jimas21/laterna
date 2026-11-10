@@ -102,6 +102,11 @@ test versions before they are released. Switch off **Check for updates at
 start** to only check when you press **Check now**. Installing again with
 any of the ways above also updates it.
 
+**What's new.** The first time Laterna starts after an update, a small card
+lists what changed in plain words. Press **OK** to close it. It shows once
+and never on a first install. To read it again, open **Settings › About**
+and press **Show** next to **What's new**.
+
 ## Uninstall
 
 Uninstalling removes the app, its entry in the Steam library and its
