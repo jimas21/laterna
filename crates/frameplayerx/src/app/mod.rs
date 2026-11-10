@@ -424,6 +424,7 @@ impl App {
         };
         app.offsets = app.settings.panel_offsets;
         app.apply_ui_scale();
+        app.note_version();
         app.check_last_run();
         app.scan_libraries(|_| true, false, false);
         app.connect_devices();

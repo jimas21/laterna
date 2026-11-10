@@ -36,6 +36,7 @@
 //! | `shot NAME` | save the left eye as OUT_DIR/NAME.png |
 //! | `sbs NAME` | save both eyes side by side |
 //! | `screen NAME [TAB]` | show a browser screen (`home`, `library`, `sources`, `settings` and its tab) |
+//! | `whats-new` / `whats-new off` | show the What's new card, or press its OK |
 //! | `adjust [TAB]` | open the adjustments panel (at tab TAB) |
 //! | `tracks` | open the audio and subtitles picker |
 //! | `filters` | open the Filters drawer of the source page shown (a Jellyfin grid, a feed) |
@@ -498,6 +499,18 @@ impl Sim {
                 if let Some(c) = &mut self.app.ui.crash {
                     c.shown = parts.get(1) == Some(&"shown");
                 }
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The card shown once after an update, as About opens it;
+            // `whats-new off` is its OK.
+            Some("whats-new") => {
+                let action = if parts.get(1) == Some(&"off") {
+                    crate::ui::Action::DismissWhatsNew
+                } else {
+                    crate::ui::Action::ShowWhatsNew
+                };
+                self.app.apply(action);
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }

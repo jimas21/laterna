@@ -1207,6 +1207,25 @@ fn about(ui: &mut egui::Ui, v: &mut View) {
         ))
         .color(theme::TEXT_2),
     );
+    ui.add_space(6.0);
+    widgets::rows(ui, |r| {
+        r.row(
+            tr!("settings-whats-new"),
+            Some(tr!("settings-whats-new-desc")),
+            |ui| {
+                if widgets::button(
+                    ui,
+                    Some(icons::SPARKLE),
+                    tr!("settings-whats-new-show"),
+                    Kind::Secondary,
+                )
+                .clicked()
+                {
+                    v.actions.push(Action::ShowWhatsNew);
+                }
+            },
+        );
+    });
     heading(ui, tr!("settings-about-headset"));
     widgets::rows(ui, |r| {
         for (k, val) in &v.state.about {

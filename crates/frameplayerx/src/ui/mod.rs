@@ -26,6 +26,7 @@ pub mod sources;
 pub mod subtitle_text;
 pub mod theme;
 pub mod thumbs;
+pub mod whats_new;
 pub mod widgets;
 pub mod window;
 
@@ -449,6 +450,10 @@ pub enum Action {
     /// Send the crash report the start offered, or don't.
     SendCrashReport,
     DismissCrashReport,
+    /// Settings > About > What's new.
+    ShowWhatsNew,
+    /// The What's new card's OK.
+    DismissWhatsNew,
     Recenter,
     TogglePassthrough,
     /// Settings › General › Screen follows you.
@@ -909,6 +914,8 @@ pub struct UiState {
     pub tracks_open: bool,
     /// The last run crashed: asks whether to send a report.
     pub crash: Option<crash::CrashPrompt>,
+    /// The What's new card, after an update or from About.
+    pub whats_new: Option<&'static crate::whats_new::Entry>,
     pub open_error: Option<String>,
     pub opening: Option<String>,
     pub toast: Option<(String, std::time::Instant)>,
@@ -992,6 +999,7 @@ impl Default for UiState {
             adjust_tab: 0,
             tracks_open: false,
             crash: None,
+            whats_new: None,
             open_error: None,
             opening: None,
             toast: None,

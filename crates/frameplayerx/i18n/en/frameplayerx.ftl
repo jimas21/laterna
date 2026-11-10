@@ -1130,6 +1130,14 @@ quick-connect-authorized-toast = Quick Connect authorized!
 worker-thumbnails = Preparing thumbnails
 # Shown with a count: Reading videos 3/40.
 worker-reading = Reading videos
+# The card shown once after an update. { $version } is like 0.18.0-beta.8.
+whats-new-title = What's new in Laterna { $version }
+# Short: a button.
+whats-new-ok = OK
+settings-whats-new = What's new
+settings-whats-new-desc = What changed in this version.
+# Short: a button.
+settings-whats-new-show = Show
 crash-title = Laterna stopped unexpectedly
 crash-desc = It crashed the last time it ran. A crash report tells its developers what went wrong so that they can fix it. Sending one is up to you: nothing is sent unless you choose Send report.
 crash-sending = Sending…
