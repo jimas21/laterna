@@ -885,6 +885,8 @@ fn wall_colour(img: &[u8]) -> [u8; 3] {
     [sum(0), sum(1), sum(2)]
 }
 
+static CLOCK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
 /// The baked wall with the house lights at `house` and the picture's light
 /// at `screen_light`, after five frames of `picture` a second apart (the
 /// colours are measured a little behind and ease). The last left eye.
@@ -896,13 +898,15 @@ fn baked_wall(
     picture: Option<&Arc<VideoFrame>>,
 ) -> Vec<u8> {
     let mut last = Vec::new();
-    for k in 0..5 {
+    for _ in 0..5 {
+        // Time only goes forward, so the eased colours follow each picture.
+        let time = f64::from(CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let env = EnvFrame {
             place: Place::Cinema,
             room_to_world: Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0)),
             house,
             screen_light,
-            time: f64::from(k),
+            time,
         };
         let mut p = plain_params();
         p.background = [0.0, 0.0, 0.0, 1.0];
@@ -993,11 +997,11 @@ fn a_baked_place_replaced_by_another_shows_the_new_one() {
     };
     load_wall(&mut r, "first", [200, 20, 20], [0; 3]);
     let first = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
-    assert!(is_red(first), "{first:?}");
+    assert!(near(first, [200, 20, 20], 5), "{first:?}");
     // The pack replaced by another, then by a built-in room, then back.
     load_wall(&mut r, "second", [20, 20, 200], [0; 3]);
     let second = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
-    assert!(is_blue(second), "{second:?}");
+    assert!(near(second, [20, 20, 200], 5), "{second:?}");
     r.set_place_data(Place::Cinema, Place::Cinema.build_builtin());
     let room = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
     assert!(

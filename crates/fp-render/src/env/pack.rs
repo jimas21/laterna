@@ -621,7 +621,9 @@ pub fn replacement(place: Place) -> Option<Arc<Replacement>> {
     if cfg!(test) {
         return None;
     }
-    let failed = FAILED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let failed = FAILED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if failed.contains(&place) {
         return None;
     }
@@ -645,7 +647,9 @@ pub fn replacement(place: Place) -> Option<Arc<Replacement>> {
 /// Notes that the pack for `place` could not be loaded: from now on the
 /// built-in room is the place, seats and all.
 pub fn mark_failed(place: Place) {
-    let mut failed = FAILED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut failed = FAILED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !failed.contains(&place) {
         failed.push(place);
     }
