@@ -98,14 +98,16 @@ fn a_source_without_rows_of_its_own_keeps_its_front_page() {
     let server = TestServer::start(reply);
     let source = source(&server);
     let caps = source.capabilities();
-    assert!(!caps.library_pages, "library pages wait for the hubs");
+    assert!(caps.library_pages);
     let home = source.home().unwrap();
     assert!(home.rows.is_empty());
     assert_eq!(home.resume.len(), 1);
     assert_eq!(home.latest.len(), 1);
 
-    let before = server.requests().len();
+    // A server too old for library hubs opens its libraries as grids.
     assert!(source.library_rows("section:1").unwrap().is_empty());
+
+    let before = server.requests().len();
     assert!(source.playlists().unwrap().is_empty());
     assert!(source.history(20).unwrap().is_empty());
     assert_eq!(
