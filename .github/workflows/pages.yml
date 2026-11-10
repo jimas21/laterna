@@ -5,7 +5,7 @@ name: pages
 # Settings > Pages > Build and deployment > Source: GitHub Actions.
 on:
   push:
-    branches: [main]
+    branches: [environments]
     paths: ['site/**', 'assets/logo.svg', '.github/workflows/pages.yml']
   workflow_dispatch:
 
