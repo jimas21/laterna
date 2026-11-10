@@ -164,7 +164,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build nasm pkg-config mesa-vulkan-drivers zip shellcheck
+          sudo apt-get install -y ninja-build nasm pkg-config mesa-vulkan-drivers vulkan-validationlayers zip shellcheck
           python3 -m venv "$RUNNER_TEMP/tools"
           "$RUNNER_TEMP/tools/bin/pip" install --quiet -r tools/requirements.txt
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
@@ -208,6 +208,23 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/third_party/ffmpeg/x86_64/lib
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
         run: cargo test --workspace
+      # The renderer's GPU tests again under Khronos' validation layer: the one
+      # check we can run without a headset for mistakes such as a pipeline
+      # whose attachment formats differ from the rendering it is bound in.
+      # Report only for now: it counts the layer's errors and prints them.
+      - name: GPU tests under validation
+        continue-on-error: true
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/third_party/ffmpeg/x86_64/lib
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+          VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+        run: |
+          set -o pipefail
+          cargo test -p fp-render -- --nocapture 2>&1 | tee "$RUNNER_TEMP/validation.log"
+          count=$(grep -c 'Validation Error' "$RUNNER_TEMP/validation.log" || true)
+          echo "Validation errors: $count"
+          echo "Validation errors from the renderer's GPU tests: $count" >> "$GITHUB_STEP_SUMMARY"
+          grep -A6 'Validation Error' "$RUNNER_TEMP/validation.log" | head -60 || true
       - name: Desktop Mode installer tests
         working-directory: tools/frame-desktop-install
         run: python3 -m unittest
