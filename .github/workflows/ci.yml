@@ -361,8 +361,8 @@ jobs:
           files=(dist/frameplayerx-*.zip dist/manifest.json dist/manifest.json.sig
             dist/framedrop.json dist/frameplayerx.json dist/frameplayerx-install-*
             src/tools/frame-desktop-install/frameplayerx-desktop-install.py
-            src/tools/frame-desktop-install/Install-FramePlayerX.desktop
-            src/tools/frame-desktop-install/Uninstall-FramePlayerX.desktop)
+            src/tools/frame-desktop-install/Install-Laterna.desktop
+            src/tools/frame-desktop-install/Uninstall-Laterna.desktop)
           # A re-run finds it published, or a failed run's draft to replace.
           if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
             if [ "$draft" = false ]; then

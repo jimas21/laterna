@@ -3,8 +3,8 @@
 and adds it to the Steam library. No Developer Mode, PC or SSH needed.
 
 Runs on the headset as the normal user, with the Python 3 that SteamOS ships
-(standard library only). Install-FramePlayerX.desktop downloads it from the
-latest release and runs it in a terminal, Uninstall-FramePlayerX.desktop
+(standard library only). Install-Laterna.desktop downloads it from the
+latest release and runs it in a terminal, Uninstall-Laterna.desktop
 the same with --remove; by hand:
 
   python3 frameplayerx-desktop-install.py                     # latest stable release

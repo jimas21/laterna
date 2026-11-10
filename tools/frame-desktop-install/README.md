@@ -4,11 +4,11 @@ Installs Laterna on a Steam Frame from its Desktop Mode, with no PC,
 and adds it to the Steam library. Both files here are attached to every
 release:
 
-- `Install-FramePlayerX.desktop`: what people download. Opened in Desktop
+- `Install-Laterna.desktop`: what people download. Opened in Desktop
   Mode, it downloads `frameplayerx-desktop-install.py` from the latest
   stable release and runs it in a Konsole window, which stays open so the
   result can be read. Desktop Mode asks once whether to trust the file.
-- `Uninstall-FramePlayerX.desktop`: the same, running it with `--remove`.
+- `Uninstall-Laterna.desktop`: the same, running it with `--remove`.
 - `frameplayerx-desktop-install.py`: the installer. It uses only the Python
   3 that SteamOS ships.
 

@@ -387,8 +387,8 @@ class DesktopLauncher(unittest.TestCase):
         return line
 
     def test_install_and_uninstall_run_this_installer_from_the_latest_release(self):
-        self.assertTrue(self.exec_line('Install-FramePlayerX.desktop').endswith('install.py"'))
-        self.assertTrue(self.exec_line('Uninstall-FramePlayerX.desktop').endswith('install.py --remove"'))
+        self.assertTrue(self.exec_line('Install-Laterna.desktop').endswith('install.py"'))
+        self.assertTrue(self.exec_line('Uninstall-Laterna.desktop').endswith('install.py --remove"'))
 
 
 class Uninstall(unittest.TestCase):

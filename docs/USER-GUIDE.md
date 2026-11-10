@@ -21,9 +21,9 @@ or your network.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the installer:
 
-<a href="https://github.com/jimas21/laterna/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+<a href="https://github.com/jimas21/laterna/releases/latest/download/Install-Laterna.desktop"><img src="../assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
 
-Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm
+Open `Install-Laterna.desktop` from your Downloads folder and confirm
 when Desktop Mode asks whether to trust it. A terminal window opens and:
 
 - downloads the latest stable release and checks it against the checksum
@@ -110,9 +110,9 @@ left off. Your videos are never touched.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the uninstaller:
 
-<a href="https://github.com/jimas21/laterna/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Uninstall in Desktop Mode" width="240" /></a>
+<a href="https://github.com/jimas21/laterna/releases/latest/download/Uninstall-Laterna.desktop"><img src="../assets/uninstall-button.svg" alt="Uninstall in Desktop Mode" width="240" /></a>
 
-Open `Uninstall-FramePlayerX.desktop` from your Downloads folder and
+Open `Uninstall-Laterna.desktop` from your Downloads folder and
 confirm when Desktop Mode asks whether to trust it. A terminal window
 opens, asks you to confirm, removes Laterna, then asks whether to
 delete your settings and watch history too. If it closes Steam, the entry

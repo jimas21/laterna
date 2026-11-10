@@ -626,7 +626,7 @@ release:
 
 | Button | Opens |
 |---|---|
-| Desktop Mode / Uninstall | The release's `Install-FramePlayerX.desktop` / `Uninstall-FramePlayerX.desktop` |
+| Desktop Mode / Uninstall | The release's `Install-Laterna.desktop` / `Uninstall-Laterna.desktop` |
 | FrameDrop | `https://framedropvr.com/install?manifest=` with the release's `framedrop.json`, FrameDrop's documented link: it opens FrameDrop, or FrameDrop's site when it isn't installed |
 | Frame Control | `site/frame-control.html` on GitHub Pages, which opens `frame-control://install?manifest=` with the release's `frameplayerx.json`. GitHub doesn't keep links to app schemes like `frame-control://` in Markdown, so a web page has to |
 
