@@ -316,6 +316,13 @@ impl Image {
     /// Binds the image to its own lazily allocated memory, when the device
     /// has such a type for it. False (nothing changed) when it has not or
     /// the allocation failed: the caller then allocates as usual.
+    ///
+    /// Only the type choice is tested (no device in CI, lavapipe included,
+    /// has such a type), so the allocate, bind and free path has not run
+    /// anywhere yet. Turnip on the Steam Frame most likely has no such type,
+    /// in which case this does nothing there and is no part of the jitter fix:
+    /// the log line says which happened ("no lazily allocated memory type" or
+    /// "lazily allocated memory").
     fn back_lazily(&mut self, gpu: &Gpu, req: &vk::MemoryRequirements, name: &str) -> bool {
         // SAFETY: valid physical device.
         let props = unsafe { gpu.instance.get_physical_device_memory_properties(gpu.pdev) };
