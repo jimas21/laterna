@@ -1186,3 +1186,96 @@ fn a_format_2_baked_place_draws_whichever_way_its_textures_reach_the_gpu() {
     assert!(near(up, house, 4), "natural, lights up: {up:?}");
     e.destroy(&r);
 }
+
+// ---- The place pass's live knobs: samples, the picture's light, the order ----
+
+#[test]
+fn the_samples_can_change_on_the_fly_and_the_room_is_still_drawn() {
+    let Some((mut r, mut e)) = setup_samples(SIZE, 4) else {
+        return;
+    };
+    let (house, dark) = ([180, 90, 30], [12, 24, 36]);
+    load_wall(&mut r, "samples", house, dark);
+    let mut seen = vec![r.samples()];
+    // Down to one, back, and to two: the wall is the same colour at each
+    // (what the device does not have is rounded down).
+    for wanted in [1, 4, 2, 4] {
+        let got = r.set_samples(wanted).expect("changes");
+        assert_eq!(got, r.samples());
+        assert!(got <= wanted.max(1), "{wanted} gave {got}");
+        seen.push(got);
+        let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+        assert!(near(up, house, 4), "{got} samples: {up:?}");
+        let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
+        assert!(near(down, dark, 4), "{got} samples, dark: {down:?}");
+    }
+    // Asking for what it already does is no change.
+    let now = r.samples();
+    assert_eq!(r.set_samples(now).expect("same"), now);
+    eprintln!("sample counts visited: {seen:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn the_built_in_room_survives_a_sample_change_too() {
+    let Some((mut r, mut e)) = setup_samples(SIZE, 4) else {
+        return;
+    };
+    let p = cinema_params(
+        ViewSettings::default(),
+        place_frame(Place::Cinema, SeatName::Middle, 1.0),
+    );
+    let before = render(&mut r, &mut e, None, &p, &[]);
+    r.set_samples(1).expect("one");
+    let one = render(&mut r, &mut e, None, &p, &[]);
+    r.set_samples(4).expect("four");
+    let after = render(&mut r, &mut e, None, &p, &[]);
+    let want = px(&before[0], SIZE / 2, SIZE / 2);
+    for img in [&one, &after] {
+        assert!(near(px(&img[0], SIZE / 2, SIZE / 2), want, 12), "centre");
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn a_baked_place_draws_the_same_sorted_as_in_its_packs_order() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    load_wall(&mut r, "sorted", [180, 90, 30], [12, 24, 36]);
+    // Pack order first: the sorter has not answered on the first frame.
+    r.set_place_knobs(true, false);
+    let in_packs_order = baked_wall(&mut r, &mut e, 1.0, 0.0, None);
+    // Give the worker time, then draw with its order.
+    r.set_place_knobs(true, true);
+    thread::sleep(Duration::from_millis(300));
+    let _ = baked_wall(&mut r, &mut e, 1.0, 0.0, None);
+    let sorted = baked_wall(&mut r, &mut e, 1.0, 0.0, None);
+    assert_eq!(in_packs_order, sorted, "the order changes no pixel");
+    e.destroy(&r);
+}
+
+#[test]
+fn the_pictures_light_can_be_left_out_of_a_baked_place() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let dark = [10, 10, 10];
+    load_wall(&mut r, "basis-off", [180, 90, 30], dark);
+    let red = frame(160, 90, |u, v| {
+        if u < 0.25 && v < 0.5 {
+            [230, 20, 20]
+        } else {
+            [0, 0, 0]
+        }
+    });
+    let lit = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(lit[0] > 150, "on: {lit:?}");
+    r.set_place_knobs(false, true);
+    let off = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(near(off, dark, 4), "off: {off:?}");
+    r.set_place_knobs(true, true);
+    let again = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(near(again, lit, 4), "on again: {again:?}, first {lit:?}");
+    e.destroy(&r);
+}

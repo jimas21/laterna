@@ -15,6 +15,7 @@ use crate::hdr::PeakDetector;
 use crate::mem::{self, Buffer, Image};
 use crate::params::{self, Quality, SceneParams, VideoParams};
 use crate::peak::PeakPass;
+use crate::perf_ab::{AbCycle, Knobs, Step};
 use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::place_builder::{Built, PlaceBuilder, build_timed};
 use crate::pyramid::{self, PyramidPass};
@@ -114,6 +115,79 @@ fn load_or_fall_back(
     log::warn!("showing the built-in {}", place.id());
     crate::env::pack::mark_failed(place);
     env.load(gpu, place, place.build_builtin(), garbage)
+}
+
+/// The vertex layout of the quads (`QuadVertex`).
+fn quad_attributes() -> [vk::VertexInputAttributeDescription; 3] {
+    [
+        vk::VertexInputAttributeDescription {
+            location: 0,
+            binding: 0,
+            format: vk::Format::R32G32B32_SFLOAT,
+            offset: 0,
+        },
+        vk::VertexInputAttributeDescription {
+            location: 1,
+            binding: 0,
+            format: vk::Format::R32G32_SFLOAT,
+            offset: 12,
+        },
+        vk::VertexInputAttributeDescription {
+            location: 2,
+            binding: 0,
+            format: vk::Format::R32G32B32A32_SFLOAT,
+            offset: 20,
+        },
+    ]
+}
+
+/// The pipelines drawn inside the eye passes (the picture, the quads), made
+/// for `samples` samples a pixel: the instance's count, which every pipeline
+/// bound in it has to name.
+fn eye_pipelines(
+    gpu: &Gpu,
+    color_format: vk::Format,
+    depth_format: vk::Format,
+    samples: vk::SampleCountFlags,
+    (scene_pl, quad_pl): (vk::PipelineLayout, vk::PipelineLayout),
+) -> Result<(vk::Pipeline, vk::Pipeline)> {
+    let scene = pipeline::create(
+        gpu,
+        &PipelineDesc {
+            spv: crate::SCENE_SPV,
+            layout: scene_pl,
+            color_format,
+            vertex_stride: 0,
+            attributes: &[],
+            blend: true,
+            descriptor_buffer: false,
+            depth: Depth::Ignore(depth_format),
+            samples,
+        },
+    )?;
+    let attrs = quad_attributes();
+    let quad = pipeline::create(
+        gpu,
+        &PipelineDesc {
+            spv: crate::QUAD_SPV,
+            layout: quad_pl,
+            color_format,
+            vertex_stride: size_of::<QuadVertex>() as u32,
+            attributes: &attrs,
+            blend: true,
+            descriptor_buffer: false,
+            depth: Depth::Ignore(depth_format),
+            samples,
+        },
+    );
+    match quad {
+        Ok(quad) => Ok((scene, quad)),
+        Err(e) => {
+            // SAFETY: just made, never bound.
+            unsafe { gpu.device.destroy_pipeline(scene, None) };
+            Err(e)
+        }
+    }
 }
 
 /// The nits the glow key counts the HDR peak in.
@@ -274,6 +348,12 @@ pub struct Renderer {
     /// each pass resolves into its eye target (grown like `depth`).
     samples: vk::SampleCountFlags,
     msaa: Option<Image>,
+    /// The place knobs the environment set (perf_ab.rs), and, with
+    /// `FRAMEPLAYERX_PERF_AB=1`, the cycle that steps through them.
+    knobs: Knobs,
+    ab: Option<AbCycle>,
+    /// A place was drawn in the last eye passes.
+    env_shown: bool,
     pool: vk::CommandPool,
     dpool: vk::DescriptorPool,
     sampler: vk::Sampler,
@@ -467,20 +547,6 @@ impl Renderer {
             )?;
             let scene_pl = pipeline::layout(&gpu, scene_layout, 4)?;
             let pyramid = PyramidPass::new(&gpu, scene_pl);
-            let scene_pipe = pipeline::create(
-                &gpu,
-                &PipelineDesc {
-                    spv: crate::SCENE_SPV,
-                    layout: scene_pl,
-                    color_format,
-                    vertex_stride: 0,
-                    attributes: &[],
-                    blend: true,
-                    descriptor_buffer: false,
-                    depth: Depth::Ignore(depth_format),
-                    samples,
-                },
-            )?;
             let tex_layout = pipeline::set_layout(
                 &gpu,
                 &[
@@ -489,39 +555,12 @@ impl Renderer {
                 ],
             )?;
             let quad_pl = pipeline::layout(&gpu, tex_layout, 64)?;
-            let quad_attrs = [
-                vk::VertexInputAttributeDescription {
-                    location: 0,
-                    binding: 0,
-                    format: vk::Format::R32G32B32_SFLOAT,
-                    offset: 0,
-                },
-                vk::VertexInputAttributeDescription {
-                    location: 1,
-                    binding: 0,
-                    format: vk::Format::R32G32_SFLOAT,
-                    offset: 12,
-                },
-                vk::VertexInputAttributeDescription {
-                    location: 2,
-                    binding: 0,
-                    format: vk::Format::R32G32B32A32_SFLOAT,
-                    offset: 20,
-                },
-            ];
-            let quad_pipe = pipeline::create(
+            let (scene_pipe, quad_pipe) = eye_pipelines(
                 &gpu,
-                &PipelineDesc {
-                    spv: crate::QUAD_SPV,
-                    layout: quad_pl,
-                    color_format,
-                    vertex_stride: size_of::<QuadVertex>() as u32,
-                    attributes: &quad_attrs,
-                    blend: true,
-                    descriptor_buffer: false,
-                    depth: Depth::Ignore(depth_format),
-                    samples,
-                },
+                color_format,
+                depth_format,
+                samples,
+                (scene_pl, quad_pl),
             )?;
             let egui_pl = pipeline::layout(&gpu, tex_layout, 8)?;
             let egui_attrs = [
@@ -566,6 +605,9 @@ impl Renderer {
                 depth: None,
                 samples,
                 msaa: None,
+                knobs: Knobs::from_env(),
+                ab: None,
+                env_shown: false,
                 pool,
                 dpool,
                 sampler,
@@ -673,6 +715,19 @@ impl Renderer {
             for _ in 0..SLOTS {
                 let slot = r.new_slot()?;
                 r.slots.push(slot);
+            }
+            log::info!(
+                "eye passes: {}x multisampling, place knobs: {}",
+                r.samples(),
+                r.knobs.describe()
+            );
+            if r.knobs.ab {
+                log::info!(
+                    "perf-ab: every {} s while a place is shown, {} variants",
+                    crate::perf_ab::DWELL.as_secs(),
+                    crate::perf_ab::VARIANTS.len()
+                );
+                r.ab = Some(AbCycle::new());
             }
             Ok(r)
         }
@@ -1013,6 +1068,7 @@ impl Renderer {
             self.gpu_times = t.read(&self.gpu, self.current);
             t.begin(&self.gpu, cmd, self.current);
         }
+        self.ab_step();
         // A pyramid that keeps taking too long to build is given up on.
         if let Some(ms) = self.gpu_times.and_then(|t| t.pyramid)
             && let Some(pass) = self.pyramid.as_mut()
@@ -1795,6 +1851,7 @@ impl Renderer {
         }
         .is_some();
         let env_on = self.prepare_env(slot_idx, video, &p, eyes);
+        self.env_shown = env_on;
         // VQ5: the video pyramid, if this picture is minified enough to want
         // one. Decided before the scene set is written, so the set points at
         // its image, and before the uniform, which tells the shader about it.
@@ -2143,7 +2200,10 @@ impl Renderer {
                 self.samples,
                 SLOTS,
             ) {
-                Ok(pass) => self.env = Some(pass),
+                Ok(mut pass) => {
+                    pass.set_knobs(&self.knobs);
+                    self.env = Some(pass);
+                }
                 Err(e) => {
                     log::warn!("places aren't shown: {e}");
                     self.env_failed = true;
@@ -2236,6 +2296,10 @@ impl Renderer {
             let bottom = to_room.transform_point3(video.screen_pose.transform_point3(edge));
             floor_drop = sky_floor(built_floor, bottom.y) - built_floor;
         }
+        // A pack is drawn nearest first from where the viewer sits: the order
+        // is made off this thread, when the seat changes.
+        let seat = (eye_pos[0] + eye_pos[1]) * 0.5;
+        env.update_order(&self.gpu, seat, &mut self.slots[slot_idx].garbage_buffers);
         let input = EnvInput {
             room_view_proj,
             eye_pos,
@@ -2441,6 +2505,122 @@ impl Renderer {
     /// The samples a pixel of the eye passes: 1 without multisampling.
     pub fn samples(&self) -> u32 {
         crate::gpu::sample_count(self.samples)
+    }
+
+    /// Draws the eye passes with `wanted` samples a pixel from now on (1, 2
+    /// or 4; the nearest lower count the device has when it lacks it) and
+    /// returns the count it uses. The pipelines the passes use are made
+    /// again and the images they draw into are dropped (made again, at the
+    /// new count, by the next frame): the device goes idle once, so this is
+    /// a hitch, for a live comparison and not for every frame. On a failure
+    /// the old count stays.
+    pub fn set_samples(&mut self, wanted: u32) -> Result<u32> {
+        let samples = crate::gpu::pick_samples(wanted, self.gpu.framebuffer_samples);
+        if samples == self.samples {
+            return Ok(self.samples());
+        }
+        let old = self.samples;
+        if let Err(e) = self.rebuild_for(samples) {
+            // Whatever was made for the new count goes back to the old.
+            if let Err(again) = self.rebuild_for(old) {
+                log::error!("the eye passes' pipelines could not be restored: {again}");
+            }
+            return Err(e);
+        }
+        Ok(self.samples())
+    }
+
+    /// Turns the place knobs (perf_ab.rs) on or off for what is drawn from
+    /// now on: the picture's light on a baked place, and its nearest-first
+    /// order. The environment's `FRAMEPLAYERX_PLACE_BASIS` and
+    /// `FRAMEPLAYERX_PLACE_SORT` set them when the renderer is made; this is
+    /// for tests.
+    #[doc(hidden)]
+    pub fn set_place_knobs(&mut self, basis: bool, sort: bool) {
+        self.knobs.basis = basis;
+        self.knobs.sort = sort;
+        if let Some(e) = self.env.as_mut() {
+            e.set_basis(basis);
+            e.set_sort(sort);
+        }
+    }
+
+    /// Makes everything that names the eye passes' sample count for
+    /// `samples`, and drops the images drawn at the old count. Idempotent.
+    fn rebuild_for(&mut self, samples: vk::SampleCountFlags) -> Result<()> {
+        self.gpu.wait_idle();
+        let gpu = self.gpu.clone();
+        let (scene, quad) = eye_pipelines(
+            &gpu,
+            self.color_format,
+            self.depth_format,
+            samples,
+            (self.scene_pl, self.quad_pl),
+        )?;
+        let swapped = (|| -> Result<()> {
+            if let Some(t) = self.tp10_eyes.as_mut() {
+                t.set_samples(&gpu, self.color_format, self.depth_format, samples)?;
+            }
+            if let Some(e) = self.env.as_mut() {
+                e.set_samples(&gpu, samples)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = swapped {
+            // SAFETY: just made, never bound.
+            unsafe {
+                gpu.device.destroy_pipeline(scene, None);
+                gpu.device.destroy_pipeline(quad, None);
+            }
+            return Err(e);
+        }
+        // SAFETY: the device is idle; the old pipelines are ours.
+        unsafe {
+            gpu.device.destroy_pipeline(self.scene_pipe, None);
+            gpu.device.destroy_pipeline(self.quad_pipe, None);
+        }
+        (self.scene_pipe, self.quad_pipe) = (scene, quad);
+        // Images of the old count: gone, the next draw makes new ones.
+        for image in [self.depth.take(), self.msaa.take()].into_iter().flatten() {
+            let mut image = image;
+            image.destroy(&gpu);
+        }
+        self.samples = samples;
+        Ok(())
+    }
+
+    /// The A/B cycle (`FRAMEPLAYERX_PERF_AB=1`): while a place is shown,
+    /// feeds it the GPU times that arrived and applies the variant it asks
+    /// for. Called when a frame begins, nothing recorded yet.
+    fn ab_step(&mut self) {
+        let Some(ab) = self.ab.as_mut() else {
+            return;
+        };
+        if !self.env_shown {
+            ab.idle();
+            return;
+        }
+        let t = self.gpu_times;
+        let Step::Switch(variant) = ab.observe(
+            Instant::now(),
+            t.and_then(|t| t.total),
+            t.and_then(|t| t.eyes),
+        ) else {
+            return;
+        };
+        match self.set_samples(variant.samples) {
+            Ok(n) => {
+                if let Some(e) = self.env.as_mut() {
+                    e.set_basis(variant.basis);
+                    e.set_sort(variant.sort);
+                }
+                log::info!("perf-ab: now {} (drawing at {n}x)", variant.label());
+            }
+            Err(e) => {
+                log::warn!("perf-ab stopped: {e}");
+                self.ab = None;
+            }
+        }
     }
 
     /// Ends recording and submits the frame.

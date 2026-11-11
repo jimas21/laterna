@@ -5,6 +5,8 @@
 //
 //   col = mix(dark, house, house_level)
 //       + basis_gain * screen_light * sum_N basis_N^2 * patch_rgb_N
+//   (the second line only when basis_gain * screen_light > 0 and the basis
+//   switch, env.baked.y, is on)
 //
 // `dark` and `house` are sRGB textures (the sampler decodes them to linear);
 // each `basis_N` is the light of the screen's patch N alone, stored as the
@@ -19,6 +21,10 @@
 @group(0) @binding(2) var colors: texture_2d_array<f32>;
 // Layers 0 to 7: the screen's patches' light.
 @group(0) @binding(3) var basis: texture_2d_array<f32>;
+// Trilinear only: the basis light is smooth, so the anisotropic taps of
+// `tex_sampler` buy nothing there. Which one the basis reads use is
+// env.baked.z, a uniform, so the branch costs nothing.
+@group(0) @binding(4) var basis_sampler: sampler;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -49,12 +55,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // The picture's light: every patch's basis, squared back to linear, times
     // the patch's colour. screen_n.w is the Screen light slider's strength,
     // 0 with the light off (the patches are zero then too).
-    var lit = vec3<f32>(0.0);
-    for (var i = 0u; i < 8u; i++) {
-        let b = textureSample(basis, tex_sampler, in.uv, i).rgb;
-        lit += b * b * env.patch_rgb[i].rgb;
+    //
+    // The eight reads are skipped when the term is zero (no picture light, a
+    // basis gain of 0, or env.baked.y = 0: FRAMEPLAYERX_PLACE_BASIS=0). Every
+    // input is a uniform, so the whole draw takes the same side of the branch
+    // and the texture reads stay in uniform control flow.
+    let strength = env.baked.x * env.screen_n.w;
+    if (env.baked.y > 0.5 && strength > 0.0) {
+        var lit = vec3<f32>(0.0);
+        if (env.baked.z > 0.5) {
+            for (var i = 0u; i < 8u; i++) {
+                let b = textureSample(basis, tex_sampler, in.uv, i).rgb;
+                lit += b * b * env.patch_rgb[i].rgb;
+            }
+        } else {
+            for (var i = 0u; i < 8u; i++) {
+                let b = textureSample(basis, basis_sampler, in.uv, i).rgb;
+                lit += b * b * env.patch_rgb[i].rgb;
+            }
+        }
+        col += lit * strength;
     }
-    col += lit * (env.baked.x * env.screen_n.w);
 
     let dist = length(env.eye_pos[pc.eye].xyz - in.rpos);
     let span = max(env.fog_range.y - env.fog_range.x, 0.001);
