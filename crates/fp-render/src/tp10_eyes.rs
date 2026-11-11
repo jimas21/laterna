@@ -400,6 +400,35 @@ impl Tp10Eyes {
         }
     }
 
+    /// Makes the eye passes' pipeline again for `samples` samples a pixel.
+    /// The device must be idle. Nothing changes when it fails.
+    pub fn set_samples(
+        &mut self,
+        gpu: &Gpu,
+        color_format: vk::Format,
+        depth_format: vk::Format,
+        samples: vk::SampleCountFlags,
+    ) -> Result<()> {
+        let made = pipeline::create(
+            gpu,
+            &PipelineDesc {
+                spv: crate::SCENE_TP10_SPV,
+                layout: self.layout,
+                color_format,
+                vertex_stride: 0,
+                attributes: &[],
+                blend: true,
+                descriptor_buffer: true,
+                depth: Depth::Ignore(depth_format),
+                samples,
+            },
+        )?;
+        // SAFETY: the device is idle; the old pipeline is ours.
+        unsafe { gpu.device.destroy_pipeline(self.pipeline, None) };
+        self.pipeline = made;
+        Ok(())
+    }
+
     /// Binds the pipeline and slot `slot`'s descriptors for the eye passes.
     pub fn bind(&self, gpu: &Gpu, cmd: vk::CommandBuffer, slot: usize) {
         self.bind_with(gpu, cmd, slot, self.pipeline);

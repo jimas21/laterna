@@ -24,12 +24,15 @@ use ash::vk;
 use gpu_allocator::MemoryLocation;
 
 /// What the sets' layout holds: the place uniform, the sampler, the colour
-/// textures, the basis textures.
-pub(crate) const BINDINGS: [(u32, vk::DescriptorType); 4] = [
+/// textures, the basis textures, and the basis textures' own sampler (plain
+/// trilinear: the light is smooth, anisotropic taps on it are wasted work;
+/// the shader takes either by a uniform, so a headset can compare).
+pub(crate) const BINDINGS: [(u32, vk::DescriptorType); 5] = [
     (0, vk::DescriptorType::UNIFORM_BUFFER),
     (1, vk::DescriptorType::SAMPLER),
     (2, vk::DescriptorType::SAMPLED_IMAGE),
     (3, vk::DescriptorType::SAMPLED_IMAGE),
+    (4, vk::DescriptorType::SAMPLER),
 ];
 
 /// The colour textures' format: decoded from sRGB on sampling.
@@ -44,6 +47,8 @@ pub(crate) struct BakedGpu {
     colors: Image,
     basis: Image,
     sampler: vk::Sampler,
+    /// Trilinear, no anisotropy: for the basis textures.
+    basis_sampler: vk::Sampler,
     pool: vk::DescriptorPool,
     /// One set for each frame slot.
     sets: Vec<vk::DescriptorSet>,
@@ -419,6 +424,7 @@ impl BakedGpu {
             colors,
             basis,
             sampler: vk::Sampler::null(),
+            basis_sampler: vk::Sampler::null(),
             pool: vk::DescriptorPool::null(),
             sets: Vec::new(),
         };
@@ -449,6 +455,15 @@ impl BakedGpu {
                 .anisotropy_enable(true)
                 .max_anisotropy(max.min(ANISOTROPY));
         }
+        // The same without the anisotropy.
+        let plain = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .max_lod(vk::LOD_CLAMP_NONE);
         let n = uniforms.len() as u32;
         let sizes = [
             vk::DescriptorPoolSize {
@@ -457,7 +472,7 @@ impl BakedGpu {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: n,
+                descriptor_count: 2 * n,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
@@ -468,6 +483,9 @@ impl BakedGpu {
         // them. The sets are not in use yet when written.
         unsafe {
             self.sampler = d.create_sampler(&info, None).ctx("place sampler")?;
+            self.basis_sampler = d
+                .create_sampler(&plain, None)
+                .ctx("place basis sampler")?;
             self.pool = d
                 .create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default()
@@ -477,6 +495,7 @@ impl BakedGpu {
                 )
                 .ctx("baked place descriptor pool")?;
             let sampler = [vk::DescriptorImageInfo::default().sampler(self.sampler)];
+            let basis_sampler = [vk::DescriptorImageInfo::default().sampler(self.basis_sampler)];
             let colors = [vk::DescriptorImageInfo::default()
                 .image_view(self.colors.views[0])
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
@@ -507,6 +526,7 @@ impl BakedGpu {
                     write(1, vk::DescriptorType::SAMPLER).image_info(&sampler),
                     write(2, vk::DescriptorType::SAMPLED_IMAGE).image_info(&colors),
                     write(3, vk::DescriptorType::SAMPLED_IMAGE).image_info(&basis),
+                    write(4, vk::DescriptorType::SAMPLER).image_info(&basis_sampler),
                 ];
                 d.update_descriptor_sets(&writes, &[]);
             }
@@ -526,9 +546,11 @@ impl BakedGpu {
         unsafe {
             gpu.device.destroy_descriptor_pool(self.pool, None);
             gpu.device.destroy_sampler(self.sampler, None);
+            gpu.device.destroy_sampler(self.basis_sampler, None);
         }
         self.pool = vk::DescriptorPool::null();
         self.sampler = vk::Sampler::null();
+        self.basis_sampler = vk::Sampler::null();
         self.sets.clear();
         self.colors.destroy(gpu);
         self.basis.destroy(gpu);
@@ -542,11 +564,16 @@ mod tests {
     #[test]
     fn the_bindings_are_the_shaders() {
         let shader = include_str!("../shaders/env_baked.wgsl");
-        for (binding, name) in [(1, "tex_sampler"), (2, "colors"), (3, "basis")] {
+        for (binding, name) in [
+            (1, "tex_sampler"),
+            (2, "colors"),
+            (3, "basis"),
+            (4, "basis_sampler"),
+        ] {
             let line = format!("@group(0) @binding({binding}) var {name}");
             assert!(shader.contains(&line), "env_baked.wgsl lacks `{line}`");
         }
         let numbers: Vec<u32> = BINDINGS.iter().map(|b| b.0).collect();
-        assert_eq!(numbers, [0, 1, 2, 3]);
+        assert_eq!(numbers, [0, 1, 2, 3, 4]);
     }
 }

@@ -16,11 +16,14 @@ use crate::env::{Lighting, Pattern, Place, PlaceData, PlaceKind, Sky, Vertex};
 use crate::env_baked::{self, BakedGpu};
 use crate::gpu::Gpu;
 use crate::mem::Buffer;
+use crate::perf_ab::Knobs;
 use crate::pipeline::{self, Depth, PipelineDesc};
+use crate::place_sort::{self, PlaceSorter};
 use crate::{Result, VkContext};
 use ash::vk;
 use glam::{Mat4, Vec3, Vec4};
 use gpu_allocator::MemoryLocation;
+use std::sync::Arc;
 
 /// Materials a place has, at most (`palette` in envcommon.wgsl).
 const MATERIALS: usize = 16;
@@ -191,6 +194,11 @@ struct Loaded {
     look: Look,
     /// A pack's textures and sets: it is drawn with the baked pipeline.
     baked: Option<BakedGpu>,
+    /// Which pack this is, for the sorter's answers (they are for one).
+    generation: u64,
+    /// A pack's indices ordered nearest the viewer first, and how many,
+    /// once the sorter has made them.
+    sorted: Option<(Buffer, u32)>,
 }
 
 struct SlotEnv {
@@ -211,6 +219,19 @@ pub(crate) struct EnvPass {
     baked_set_layout: vk::DescriptorSetLayout,
     baked_layout: vk::PipelineLayout,
     baked_pipe: vk::Pipeline,
+    /// The knobs (perf_ab.rs): the picture's light on a baked place, its
+    /// anisotropic reads, and the nearest-first order.
+    basis: bool,
+    basis_aniso: bool,
+    sort: bool,
+    /// Whether the order is made at all (it is when the knob or the A/B
+    /// cycle can want it).
+    sort_work: bool,
+    sorter: Option<PlaceSorter>,
+    /// The generation of the pack that is loaded.
+    generation: u64,
+    /// The eye the order was last asked for.
+    ordered_for: Option<Vec3>,
 }
 
 fn attribute(
@@ -275,6 +296,13 @@ impl EnvPass {
             baked_set_layout: vk::DescriptorSetLayout::null(),
             baked_layout: vk::PipelineLayout::null(),
             baked_pipe: vk::Pipeline::null(),
+            basis: true,
+            basis_aniso: false,
+            sort: true,
+            sort_work: true,
+            sorter: None,
+            generation: 0,
+            ordered_for: None,
         };
         if let Err(e) = p.create(gpu, color_format, depth, samples, slots) {
             p.destroy(gpu);
@@ -294,35 +322,8 @@ impl EnvPass {
         let d = &gpu.device;
         self.set_layout = pipeline::set_layout(gpu, &[(0, vk::DescriptorType::UNIFORM_BUFFER)])?;
         self.layout = pipeline::layout(gpu, self.set_layout, 4)?;
-        let attributes = vertex_attributes();
-        self.env_pipe = pipeline::create(
-            gpu,
-            &PipelineDesc {
-                spv: crate::ENV_SPV,
-                layout: self.layout,
-                color_format,
-                vertex_stride: size_of::<Vertex>() as u32,
-                attributes: &attributes,
-                blend: false,
-                descriptor_buffer: false,
-                depth: Depth::TestWrite(depth),
-                samples,
-            },
-        )?;
-        self.sky_pipe = pipeline::create(
-            gpu,
-            &PipelineDesc {
-                spv: crate::SKY_SPV,
-                layout: self.layout,
-                color_format,
-                vertex_stride: 0,
-                attributes: &[],
-                blend: false,
-                descriptor_buffer: false,
-                depth: Depth::Test(depth),
-                samples,
-            },
-        )?;
+        let _ = (color_format, depth);
+        (self.env_pipe, self.sky_pipe) = self.make_pipes(gpu, samples)?;
         let n = slots as u32;
         let sizes = [vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -373,17 +374,59 @@ impl EnvPass {
         Ok(())
     }
 
-    /// Makes the baked pipeline the first time a pack is loaded: users with
-    /// no pack never pay for it.
-    fn ensure_baked_pipe(&mut self, gpu: &Gpu) -> Result<()> {
-        if self.baked_pipe != vk::Pipeline::null() {
-            return Ok(());
+    /// The built-in rooms' mesh and sky pipelines at `samples` samples a
+    /// pixel (drawing into the target's formats).
+    fn make_pipes(
+        &self,
+        gpu: &Gpu,
+        samples: vk::SampleCountFlags,
+    ) -> Result<(vk::Pipeline, vk::Pipeline)> {
+        let (color_format, depth, _) = self.target;
+        let attributes = vertex_attributes();
+        let env_pipe = pipeline::create(
+            gpu,
+            &PipelineDesc {
+                spv: crate::ENV_SPV,
+                layout: self.layout,
+                color_format,
+                vertex_stride: size_of::<Vertex>() as u32,
+                attributes: &attributes,
+                blend: false,
+                descriptor_buffer: false,
+                depth: Depth::TestWrite(depth),
+                samples,
+            },
+        )?;
+        let sky = pipeline::create(
+            gpu,
+            &PipelineDesc {
+                spv: crate::SKY_SPV,
+                layout: self.layout,
+                color_format,
+                vertex_stride: 0,
+                attributes: &[],
+                blend: false,
+                descriptor_buffer: false,
+                depth: Depth::Test(depth),
+                samples,
+            },
+        );
+        match sky {
+            Ok(sky_pipe) => Ok((env_pipe, sky_pipe)),
+            Err(e) => {
+                // SAFETY: just made, never bound.
+                unsafe { gpu.device.destroy_pipeline(env_pipe, None) };
+                Err(e)
+            }
         }
-        let (color_format, depth, samples) = self.target;
-        self.baked_set_layout = pipeline::set_layout(gpu, &env_baked::BINDINGS)?;
-        self.baked_layout = pipeline::layout(gpu, self.baked_set_layout, 4)?;
+    }
+
+    /// The baked pipeline at `samples` samples a pixel, in the layout made by
+    /// `ensure_baked_pipe`.
+    fn make_baked_pipe(&self, gpu: &Gpu, samples: vk::SampleCountFlags) -> Result<vk::Pipeline> {
+        let (color_format, depth, _) = self.target;
         let attributes = baked_attributes();
-        self.baked_pipe = pipeline::create(
+        pipeline::create(
             gpu,
             &PipelineDesc {
                 spv: crate::ENV_BAKED_SPV,
@@ -396,8 +439,122 @@ impl EnvPass {
                 depth: Depth::TestWrite(depth),
                 samples,
             },
-        )?;
+        )
+    }
+
+    /// Makes the baked pipeline the first time a pack is loaded: users with
+    /// no pack never pay for it.
+    fn ensure_baked_pipe(&mut self, gpu: &Gpu) -> Result<()> {
+        if self.baked_pipe != vk::Pipeline::null() {
+            return Ok(());
+        }
+        let samples = self.target.2;
+        self.baked_set_layout = pipeline::set_layout(gpu, &env_baked::BINDINGS)?;
+        self.baked_layout = pipeline::layout(gpu, self.baked_set_layout, 4)?;
+        self.baked_pipe = self.make_baked_pipe(gpu, samples)?;
         Ok(())
+    }
+
+    /// Makes the pipelines again for `samples` samples a pixel (the eye
+    /// passes' count changed). The device must be idle. Nothing changes when
+    /// it fails.
+    pub fn set_samples(&mut self, gpu: &Gpu, samples: vk::SampleCountFlags) -> Result<()> {
+        if samples == self.target.2 {
+            return Ok(());
+        }
+        let (env_pipe, sky_pipe) = self.make_pipes(gpu, samples)?;
+        let baked = if self.baked_pipe == vk::Pipeline::null() {
+            Ok(vk::Pipeline::null())
+        } else {
+            self.make_baked_pipe(gpu, samples)
+        };
+        let baked_pipe = match baked {
+            Ok(p) => p,
+            Err(e) => {
+                // SAFETY: just made, never bound.
+                unsafe {
+                    gpu.device.destroy_pipeline(env_pipe, None);
+                    gpu.device.destroy_pipeline(sky_pipe, None);
+                }
+                return Err(e);
+            }
+        };
+        // SAFETY: the device is idle; the old pipelines are ours.
+        unsafe {
+            gpu.device.destroy_pipeline(self.env_pipe, None);
+            gpu.device.destroy_pipeline(self.sky_pipe, None);
+            gpu.device.destroy_pipeline(self.baked_pipe, None);
+        }
+        (self.env_pipe, self.sky_pipe, self.baked_pipe) = (env_pipe, sky_pipe, baked_pipe);
+        self.target.2 = samples;
+        Ok(())
+    }
+
+    /// Takes the knobs the environment set (perf_ab.rs).
+    pub fn set_knobs(&mut self, knobs: &Knobs) {
+        self.basis = knobs.basis;
+        self.basis_aniso = knobs.basis_aniso;
+        self.sort = knobs.sort;
+        // The order is worth making when something can want it.
+        self.sort_work = knobs.sort || knobs.ab;
+    }
+
+    /// The picture's light on a baked place, on or off (the A/B cycle).
+    pub fn set_basis(&mut self, on: bool) {
+        self.basis = on;
+    }
+
+    /// A baked place drawn nearest first, or in its pack's order (the A/B
+    /// cycle); the order is still kept up to date while it is off.
+    pub fn set_sort(&mut self, on: bool) {
+        self.sort = on;
+    }
+
+    /// Keeps the loaded pack's draw order for a viewer at `eye` (room
+    /// space): takes the order the sorter has finished, if any, and asks for
+    /// a new one when the eye has moved on from the last (a seat change).
+    /// The sorting is on another thread; the order replaced goes to
+    /// `garbage`, the recording slot's.
+    pub fn update_order(&mut self, gpu: &Gpu, eye: Vec3, garbage: &mut Vec<Buffer>) {
+        if !self.sort_work {
+            return;
+        }
+        let Some(l) = self.loaded.as_mut().filter(|l| l.baked.is_some()) else {
+            return;
+        };
+        let Some(sorter) = self.sorter.as_ref() else {
+            return;
+        };
+        while let Some(done) = sorter.poll() {
+            if done.generation != l.generation {
+                continue;
+            }
+            let bytes: &[u8] = bytemuck::cast_slice(&done.indices);
+            let made = Buffer::new(
+                gpu,
+                bytes.len() as u64,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+                MemoryLocation::CpuToGpu,
+                "place sorted indices",
+            );
+            match made {
+                Ok(mut b) => {
+                    b.bytes()[..bytes.len()].copy_from_slice(bytes);
+                    if let Some((old, _)) = l.sorted.replace((b, done.indices.len() as u32)) {
+                        garbage.push(old);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("the place is drawn unsorted: {e}");
+                    self.sort_work = false;
+                    return;
+                }
+            }
+        }
+        if place_sort::needs_order(self.ordered_for, eye) {
+            self.ordered_for = Some(eye);
+            sorter.sort(l.generation, eye);
+        }
     }
 
     /// Whether `place` is the one loaded. (The renderer gets it built off the
@@ -436,6 +593,7 @@ impl EnvPass {
             ),
         };
         let index_count = (index_bytes.len() / size_of::<u32>()) as u32;
+        let pack: Option<Arc<crate::env::pack::Baked>> = data.baked.clone();
         let baked = match &data.baked {
             Some(b) => {
                 self.ensure_baked_pipe(gpu)?;
@@ -483,10 +641,25 @@ impl EnvPass {
             index_count,
             look: Look::new(&data),
             baked,
+            generation: self.generation + 1,
+            sorted: None,
         };
+        self.generation += 1;
+        self.ordered_for = None;
+        if let Some(pack) = pack.filter(|_| self.sort_work) {
+            if self.sorter.is_none() {
+                self.sorter = PlaceSorter::new();
+            }
+            if let Some(s) = self.sorter.as_ref() {
+                s.load(self.generation, pack);
+            }
+        }
         if let Some(mut old) = self.loaded.replace(loaded) {
             garbage.push(old.vertices);
             garbage.push(old.indices);
+            if let Some((b, _)) = old.sorted.take() {
+                garbage.push(b);
+            }
             // Textures and sets can't wait for a slot's fence like the
             // buffers: a frame in flight may still be reading them. A pack
             // being replaced is rare, so the device goes idle once.
@@ -506,7 +679,14 @@ impl EnvPass {
 
     /// The uniform for the loaded place this frame.
     pub fn uniform(&self, input: &EnvInput) -> Option<EnvUniform> {
-        self.loaded.as_ref().map(|l| l.look.uniform(input))
+        self.loaded.as_ref().map(|l| {
+            let mut u = l.look.uniform(input);
+            if l.baked.is_some() {
+                u.baked.y = f32::from(self.basis);
+                u.baked.z = f32::from(self.basis_aniso);
+            }
+            u
+        })
     }
 
     /// Writes slot `slot`'s uniform. Its fence has been waited on.
@@ -537,10 +717,15 @@ impl EnvPass {
                     0,
                     &eye.to_le_bytes(),
                 );
-                if l.index_count > 0 {
+                // Nearest first once the sorter has the order for this pack.
+                let (indices, count) = match l.sorted.as_ref().filter(|_| self.sort) {
+                    Some((b, n)) => (b.buffer, *n),
+                    None => (l.indices.buffer, l.index_count),
+                };
+                if count > 0 {
                     d.cmd_bind_vertex_buffers(cmd, 0, &[l.vertices.buffer], &[0]);
-                    d.cmd_bind_index_buffer(cmd, l.indices.buffer, 0, vk::IndexType::UINT32);
-                    d.cmd_draw_indexed(cmd, l.index_count, 1, 0, 0, 0);
+                    d.cmd_bind_index_buffer(cmd, indices, 0, vk::IndexType::UINT32);
+                    d.cmd_draw_indexed(cmd, count, 1, 0, 0, 0);
                 }
             }
             return;
@@ -590,6 +775,9 @@ impl EnvPass {
         if let Some(mut l) = self.loaded.take() {
             l.vertices.destroy(gpu);
             l.indices.destroy(gpu);
+            if let Some((mut b, _)) = l.sorted.take() {
+                b.destroy(gpu);
+            }
             if let Some(mut b) = l.baked.take() {
                 b.destroy(gpu);
             }

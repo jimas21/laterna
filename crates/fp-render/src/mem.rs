@@ -94,7 +94,13 @@ pub struct Image {
     pub views: Vec<vk::ImageView>,
     /// Single-mip view of level 0 in the first format (render target).
     pub level0: vk::ImageView,
+    /// True when the image sits in LAZILY_ALLOCATED memory: on a tiler
+    /// whose pass never stores it, it then takes no memory at all.
+    pub lazy: bool,
     alloc: Option<Allocation>,
+    /// Memory of our own, for an image in a lazily allocated type (the
+    /// allocator crate has no location for one).
+    raw_memory: vk::DeviceMemory,
 }
 
 impl Image {
@@ -124,7 +130,14 @@ impl Image {
                 .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
                 .push_next(&mut format_list);
         }
-        Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, view_formats, name)
+        Image::create(
+            gpu,
+            &info,
+            vk::ImageAspectFlags::COLOR,
+            view_formats,
+            name,
+            false,
+        )
     }
 
     /// A 2D array image of `layers` layers and `mips` levels in `format`,
@@ -155,7 +168,14 @@ impl Image {
             vk::SampleCountFlags::TYPE_1,
         )
         .array_layers(layers.max(1));
-        Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, &[format], name)
+        Image::create(
+            gpu,
+            &info,
+            vk::ImageAspectFlags::COLOR,
+            &[format],
+            name,
+            false,
+        )
     }
 
     /// A depth attachment image of `format` with `samples` samples a pixel,
@@ -173,7 +193,14 @@ impl Image {
         let usage = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
             | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
         let info = image_info(format, width, height, 1, usage, samples);
-        Image::create(gpu, &info, vk::ImageAspectFlags::DEPTH, &[format], name)
+        Image::create(
+            gpu,
+            &info,
+            vk::ImageAspectFlags::DEPTH,
+            &[format],
+            name,
+            true,
+        )
     }
 
     /// A multisampled colour attachment image of `format` with `samples`
@@ -191,15 +218,26 @@ impl Image {
         let usage =
             vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
         let info = image_info(format, width, height, 1, usage, samples);
-        Image::create(gpu, &info, vk::ImageAspectFlags::COLOR, &[format], name)
+        Image::create(
+            gpu,
+            &info,
+            vk::ImageAspectFlags::COLOR,
+            &[format],
+            name,
+            true,
+        )
     }
 
+    /// `lazy`: the image is only ever an attachment a pass never stores
+    /// (transient usage), so lazily allocated memory is used when the
+    /// device has a type for it.
     fn create(
         gpu: &Gpu,
         info: &vk::ImageCreateInfo,
         aspect: vk::ImageAspectFlags,
         view_formats: &[vk::Format],
         name: &str,
+        lazy: bool,
     ) -> Result<Image> {
         // SAFETY: valid create info.
         let image = unsafe { gpu.device.create_image(info, None) }.ctx("create image")?;
@@ -214,10 +252,12 @@ impl Image {
             layers: info.array_layers,
             views: Vec::new(),
             level0: vk::ImageView::null(),
+            lazy: false,
             alloc: None,
+            raw_memory: vk::DeviceMemory::null(),
         };
         // Out of memory, what was made so far is given back.
-        if let Err(e) = img.back(gpu, aspect, view_formats, name) {
+        if let Err(e) = img.back(gpu, aspect, view_formats, name, lazy) {
             img.destroy(gpu);
             return Err(e);
         }
@@ -231,26 +271,29 @@ impl Image {
         aspect: vk::ImageAspectFlags,
         view_formats: &[vk::Format],
         name: &str,
+        lazy: bool,
     ) -> Result<()> {
         // SAFETY: valid image.
         let requirements = unsafe { gpu.device.get_image_memory_requirements(self.image) };
-        let alloc = self.alloc.insert(
-            gpu.alloc()
-                .allocate(&AllocationCreateDesc {
-                    name,
-                    requirements,
-                    location: MemoryLocation::GpuOnly,
-                    linear: false,
-                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-                })
-                .map_err(|e| Error::Alloc(e.to_string()))?,
-        );
-        // SAFETY: memory matches the requirements.
-        unsafe {
-            gpu.device
-                .bind_image_memory(self.image, alloc.memory(), alloc.offset())
+        if !(lazy && self.back_lazily(gpu, &requirements, name)) {
+            let alloc = self.alloc.insert(
+                gpu.alloc()
+                    .allocate(&AllocationCreateDesc {
+                        name,
+                        requirements,
+                        location: MemoryLocation::GpuOnly,
+                        linear: false,
+                        allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                    })
+                    .map_err(|e| Error::Alloc(e.to_string()))?,
+            );
+            // SAFETY: memory matches the requirements.
+            unsafe {
+                gpu.device
+                    .bind_image_memory(self.image, alloc.memory(), alloc.offset())
+            }
+            .ctx("bind image")?;
         }
-        .ctx("bind image")?;
         for &f in view_formats {
             self.views.push(view_of(
                 gpu,
@@ -270,6 +313,43 @@ impl Image {
         Ok(())
     }
 
+    /// Binds the image to its own lazily allocated memory, when the device
+    /// has such a type for it. False (nothing changed) when it has not or
+    /// the allocation failed: the caller then allocates as usual.
+    fn back_lazily(&mut self, gpu: &Gpu, req: &vk::MemoryRequirements, name: &str) -> bool {
+        // SAFETY: valid physical device.
+        let props = unsafe {
+            gpu.instance
+                .get_physical_device_memory_properties(gpu.pdev)
+        };
+        let types: Vec<vk::MemoryPropertyFlags> = props.memory_types
+            [..props.memory_type_count as usize]
+            .iter()
+            .map(|t| t.property_flags)
+            .collect();
+        let Some(index) = lazy_memory_type(&types, req.memory_type_bits) else {
+            log::info!("{name}: this device has no lazily allocated memory type");
+            return false;
+        };
+        let info = vk::MemoryAllocateInfo::default()
+            .allocation_size(req.size)
+            .memory_type_index(index as u32);
+        // SAFETY: valid allocate info; freed by `destroy`.
+        let Ok(memory) = (unsafe { gpu.device.allocate_memory(&info, None) }) else {
+            return false;
+        };
+        // SAFETY: memory of a type the image allows, large enough, unbound.
+        if unsafe { gpu.device.bind_image_memory(self.image, memory, 0) }.is_err() {
+            // SAFETY: just made, not in use.
+            unsafe { gpu.device.free_memory(memory, None) };
+            return false;
+        }
+        log::info!("{name}: lazily allocated memory, type {index}");
+        self.raw_memory = memory;
+        self.lazy = true;
+        true
+    }
+
     /// Destroys what the image holds; null handles (an image given up half
     /// made) are allowed.
     pub fn destroy(&mut self, gpu: &Gpu) {
@@ -284,7 +364,26 @@ impl Image {
         if let Some(a) = self.alloc.take() {
             let _ = gpu.alloc().free(a);
         }
+        if self.raw_memory != vk::DeviceMemory::null() {
+            // SAFETY: the image that used it is gone and no frame reads it.
+            unsafe {
+                gpu.device
+                    .free_memory(std::mem::take(&mut self.raw_memory), None)
+            };
+        }
     }
+}
+
+/// The index of the first memory type of `types` among those `bits` allows
+/// that is device-local and lazily allocated: where a transient attachment a
+/// tiler never stores can live without taking any memory.
+pub(crate) fn lazy_memory_type(types: &[vk::MemoryPropertyFlags], bits: u32) -> Option<usize> {
+    let want = vk::MemoryPropertyFlags::LAZILY_ALLOCATED | vk::MemoryPropertyFlags::DEVICE_LOCAL;
+    types
+        .iter()
+        .enumerate()
+        .find(|&(i, f)| i < 32 && bits & (1 << i) != 0 && f.contains(want))
+        .map(|(i, _)| i)
 }
 
 /// The `CreateInfo` of an optimally tiled 2D image with `samples` samples a
@@ -490,3 +589,30 @@ pub const DEPTH_WRITE: (vk::PipelineStageFlags2, vk::AccessFlags2) = (
             | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw(),
     ),
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LOCAL: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+    const LAZY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
+        vk::MemoryPropertyFlags::DEVICE_LOCAL.as_raw()
+            | vk::MemoryPropertyFlags::LAZILY_ALLOCATED.as_raw(),
+    );
+
+    #[test]
+    fn a_lazily_allocated_type_is_found_only_where_the_image_allows_it() {
+        // Turnip-like: nothing lazy.
+        assert_eq!(lazy_memory_type(&[LOCAL, LOCAL], 0b11), None);
+        // A tiler that offers one (second type), allowed by the image.
+        let types = [LOCAL, LAZY, LOCAL];
+        assert_eq!(lazy_memory_type(&types, 0b111), Some(1));
+        // Not one of the types this image can use.
+        assert_eq!(lazy_memory_type(&types, 0b101), None);
+        // The first of several; lazily allocated but not device-local is no use.
+        assert_eq!(lazy_memory_type(&[LAZY, LAZY], 0b11), Some(0));
+        let host_lazy = vk::MemoryPropertyFlags::LAZILY_ALLOCATED;
+        assert_eq!(lazy_memory_type(&[host_lazy], 0b1), None);
+        assert_eq!(lazy_memory_type(&[], 0b1), None);
+    }
+}

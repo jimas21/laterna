@@ -447,10 +447,11 @@ struct Switches {
     /// not undo the change to the eye pass that makes places possible.
     no_places: bool,
     /// `FRAMEPLAYERX_MSAA=1` (or `0`): draw the eye passes with one sample
-    /// a pixel. They use 4x multisampling by default (smooth edges, and no
-    /// measurable cost on the Frame's tile GPU), which is what `=4` asks for
-    /// too. A device without 4x multisampling gets the nearest it has.
-    msaa_off: bool,
+    /// a pixel; `=2` with two. They use 4x multisampling by default (smooth
+    /// edges), which is what `=4` asks for too. A device without the count
+    /// asked for gets the nearest lower one it has. (`FRAMEPLAYERX_PERF_AB=1`
+    /// then steps through the counts on its own: see fp-render's perf_ab.)
+    msaa: u32,
 }
 
 impl Switches {
@@ -489,7 +490,7 @@ impl Switches {
                 get("FRAMEPLAYERX_TESTCARD_LAYER").as_deref(),
             ),
             no_places: !app::places::enabled(&get),
-            msaa_off: msaa_is_off(get("FRAMEPLAYERX_MSAA").as_deref()),
+            msaa: msaa_from(get("FRAMEPLAYERX_MSAA").as_deref()),
         }
     }
 
@@ -533,8 +534,8 @@ impl Switches {
         if self.no_places {
             on.push("FRAMEPLAYERX_PLACES=0".to_string());
         }
-        if self.msaa_off {
-            on.push("FRAMEPLAYERX_MSAA=1".to_string());
+        if self.msaa != EYE_SAMPLES {
+            on.push(format!("FRAMEPLAYERX_MSAA={}", self.msaa));
         }
         if on.is_empty() {
             "none".into()
@@ -544,19 +545,23 @@ impl Switches {
     }
 
     /// The samples a pixel the eye passes are drawn with: 4 unless
-    /// `FRAMEPLAYERX_MSAA` turned it off.
+    /// `FRAMEPLAYERX_MSAA` asked for fewer.
     fn msaa_samples(&self) -> u32 {
-        if self.msaa_off { 1 } else { EYE_SAMPLES }
+        self.msaa
     }
 }
 
 /// The samples a pixel the eye passes are drawn with by default.
 const EYE_SAMPLES: u32 = 4;
 
-/// Whether `FRAMEPLAYERX_MSAA` turns multisampling off: "1" or "0". Nothing,
-/// "4" or anything else leaves it on.
-fn msaa_is_off(value: Option<&str>) -> bool {
-    matches!(value.map(str::trim), Some("1" | "0"))
+/// The samples a pixel `FRAMEPLAYERX_MSAA` asks for: "1" or "0" one, "2" two.
+/// Nothing, "4" or anything else leaves the default.
+fn msaa_from(value: Option<&str>) -> u32 {
+    match value.map(str::trim) {
+        Some("1" | "0") => 1,
+        Some("2") => 2,
+        _ => EYE_SAMPLES,
+    }
 }
 
 /// What the runtime hands the app each frame, summarised every 10 s. A
@@ -1238,7 +1243,7 @@ mod tests {
         // On by default; "4" still asks for the same.
         assert_eq!(Switches::parse(env(&[])).msaa_samples(), 4);
         assert_eq!(Switches::parse(env(&[])).describe(), "none");
-        for on in ["4", " 4 ", "", "2", "yes"] {
+        for on in ["4", " 4 ", "", "yes", "8"] {
             let s = with("FRAMEPLAYERX_MSAA", on);
             assert_eq!(s.msaa_samples(), 4, "{on:?}");
             assert_eq!(s.describe(), "none", "{on:?}");
@@ -1248,6 +1253,10 @@ mod tests {
             assert_eq!(s.msaa_samples(), 1, "{off:?}");
             assert_eq!(s.describe(), "FRAMEPLAYERX_MSAA=1", "{off:?}");
         }
+        // Two samples is asked for by name.
+        let s = with("FRAMEPLAYERX_MSAA", "2");
+        assert_eq!(s.msaa_samples(), 2);
+        assert_eq!(s.describe(), "FRAMEPLAYERX_MSAA=2");
     }
 
     #[test]
