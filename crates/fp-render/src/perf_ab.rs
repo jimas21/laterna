@@ -164,9 +164,8 @@ pub(crate) struct Measured {
 
 impl Measured {
     pub fn line(&self) -> String {
-        let show = |v: Option<(f32, f32)>| {
-            v.map_or("-".to_string(), |(m, x)| format!("{m:.2}/{x:.2}"))
-        };
+        let show =
+            |v: Option<(f32, f32)>| v.map_or("-".to_string(), |(m, x)| format!("{m:.2}/{x:.2}"));
         format!(
             "{:<26} gpu {} ms, eyes {} ms (median/max, {} frames)",
             self.variant.label(),
@@ -360,7 +359,10 @@ mod tests {
     fn a_variant_is_measured_for_ten_seconds_after_the_settling_time() {
         let t0 = Instant::now();
         let mut c = AbCycle::new();
-        assert_eq!(c.observe(t0, Some(9.0), Some(8.0)), Step::Switch(VARIANTS[0]));
+        assert_eq!(
+            c.observe(t0, Some(9.0), Some(8.0)),
+            Step::Switch(VARIANTS[0])
+        );
         // Settling: not counted.
         assert_eq!(
             c.observe(t0 + Duration::from_millis(500), Some(50.0), Some(50.0)),

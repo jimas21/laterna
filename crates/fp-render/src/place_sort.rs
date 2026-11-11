@@ -56,7 +56,9 @@ impl Triangles {
         let whole = indices.len() / 3 * 3;
         let indices = indices[..whole].to_vec();
         let centroids = indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| (at(t[0]) + at(t[1]) + at(t[2])) / 3.0)
             .collect();
         Triangles { centroids, indices }
@@ -210,7 +212,11 @@ mod tests {
         let mut v = Vec::new();
         for k in 0..n {
             let z = k as f32;
-            v.extend([vertex(0.0, 0.0, z), vertex(1.0, 0.0, z), vertex(0.0, 1.0, z)]);
+            v.extend([
+                vertex(0.0, 0.0, z),
+                vertex(1.0, 0.0, z),
+                vertex(0.0, 1.0, z),
+            ]);
         }
         let mut idx = Vec::new();
         for &k in order {
@@ -220,7 +226,7 @@ mod tests {
     }
 
     fn triangles_of(indices: &[u32]) -> Vec<[u32; 3]> {
-        indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect()
+        indices.as_chunks::<3>().0.to_vec()
     }
 
     #[test]
@@ -259,7 +265,11 @@ mod tests {
         // Two triangles the same distance from the eye, either way round.
         let mut v = vec![];
         for z in [-1.0f32, 1.0] {
-            v.extend([vertex(0.0, 0.0, z), vertex(0.0, 0.0, z), vertex(0.0, 0.0, z)]);
+            v.extend([
+                vertex(0.0, 0.0, z),
+                vertex(0.0, 0.0, z),
+                vertex(0.0, 0.0, z),
+            ]);
         }
         let t = Triangles::new(&v, &[3, 4, 5, 0, 1, 2]);
         assert_eq!(t.sorted(Vec3::ZERO), [3, 4, 5, 0, 1, 2]);
@@ -330,7 +340,10 @@ mod tests {
         assert_eq!(done.indices, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
         // From the other side.
         s.sort(7, Vec3::new(0.0, 0.0, 10.0));
-        assert_eq!(wait(&s).expect("sorted").indices, [6, 7, 8, 3, 4, 5, 0, 1, 2]);
+        assert_eq!(
+            wait(&s).expect("sorted").indices,
+            [6, 7, 8, 3, 4, 5, 0, 1, 2]
+        );
     }
 
     #[test]

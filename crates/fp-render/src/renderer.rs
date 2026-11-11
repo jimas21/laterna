@@ -15,8 +15,8 @@ use crate::hdr::PeakDetector;
 use crate::mem::{self, Buffer, Image};
 use crate::params::{self, Quality, SceneParams, VideoParams};
 use crate::peak::PeakPass;
-use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::perf_ab::{AbCycle, Knobs, Step};
+use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::place_builder::{Built, PlaceBuilder, build_timed};
 use crate::pyramid::{self, PyramidPass};
 use crate::q10c::Converter;
@@ -2601,9 +2601,11 @@ impl Renderer {
             return;
         }
         let t = self.gpu_times;
-        let Step::Switch(variant) =
-            ab.observe(Instant::now(), t.and_then(|t| t.total), t.and_then(|t| t.eyes))
-        else {
+        let Step::Switch(variant) = ab.observe(
+            Instant::now(),
+            t.and_then(|t| t.total),
+            t.and_then(|t| t.eyes),
+        ) else {
             return;
         };
         match self.set_samples(variant.samples) {

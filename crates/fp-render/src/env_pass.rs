@@ -529,6 +529,7 @@ impl EnvPass {
             if done.generation != l.generation {
                 continue;
             }
+            log::debug!("place order made for an eye at {}", done.eye);
             let bytes: &[u8] = bytemuck::cast_slice(&done.indices);
             let made = Buffer::new(
                 gpu,
@@ -855,7 +856,7 @@ mod tests {
             basis_gain: 2.5,
         };
         let mut data = data;
-        data.baked = Some(std::sync::Arc::new(baked));
+        data.baked = Some(Arc::new(baked));
         let u = Look::new(&data).uniform(&input(1.0));
         assert_eq!(u.baked.x, 2.5);
     }

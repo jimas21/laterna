@@ -483,9 +483,7 @@ impl BakedGpu {
         // them. The sets are not in use yet when written.
         unsafe {
             self.sampler = d.create_sampler(&info, None).ctx("place sampler")?;
-            self.basis_sampler = d
-                .create_sampler(&plain, None)
-                .ctx("place basis sampler")?;
+            self.basis_sampler = d.create_sampler(&plain, None).ctx("place basis sampler")?;
             self.pool = d
                 .create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default()

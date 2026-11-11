@@ -318,10 +318,7 @@ impl Image {
     /// the allocation failed: the caller then allocates as usual.
     fn back_lazily(&mut self, gpu: &Gpu, req: &vk::MemoryRequirements, name: &str) -> bool {
         // SAFETY: valid physical device.
-        let props = unsafe {
-            gpu.instance
-                .get_physical_device_memory_properties(gpu.pdev)
-        };
+        let props = unsafe { gpu.instance.get_physical_device_memory_properties(gpu.pdev) };
         let types: Vec<vk::MemoryPropertyFlags> = props.memory_types
             [..props.memory_type_count as usize]
             .iter()
@@ -368,8 +365,8 @@ impl Image {
             // SAFETY: the image that used it is gone and no frame reads it.
             unsafe {
                 gpu.device
-                    .free_memory(std::mem::take(&mut self.raw_memory), None)
-            };
+                    .free_memory(std::mem::take(&mut self.raw_memory), None);
+            }
         }
     }
 }
