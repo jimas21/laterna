@@ -451,7 +451,7 @@ struct Switches {
     /// edges), which is what `=4` asks for too. A device without the count
     /// asked for gets the nearest lower one it has. (`FRAMEPLAYERX_PERF_AB=1`
     /// then steps through the counts on its own: see fp-render's perf_ab.)
-    msaa: u32,
+    msaa: Option<u32>,
 }
 
 impl Switches {
@@ -534,8 +534,8 @@ impl Switches {
         if self.no_places {
             on.push("FRAMEPLAYERX_PLACES=0".to_string());
         }
-        if self.msaa != EYE_SAMPLES {
-            on.push(format!("FRAMEPLAYERX_MSAA={}", self.msaa));
+        if let Some(n) = self.msaa {
+            on.push(format!("FRAMEPLAYERX_MSAA={n}"));
         }
         if on.is_empty() {
             "none".into()
@@ -547,7 +547,7 @@ impl Switches {
     /// The samples a pixel the eye passes are drawn with: 4 unless
     /// `FRAMEPLAYERX_MSAA` asked for fewer.
     fn msaa_samples(&self) -> u32 {
-        self.msaa
+        self.msaa.unwrap_or(EYE_SAMPLES)
     }
 }
 
@@ -555,12 +555,12 @@ impl Switches {
 const EYE_SAMPLES: u32 = 4;
 
 /// The samples a pixel `FRAMEPLAYERX_MSAA` asks for: "1" or "0" one, "2" two.
-/// Nothing, "4" or anything else leaves the default.
-fn msaa_from(value: Option<&str>) -> u32 {
+/// Nothing, "4" or anything else leaves the default (`None`).
+fn msaa_from(value: Option<&str>) -> Option<u32> {
     match value.map(str::trim) {
-        Some("1" | "0") => 1,
-        Some("2") => 2,
-        _ => EYE_SAMPLES,
+        Some("1" | "0") => Some(1),
+        Some("2") => Some(2),
+        _ => None,
     }
 }
 
