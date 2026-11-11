@@ -299,6 +299,31 @@ lines in the lock file nothing is bundled.
 The Studio is not in the picker for now. Its code and a stored choice of it
 still work.
 
+### Measuring the place pass (the jitter is still open)
+
+The Cinema's eye passes cost 8 to 10 ms a frame on the Steam Frame (an empty
+scene: 4.6 ms) against a budget of about 2.5 ms at 90 Hz for the place, and the
+frame period goes to 22 to 33 ms when frames are missed. What has been done
+about it is **not measured on a headset yet**, so treat the jitter as open:
+
+- The baked pass is drawn nearest first (`place_sort`): the depth test then
+  rejects hidden fragments before the ten texture reads. This is the one change
+  expected to save real GPU time. The basis textures are read trilinear (not
+  anisotropic) by default. The default stays 4x MSAA.
+- Lazily allocated memory for the depth and MSAA attachments (`mem.rs`) only
+  does anything on a device that has such a memory type. Turnip on the Frame
+  most likely has none (the log then says "this device has no lazily allocated
+  memory type"), so it is a no-op there: do not count it toward the budget. The
+  log line "lazily allocated memory, type N" shows when it did engage.
+- To get the numbers in one session, start the app with
+  `FRAMEPLAYERX_PERF_AB=1`, sit in the Cinema and leave it for about 80
+  seconds. It steps through seven variants (MSAA 4, 2 and 1; the picture's light
+  on and off; sorted and in pack order), ten seconds each, and logs
+  `perf-ab: ...` per variant and a `perf-ab table:` at the end with the median
+  and worst GPU time of each. Single knobs: `FRAMEPLAYERX_MSAA=1|2`,
+  `FRAMEPLAYERX_PLACE_SORT=0`, `FRAMEPLAYERX_PLACE_BASIS=0`,
+  `FRAMEPLAYERX_BASIS_ANISO=1`.
+
 ## Milestones
 
 1. Milestone 1 (above), built with CI as the only compiler and the preview

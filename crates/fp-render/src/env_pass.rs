@@ -558,6 +558,12 @@ impl EnvPass {
         }
     }
 
+    /// Whether the sorter has answered for the loaded pack, so that it is
+    /// drawn nearest first (when the sort is on). For tests.
+    pub fn has_sorted_order(&self) -> bool {
+        self.loaded.as_ref().is_some_and(|l| l.sorted.is_some())
+    }
+
     /// Whether `place` is the one loaded. (The renderer gets it built off the
     /// render thread and `load`s it when it is ready.)
     pub fn has(&self, place: Place) -> bool {

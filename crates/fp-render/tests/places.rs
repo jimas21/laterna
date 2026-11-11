@@ -17,7 +17,7 @@ use glam::{Mat4, Quat, Vec3};
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod common;
 use common::{
@@ -1246,10 +1246,15 @@ fn a_baked_place_draws_the_same_sorted_as_in_its_packs_order() {
     // Pack order first: the sorter has not answered on the first frame.
     r.set_place_knobs(true, false);
     let in_packs_order = baked_wall(&mut r, &mut e, 1.0, 0.0, None);
-    // Give the worker time, then draw with its order.
+    // Draw until the worker has answered (not for a fixed time: a slow
+    // machine would compare two unsorted draws), then draw with its order.
     r.set_place_knobs(true, true);
-    thread::sleep(Duration::from_millis(300));
-    let _ = baked_wall(&mut r, &mut e, 1.0, 0.0, None);
+    let give_up = Instant::now() + Duration::from_secs(20);
+    while !r.place_order_ready() && Instant::now() < give_up {
+        let _ = baked_wall(&mut r, &mut e, 1.0, 0.0, None);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(r.place_order_ready(), "the sorter never answered");
     let sorted = baked_wall(&mut r, &mut e, 1.0, 0.0, None);
     assert_eq!(in_packs_order, sorted, "the order changes no pixel");
     e.destroy(&r);

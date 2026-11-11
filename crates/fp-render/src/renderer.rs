@@ -2545,6 +2545,14 @@ impl Renderer {
         }
     }
 
+    /// Whether the loaded baked place has its nearest-first order, so the
+    /// next frame is drawn from the sorted index buffer (when the sort is on).
+    /// For tests, which wait for it instead of for a time.
+    #[doc(hidden)]
+    pub fn place_order_ready(&self) -> bool {
+        self.env.as_ref().is_some_and(EnvPass::has_sorted_order)
+    }
+
     /// Makes everything that names the eye passes' sample count for
     /// `samples`, and drops the images drawn at the old count. Idempotent.
     fn rebuild_for(&mut self, samples: vk::SampleCountFlags) -> Result<()> {
