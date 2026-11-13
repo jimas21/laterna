@@ -778,7 +778,7 @@ mod tests {
         };
         // The guest profile plays: its source's libraries, not the account's,
         // and not the locked server's.
-        assert_eq!(offered(&pins, &unlocked), [guest_id.clone()]);
+        assert_eq!(offered(&pins, &unlocked), std::slice::from_ref(&guest_id));
         // Unlocked, the server's libraries come.
         unlocked.insert("manual".to_string());
         let now = offered(&pins, &unlocked);

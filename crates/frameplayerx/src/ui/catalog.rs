@@ -3057,6 +3057,31 @@ mod tests {
     }
 
     #[test]
+    fn a_library_from_home_opens_on_its_titles_alone() {
+        let mut lib = item("section:2", CatalogKind::Library);
+        lib.collection_type = Some("tvshows".into());
+        let (load, body) = titles_page(lib.clone(), plex_caps());
+        // The titles are asked for at once, not the Recommended rows.
+        let Load::Grid(q) = &load else {
+            panic!("the titles are asked for first")
+        };
+        assert_eq!((q.start, q.types.clone()), (0, vec![CatalogKind::Series]));
+        let mut j = CatalogView::on(7, body);
+        assert_eq!(j.pages.len(), 1, "no front page under it: Back leaves");
+        assert_eq!(trail(&j.pages), "section:2");
+        assert!(j.begin_request(7, 8, &load).is_some());
+        assert_eq!(library_of(&mut j).tab, LibraryTab::Library);
+        // Recommended is still a tab, asked for when it is chosen.
+        let l = library_of(&mut j);
+        assert!(l.tabs().iter().any(|t| t.0 == LibraryTab::Recommended));
+        l.show(LibraryTab::Recommended);
+        assert!(matches!(l.next_load(false), Some(Load::LibraryRows(_))));
+        // A server with no library pages opens the library as a grid.
+        let (_, body) = titles_page(lib, CatalogCapabilities::default());
+        assert!(matches!(body, Body::Grid(_)));
+    }
+
+    #[test]
     fn an_empty_recommended_shows_the_library() {
         let mut j = library_view();
         ask(&mut j, 2, &rows_load(), Loaded::LibraryRows(Vec::new()));
