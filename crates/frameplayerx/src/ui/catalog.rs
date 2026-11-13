@@ -204,6 +204,14 @@ impl LibraryPage {
         }
     }
 
+    /// Opens on the Library tab, the library's titles as a grid, not on
+    /// Recommended: no tab is asked for until the first goes out.
+    fn open_on_titles(&mut self) {
+        self.tab = LibraryTab::Library;
+        self.target = LibraryTab::Library;
+        self.asked = [false; 3];
+    }
+
     /// The tabs shown. A server with no rows for the library has no
     /// Recommended.
     fn tabs(&self) -> Vec<(LibraryTab, &'static str)> {
@@ -662,6 +670,21 @@ impl CatalogView {
                     search: String::new(),
                     typed: None,
                 },
+            }],
+        }
+    }
+
+    /// A server's page that begins on `body`, loading under `seq`, with no
+    /// front page under it: backing out of it leaves the server.
+    pub fn on(seq: u64, body: Body) -> CatalogView {
+        CatalogView {
+            pages: vec![Page {
+                seq,
+                request_seq: None,
+                loading: true,
+                error: None,
+                loaded_at: None,
+                body,
             }],
         }
     }
@@ -1237,6 +1260,21 @@ fn page_for(item: CatalogItem, caps: CatalogCapabilities) -> (Load, Body) {
             let body = Body::Grid(Box::new(Grid::new(item.name.clone(), query.clone())));
             (Load::Grid(query), body)
         }
+    }
+}
+
+/// What opening a library from Home loads, and the page that shows it: all
+/// of its titles (a server with library pages opens its Library tab, not
+/// Recommended, which would be asked for only when its tab is chosen).
+pub fn titles_page(library: CatalogItem, caps: CatalogCapabilities) -> (Load, Body) {
+    match library.kind {
+        CatalogKind::Library if caps.library_pages => {
+            let mut page = LibraryPage::new(library);
+            page.open_on_titles();
+            let load = page.load_for(LibraryTab::Library);
+            (load, Body::Library(Box::new(page)))
+        }
+        _ => page_for(library, caps),
     }
 }
 
@@ -3016,6 +3054,31 @@ mod tests {
         assert_eq!(l.collections.query.parent.as_deref(), Some("section:1"));
         assert_eq!(l.collections.query.types, [CatalogKind::BoxSet]);
         assert!(l.next_load(false).is_none(), "the rows are already asked");
+    }
+
+    #[test]
+    fn a_library_from_home_opens_on_its_titles_alone() {
+        let mut lib = item("section:2", CatalogKind::Library);
+        lib.collection_type = Some("tvshows".into());
+        let (load, body) = titles_page(lib.clone(), plex_caps());
+        // The titles are asked for at once, not the Recommended rows.
+        let Load::Grid(q) = &load else {
+            panic!("the titles are asked for first")
+        };
+        assert_eq!((q.start, q.types.clone()), (0, vec![CatalogKind::Series]));
+        let mut j = CatalogView::on(7, body);
+        assert_eq!(j.pages.len(), 1, "no front page under it: Back leaves");
+        assert_eq!(trail(&j.pages), "section:2");
+        assert!(j.begin_request(7, 8, &load).is_some());
+        assert_eq!(library_of(&mut j).tab, LibraryTab::Library);
+        // Recommended is still a tab, asked for when it is chosen.
+        let l = library_of(&mut j);
+        assert!(l.tabs().iter().any(|t| t.0 == LibraryTab::Recommended));
+        l.show(LibraryTab::Recommended);
+        assert!(matches!(l.next_load(false), Some(Load::LibraryRows(_))));
+        // A server with no library pages opens the library as a grid.
+        let (_, body) = titles_page(lib, CatalogCapabilities::default());
+        assert!(matches!(body, Body::Grid(_)));
     }
 
     #[test]

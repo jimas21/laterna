@@ -325,6 +325,13 @@ pub enum Action {
         item: Box<fp_sources::CatalogItem>,
         back_to: Screen,
     },
+    /// Opens a media server's library on all its titles, with no front page
+    /// under it; leaving it returns to `back_to`.
+    OpenLibrary {
+        source: String,
+        library: Box<fp_sources::CatalogItem>,
+        back_to: Screen,
+    },
     /// Asks the servers whose front page on Home is out of date for it.
     RefreshServerHomes,
     /// Asks a server for its video playlists, for the Playlists tab.

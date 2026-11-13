@@ -5,6 +5,7 @@ use super::page::{self, Card};
 use super::theme::{self, Weight};
 use super::widgets::{self, Kind, ListArea, Tip};
 use super::{Action, FormatFilter, HomeRows, LibraryGrid, Screen, View, fmt_size, fmt_time, icons};
+use crate::app::server_home::LibraryLink;
 use crate::playback::OpenRequest;
 use egui::{Align, Align2, Color32, Layout, RichText, Sense, Vec2};
 use fp_core::format::{DetectedFormat, Evidence, VideoFormat};
@@ -633,6 +634,8 @@ fn home(ui: &mut egui::Ui, v: &mut View) {
         .filter_map(|s| homes.get(&s.0).map(|h| (s, h)))
         .collect();
     let heads: Vec<&CatalogHome> = pages.iter().map(|(_, h)| *h).collect();
+    let links =
+        crate::app::server_home::library_links(&servers, &v.services.source_configs, &homes);
     let blocks = crate::app::server_home::layout(
         rows.continue_watching.len(),
         rows.last_watched.is_some(),
@@ -641,6 +644,7 @@ fn home(ui: &mut egui::Ui, v: &mut View) {
     );
     page::scroll(ui, |ui| {
         ui.add_space(14.0);
+        library_buttons(ui, v, &links);
         if blocks == [Block::Sources] {
             page::empty_state(
                 ui,
@@ -690,6 +694,32 @@ fn home(ui: &mut egui::Ui, v: &mut View) {
     });
     v.state.server_homes = homes;
     v.state.home = Some(rows);
+}
+
+/// A button per library of the media servers, to go straight into it: its
+/// page opens on all its titles, and Back returns to Home.
+fn library_buttons(ui: &mut egui::Ui, v: &mut View, links: &[LibraryLink]) {
+    if links.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+        for link in links {
+            let clicked = match &link.server {
+                Some(server) => widgets::chip_sub(ui, &link.label, server, false),
+                None => widgets::chip(ui, &link.label, false),
+            }
+            .clicked();
+            if clicked {
+                v.actions.push(Action::OpenLibrary {
+                    source: link.source.clone(),
+                    library: Box::new(link.library.clone()),
+                    back_to: Screen::Home,
+                });
+            }
+        }
+    });
+    ui.add_space(20.0);
 }
 
 /// Format, 3D and favourite chips and the search field over a library

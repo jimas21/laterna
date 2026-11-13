@@ -225,6 +225,11 @@ impl App {
                 item,
                 back_to,
             } => self.open_source_at(source, *item, back_to),
+            Action::OpenLibrary {
+                source,
+                library,
+                back_to,
+            } => self.open_library(source, *library, back_to),
             Action::RefreshServerHomes => self.refresh_server_homes(),
             Action::ServerPlaylists { source } => self.server_playlists(source),
             Action::ServerHistory { source } => self.server_history(source),

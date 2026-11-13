@@ -175,6 +175,28 @@ impl App {
     /// Opens a source in the browser its kind gets: the headset's videos
     /// and folders, a Plex or Jellyfin/Emby client, a feed's scenes, or folders.
     pub(super) fn open_source(&mut self, source: String, back_to: Screen) {
+        self.open_source_on(source, back_to, None);
+    }
+
+    /// Opens a media server on all the titles of `library`, with no front
+    /// page under it: Back goes to `back_to`.
+    pub(super) fn open_library(
+        &mut self,
+        source: String,
+        library: fp_sources::CatalogItem,
+        back_to: Screen,
+    ) {
+        self.open_source_on(source, back_to, Some(library));
+    }
+
+    /// [`Self::open_source`], a media server beginning on `library` when
+    /// given.
+    fn open_source_on(
+        &mut self,
+        source: String,
+        back_to: Screen,
+        library: Option<fp_sources::CatalogItem>,
+    ) {
         self.ui.details = None;
         self.ui.pin_form = None;
         self.ui.source_form = None;
@@ -233,6 +255,18 @@ impl App {
                 // answer now.
                 self.thumbs.retry_failed_remote();
                 let seq = self.ui.next_seq();
+                let caps = self
+                    .services
+                    .opener
+                    .source(&source)
+                    .and_then(|src| src.as_catalog().map(fp_sources::Catalog::capabilities));
+                if let (Some(library), Some(caps)) = (library, caps) {
+                    let (load, body) = ui::catalog::titles_page(library, caps);
+                    let j = ui::catalog::CatalogView::on(seq, body);
+                    self.ui.source = Some(view(SourcePage::Catalog(j)));
+                    self.apply(Action::Catalog { source, seq, load });
+                    return;
+                }
                 let cached = self.ui.catalog_cache.get(&source);
                 let j = ui::catalog::CatalogView::new(seq, cached);
                 self.ui.source = Some(view(SourcePage::Catalog(j)));
