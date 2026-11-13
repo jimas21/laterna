@@ -220,6 +220,7 @@ fn main() {
     logger::init(args.verbose);
     fp_media::init_logging();
     log::info!("Laterna {} starting", env!("CARGO_PKG_VERSION"));
+    place_downloads::startup();
     if args.bench.is_some() || args.seek_test.is_some() {
         allow_hevc_10bit_headless();
     }

@@ -33,7 +33,7 @@ pub fn agent_with_proxy(proxy: Option<ureq::Proxy>) -> ureq::Agent {
 }
 
 /// [`default_agent`] that refuses plain `http` everywhere, redirects
-/// included: for fetches that must never leave TLS (place packs).
+/// included (ureq checks the scheme of every hop): for fetches that must never leave TLS (place packs).
 pub fn https_only_agent() -> ureq::Agent {
     build_agent(ureq::Proxy::try_from_env(), true)
 }

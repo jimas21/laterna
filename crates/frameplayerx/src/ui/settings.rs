@@ -567,6 +567,7 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
             // Pressed Download: starts now, or asks first the one time.
             let mut start = false;
             let mut ask = false;
+            let mut consent = false;
             match row {
                 Row::Downloading { done, total } => {
                     let shown = format!("{} / {}", super::fmt_size(done), super::fmt_size(total));
@@ -657,16 +658,21 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
                         host = host.as_str()
                     );
                     r.row(&entry.title, Some(text.as_str()), |ui| {
-                        if widgets::button(
-                            ui,
-                            Some(icons::DOWNLOAD_SIMPLE),
-                            tr!("place-more-download"),
-                            Kind::Primary,
-                        )
-                        .clicked()
-                        {
-                            v.settings.places_download_ok = true;
+                        // Consent is stored only once start() takes it.
+                        let go = ui
+                            .add_enabled_ui(!busy, |ui| {
+                                widgets::button(
+                                    ui,
+                                    Some(icons::DOWNLOAD_SIMPLE),
+                                    tr!("place-more-download"),
+                                    Kind::Primary,
+                                )
+                                .clicked()
+                            })
+                            .inner;
+                        if go {
                             start = true;
+                            consent = true;
                         }
                         if widgets::button(ui, None, tr!("place-more-not-now"), Kind::Ghost)
                             .clicked()
@@ -701,7 +707,10 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
             }
             if start {
                 v.state.place_confirm = None;
-                v.state.place_downloads.start(&ctx, entry, dir.clone());
+                let started = v.state.place_downloads.start(&ctx, entry, dir.clone());
+                if started && consent {
+                    v.settings.places_download_ok = true;
+                }
             }
         }
     });

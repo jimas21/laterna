@@ -8,8 +8,10 @@
 //! decides whether a downloaded pack is acceptable.
 //!
 //! `LATERNA_PLACES_CATALOG=<file>` replaces the built-in list with a file of
-//! the same format, and allows plain http to this machine. It is for tests
-//! and the desktop preview; the hashes are still checked.
+//! the same format, and allows plain http to this machine, but only when
+//! every entry in the file is on this machine (otherwise every download is
+//! https only). It is for tests and the desktop preview; the hashes are
+//! still checked.
 
 use fp_core::sync::lock;
 use fp_updater::places::{self, CatalogEntry};
@@ -31,11 +33,6 @@ fn built_in() -> Vec<CatalogEntry> {
         log::warn!("the built-in place catalog is not usable: {e}");
         Vec::new()
     })
-}
-
-/// Whether the catalog comes from [`CATALOG_ENV`].
-pub fn catalog_overridden() -> bool {
-    std::env::var_os(CATALOG_ENV).is_some_and(|v| !v.is_empty())
 }
 
 /// The packs on offer: [`CATALOG_ENV`]'s file if set, else the built-in list.
@@ -66,6 +63,16 @@ pub fn catalog() -> &'static [CatalogEntry] {
             }
         }
     })
+}
+
+/// Run once when the app starts, before any place is read: puts back a pack
+/// an interrupted update had moved aside and clears half-made downloads.
+pub fn startup() {
+    startup_in(&fp_render::env::pack::places_dir());
+}
+
+fn startup_in(dir: &Path) {
+    places::clean_up(dir);
 }
 
 /// Why an install failed, in the terms the person is told.
@@ -193,12 +200,12 @@ impl PlaceDownloads {
     }
 
     /// Starts downloading `entry` into `dir` on a worker thread, unless one
-    /// is running already.
-    pub fn start(&self, ctx: &egui::Context, entry: &CatalogEntry, dir: PathBuf) {
+    /// is running already. Whether it started.
+    pub fn start(&self, ctx: &egui::Context, entry: &CatalogEntry, dir: PathBuf) -> bool {
         {
             let mut s = lock(&self.shared);
             if s.busy.is_some() {
-                return;
+                return false;
             }
             s.failed.remove(&entry.id);
             s.busy = Some((entry.id.clone(), 0, entry.bytes));
@@ -236,6 +243,7 @@ impl PlaceDownloads {
             s.busy = None;
             s.failed.insert(entry.id, Failure::Disk);
         }
+        true
     }
 
     /// Deletes the installed pack `id` from `dir`.
@@ -262,10 +270,11 @@ fn run(
     cancel: &AtomicBool,
 ) -> Result<(), Option<Failure>> {
     places::clean_up(dir);
-    let agent = if catalog_overridden() {
-        fp_updater::default_agent()
-    } else {
+    // https only, unless the catalog file names this machine and nothing else.
+    let agent = if places::needs_https_only(catalog()) {
         fp_updater::https_only_agent()
+    } else {
+        fp_updater::default_agent()
     };
     let mut percent = u64::MAX;
     let progress = |done: u64, total: u64| {
@@ -306,6 +315,43 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(id: &str) -> CatalogEntry {
+        CatalogEntry {
+            id: id.into(),
+            version: "1".into(),
+            url: "https://github.com/x/y.zip".into(),
+            sha256: "0".repeat(64),
+            bytes: 100,
+            title: "Campsite".into(),
+        }
+    }
+
+    #[test]
+    fn a_start_while_another_download_runs_is_refused_and_says_so() {
+        let d = PlaceDownloads::default();
+        lock(&d.shared).busy = Some(("other".into(), 1, 10));
+        let tmp = std::env::temp_dir().join("laterna-start-busy-test");
+        assert!(!d.start(&egui::Context::default(), &entry("campsite"), tmp.clone()));
+        // Nothing about the refused pack changed and the first still runs.
+        assert_eq!(lock(&d.shared).busy.as_ref().unwrap().0, "other");
+        assert!(!tmp.exists());
+    }
+
+    #[test]
+    fn startup_restores_an_interrupted_update_and_clears_half_downloads() {
+        let tmp = std::env::temp_dir().join(format!("laterna-startup-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let places = tmp.as_path();
+        std::fs::create_dir_all(places.join(".campsite.old")).unwrap();
+        std::fs::write(places.join(".campsite.old/manifest.json"), b"{}").unwrap();
+        std::fs::create_dir_all(places.join(".other.part")).unwrap();
+        startup_in(places);
+        assert!(places.join("campsite/manifest.json").is_file());
+        assert!(!places.join(".campsite.old").exists());
+        assert!(!places.join(".other.part").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn the_built_in_catalog_is_well_formed() {
