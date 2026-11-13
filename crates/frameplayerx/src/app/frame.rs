@@ -4,6 +4,7 @@
 use super::*;
 use crate::world::GrabBy;
 use fp_render::ScreenShape;
+use fp_render::env::SeatName;
 
 impl App {
     /// Forward becomes where the head faces, and the browse panel comes
@@ -808,14 +809,20 @@ impl App {
         let player = self.picture_anchor(anchor);
         // A room sits round the viewer in a seat and turns with the picture;
         // a sky stays with the plain anchor.
-        let room = in_place.and_then(|pl| {
+        // The seat's name goes with the room: a pack baked for each seat
+        // draws the viewer's own seat's textures.
+        let (room, seat_name) = in_place.map_or((None, SeatName::Middle), |pl| {
             let layout = pl.layout();
             let seat = places::seat_index(&self.settings, pl, &layout);
             let height = places::seat_height_cm(&self.settings, pl);
-            places::room_frame(player, &layout, seat, height)
+            (
+                places::room_frame(player, &layout, seat, height),
+                layout.seat(seat).name,
+            )
         });
         video.env = in_place.map(|place| fp_render::env::EnvFrame {
             place,
+            seat: seat_name,
             room_to_world: room.map_or(anchor, |r| r.room_to_world),
             house: places::house_shown(
                 self.house_ease,

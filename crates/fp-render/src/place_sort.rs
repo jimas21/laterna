@@ -326,6 +326,7 @@ mod tests {
             colors: none(),
             basis: none(),
             basis_gain: 1.0,
+            seat: None,
         })
     }
 

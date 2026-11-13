@@ -264,6 +264,30 @@ other packs are copied by hand.
   bytes its texels need. The room pictures are all one ASTC sRGB format, the
   light pictures all one ASTC UNORM format, any block size from 4x4 to 12x12;
   plain RGBA8 files are also accepted. A file that breaks this is not used.
+- **Format 3: a set of textures for each seat.** A room's baked light, and the
+  picture each surface is drawn from, depend on where the viewer looks from, so
+  a pack can carry a mesh and a full set of textures baked from each seat
+  (`"format": 3`). The manifest then has no `mesh` and `textures`; it has
+  `seat_sets` instead, one entry for each of the pack's seats, named like the
+  seat (`front`, `middle`, `back`): `{ "mesh": ..., "textures": ..., "basis_gain":
+  ... }`, where `mesh` and `textures` are what a format 2 manifest has (the
+  texture files are format 2 files, and `textures.bytes` is the sum of that
+  seat's), and `basis_gain` is optional (the pack's own when it is left out).
+  Every seat has a set and every set is a seat's; the files sit side by side in
+  the pack folder, named for the seat (`front-mesh.bin`, `front-house.ktx2`,
+  `middle-basis3.ktx2`, ...). The limits above hold for each set (so the 32 MiB
+  of texture bytes is for each seat's set; the whole pack is bigger). The app
+  draws the set of the seat the viewer sits in. Changing seat reads the new
+  seat's set on the place builder's worker thread while the old one stays up,
+  then swaps and frees the old one, so only one set is on the GPU at a time. A
+  seat the pack has no set for (the pack's seats are the ones it lists) draws
+  the default seat's. A pack that is not format 3 has one set for every seat, as
+  before. The checks that run when the app starts look at every seat's files, so
+  a short or missing file in any set keeps the whole pack out and the built-in
+  room is shown; a set that passes them and still fails to load drops the pack
+  for the built-in room as well. An app that reads formats up to 2 does not use
+  a format 3 pack. `tools/pack-seats.py` makes one from three format 2 packs,
+  each baked at one seat.
 - **How it reaches the screen.** If the device can sample ASTC, the blocks go
   to the GPU as they are. If not (the desktop preview on software Vulkan, for
   instance) the app decodes them to plain pixels once, while it builds the
@@ -298,6 +322,16 @@ downloads each pinned pack, refuses a wrong sha256 or any file outside
 `<id>/`, and unpacks it; `tools/package.sh` then bundles the packs into
 `places/` in the install archive and prints which ones and how large. With no
 lines in the lock file nothing is bundled.
+
+A pack with textures baked for each seat (format 3) is made from three format 2
+packs, one baked at each seat's eye, and is about three times the size:
+
+    tools/pack-seats.py FRONT_PACK MIDDLE_PACK BACK_PACK OUT_PACK --version V --zip RELEASE_DIR
+
+It checks that the three agree on the room, renames each pack's files for its
+seat, writes the format 3 manifest and, with `--zip`, the release zip and its
+sha256. A bundled pack has no size limit but the release's own; the optional
+downloads below keep their limits (a 40 MB zip, 64 files, 64 MiB unpacked).
 
 ### Optional places (downloads)
 

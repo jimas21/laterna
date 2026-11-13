@@ -94,10 +94,25 @@ impl Place {
     /// place has one that loads (decoding its textures takes a moment, so
     /// this is for a worker thread), else the built-in room.
     pub fn build(self) -> PlaceData {
-        if let Some(data) = pack::load_replacement(self) {
+        self.build_set(None)
+    }
+
+    /// [`Place::build`] for the set of a pack's textures that a viewer in
+    /// some seat draws, as [`Place::seat_set`] named it (`None` is the
+    /// pack's default seat's, and all there is for a place whose pack has one
+    /// set for everybody, and for the built-in rooms).
+    pub fn build_set(self, set: Option<SeatName>) -> PlaceData {
+        if let Some(data) = pack::load_replacement_for(self, set) {
             return data;
         }
         self.build_builtin()
+    }
+
+    /// Which set of this place's pack a viewer in `seat` draws, named by the
+    /// seat it was baked for: only a pack with a mesh and textures for each
+    /// seat has one to choose (see [`pack::seat_set`]); `None` otherwise.
+    pub fn seat_set(self, seat: SeatName) -> Option<SeatName> {
+        pack::seat_set(self, seat)
     }
 
     /// The built-in room, whatever packs are installed.
@@ -319,6 +334,9 @@ pub struct PlaceData {
 #[derive(Clone, Copy, Debug)]
 pub struct EnvFrame {
     pub place: Place,
+    /// The seat the viewer sits in: a pack with textures baked for each
+    /// seat draws that seat's (see [`Place::seat_set`]).
+    pub seat: SeatName,
     pub room_to_world: Mat4,
     /// House-light level: 0 dark, 1 full.
     pub house: f32,

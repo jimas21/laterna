@@ -12,7 +12,7 @@
 
 use crate::env::light::PATCHES;
 use crate::env::pack::BakedVertex;
-use crate::env::{Lighting, Pattern, Place, PlaceData, PlaceKind, Sky, Vertex};
+use crate::env::{Lighting, Pattern, Place, PlaceData, PlaceKind, SeatName, Sky, Vertex};
 use crate::env_baked::{self, BakedGpu};
 use crate::gpu::Gpu;
 use crate::mem::Buffer;
@@ -187,6 +187,8 @@ impl Look {
 /// The place whose meshes are on the GPU.
 struct Loaded {
     place: Place,
+    /// A pack with textures for each seat: the seat they were baked for.
+    set: Option<SeatName>,
     kind: PlaceKind,
     /// The floor's height as the place was built.
     floor_y: f32,
@@ -594,10 +596,15 @@ impl EnvPass {
         self.loaded.as_ref().and_then(|l| l.sorted_eye)
     }
 
-    /// Whether `place` is the one loaded. (The renderer gets it built off the
-    /// render thread and `load`s it when it is ready.)
-    pub fn has(&self, place: Place) -> bool {
-        self.loaded.as_ref().is_some_and(|l| l.place == place)
+    /// Whether `place` is the one loaded, and for a seat-by-seat pack the set
+    /// baked for `set` (`None` for everything else). A place loaded with no
+    /// set of a seat (the built-in room, a pack with one set for everybody,
+    /// or the data a test supplied) stands for every seat. (The renderer gets
+    /// it built off the render thread and `load`s it when it is ready.)
+    pub fn has(&self, place: Place, set: Option<SeatName>) -> bool {
+        self.loaded
+            .as_ref()
+            .is_some_and(|l| l.place == place && (l.set.is_none() || l.set == set))
     }
 
     /// Uploads `data`, which is what `place.build()` makes (or, for tests
@@ -671,6 +678,7 @@ impl EnvPass {
         indices.bytes()[..index_bytes.len()].copy_from_slice(index_bytes);
         let loaded = Loaded {
             place,
+            set: data.baked.as_ref().and_then(|b| b.seat),
             kind: place.kind(),
             floor_y: place.layout().floor_y,
             vertices,
@@ -892,6 +900,7 @@ mod tests {
             colors: none(),
             basis: none(),
             basis_gain: 2.5,
+            seat: None,
         };
         let mut data = data;
         data.baked = Some(Arc::new(baked));

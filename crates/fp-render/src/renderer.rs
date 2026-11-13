@@ -2254,10 +2254,13 @@ impl Renderer {
             return false;
         }
         // A place not loaded yet is built off this thread, while the pass's
-        // pipelines are made here, and drawn from the frame it is ready.
-        let loaded = self.env.as_ref().is_some_and(|e| e.has(frame.place));
+        // pipelines are made here, and drawn from the frame it is ready. A
+        // pack with textures baked for each seat is not loaded either while
+        // another seat's set is: the viewer's seat picks the set.
+        let set = frame.place.seat_set(frame.seat);
+        let loaded = self.env.as_ref().is_some_and(|e| e.has(frame.place, set));
         if !loaded && !self.inline_places {
-            self.builds.request(frame.place);
+            self.builds.request(frame.place, set);
         }
         if !self.ensure_env() {
             return false;
@@ -2266,15 +2269,16 @@ impl Renderer {
         let Some(env) = self.env.as_mut() else {
             return false;
         };
-        if !env.has(frame.place) {
+        if !env.has(frame.place, set) {
             let data = if self.inline_places {
-                Some(build_timed(Place::build, frame.place))
+                Some(build_timed(Place::build_set, frame.place, set))
             } else {
-                match self.builds.take(frame.place) {
+                match self.builds.take(frame.place, set) {
                     Built::Ready(data) => Some(data),
-                    // The next place is still being built: a place that is
-                    // already loaded keeps being drawn until it is ready, then
-                    // is swapped for it, rather than Plain showing in between.
+                    // The next place (or the next seat's set of this one) is
+                    // still being built: what is loaded keeps being drawn
+                    // until it is ready, then is swapped for it and freed,
+                    // rather than Plain showing in between.
                     Built::Pending if env.floor().is_some() => None,
                     Built::Pending => return false,
                     Built::Failed => {
@@ -3292,9 +3296,9 @@ mod tests {
         r.env_failed = true;
         assert!(!r.ensure_env());
         r.set_place_data(Place::Studio, Place::Studio.build());
-        let loaded = r.env.as_ref().map(|e| e.has(Place::Studio));
+        let loaded = r.env.as_ref().map(|e| e.has(Place::Studio, None));
         assert_eq!(loaded, Some(false), "the studio was not loaded");
-        assert!(r.env.as_ref().is_some_and(|e| e.has(Place::Cinema)));
+        assert!(r.env.as_ref().is_some_and(|e| e.has(Place::Cinema, None)));
     }
 
     #[test]

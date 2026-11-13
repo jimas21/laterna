@@ -3,8 +3,10 @@
 //!
 //! A pack is a folder: `manifest.json`, `mesh.bin` and a set of textures,
 //! all described in the format notes kept with the exporter. Format 1 has
-//! PNGs; format 2 (the one packs are shipped in) has KTX2 files, ASTC
-//! compressed, with their mip chains made offline (see [`super::ktx2`]). This
+//! PNGs; format 2 has KTX2 files, ASTC compressed, with their mip chains made
+//! offline (see [`super::ktx2`]); format 3 is format 2 with a mesh and a set
+//! of textures for each seat, baked from that seat (a viewer in a seat draws
+//! that seat's set, and changing seat loads another: see [`seat_set`]). This
 //! module reads one and checks every limit before anything is allocated or
 //! drawn: a pack that breaks any of them is refused with a message (the
 //! caller logs a warning and shows the built-in room), and nothing in here
@@ -28,7 +30,7 @@ use super::ktx2::{self, Encoding};
 use super::{Layout, Lighting, Place, PlaceData, PlaceKind, ScreenFrame, Seat, SeatName, Sky};
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -48,8 +50,11 @@ pub const MAX_TEXTURE: u32 = 4096;
 /// [`super::light`]).
 pub const BASIS: usize = 8;
 /// The newest format number this build reads (1 to this).
-pub const FORMAT: u32 = 2;
-/// The most bytes a format 2 pack's texture files may add up to.
+pub const FORMAT: u32 = 3;
+/// The first format with a mesh and textures for each seat.
+pub const PER_SEAT_FORMAT: u32 = 3;
+/// The most bytes one set of a format 2 or 3 pack's texture files may add up
+/// to (a format 3 pack has a set for each seat, so the whole pack may be more).
 pub const MAX_TEXTURE_BYTES: u64 = 32 << 20;
 
 /// A PNG file bigger than this is refused unread: an 8-bit RGB texture of
@@ -117,6 +122,18 @@ pub struct TextureSpec {
     pub bytes: Option<u64>,
 }
 
+/// A mesh with its textures: what one seat of a format 3 pack draws.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SetSpec {
+    pub mesh: MeshSpec,
+    pub textures: TextureSpec,
+    /// This set's `basis_gain`, when it is not the pack's: each seat's basis
+    /// textures are scaled to use the 8 bits they have, so the gain that
+    /// undoes the scale can differ from seat to seat.
+    #[serde(default)]
+    pub basis_gain: Option<f32>,
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -134,8 +151,16 @@ pub struct Manifest {
     pub seats: Vec<SeatSpec>,
     #[serde(default)]
     pub default_seat: usize,
-    pub mesh: MeshSpec,
-    pub textures: TextureSpec,
+    /// The pack's mesh and textures (formats 1 and 2; a format 3 pack has
+    /// `seat_sets` instead).
+    #[serde(default)]
+    pub mesh: Option<MeshSpec>,
+    #[serde(default)]
+    pub textures: Option<TextureSpec>,
+    /// A mesh and textures for each seat, by the seat's name; every seat has
+    /// one (format 3 only).
+    #[serde(default)]
+    pub seat_sets: BTreeMap<String, SetSpec>,
     #[serde(default = "one")]
     pub basis_gain: f32,
     /// Reserved: a sky behind the room. Only none is understood.
@@ -219,7 +244,167 @@ impl Manifest {
         if self.default_seat >= self.seats.len() {
             return bad(format!("default_seat {} is not a seat", self.default_seat));
         }
-        let mesh = &self.mesh;
+        if self.format < PER_SEAT_FORMAT {
+            if !self.seat_sets.is_empty() {
+                return bad(format!("seat_sets needs format {PER_SEAT_FORMAT}"));
+            }
+            self.set(None)?.check()?;
+        } else {
+            if self.mesh.is_some() || self.textures.is_some() {
+                return bad(format!(
+                    "a format {PER_SEAT_FORMAT} pack keeps its mesh and textures in seat_sets"
+                ));
+            }
+            // Every seat has a set of its own, and every set is a seat's.
+            for seat in &self.seats {
+                let Some(spec) = self.seat_sets.get(&seat.name) else {
+                    return bad(format!("seat {:?} has no entry in seat_sets", seat.name));
+                };
+                Set::of(self, spec)
+                    .check()
+                    .map_err(|e| PackError(format!("seat {:?}: {e}", seat.name)))?;
+            }
+            if let Some(extra) = self
+                .seat_sets
+                .keys()
+                .find(|k| !self.seats.iter().any(|s| &s.name == *k))
+            {
+                return bad(format!(
+                    "seat_sets has {extra:?}, which is not one of the seats"
+                ));
+            }
+        }
+        let seat_gains = self.seat_sets.values().filter_map(|s| s.basis_gain);
+        for gain in std::iter::once(self.basis_gain).chain(seat_gains) {
+            if !(gain.is_finite() && (0.0..=1000.0).contains(&gain)) {
+                return bad(format!("basis_gain {gain} is out of range"));
+            }
+        }
+        Ok(())
+    }
+
+    /// The seats and screen. The floor is the stage floor, y = 0.
+    pub fn layout(&self) -> Layout {
+        let seats = self
+            .seats
+            .iter()
+            .filter_map(|s| {
+                Some(Seat {
+                    name: seat_name(&s.name)?,
+                    eye: Vec3::from(s.eye),
+                })
+            })
+            .collect();
+        Layout {
+            seats,
+            default_seat: self.default_seat,
+            screen: Some(ScreenFrame {
+                centre: Vec3::from(self.screen.centre),
+                max: Vec2::from(self.screen.max),
+                curvature: 0.0,
+            }),
+            floor_y: 0.0,
+        }
+    }
+
+    /// Whether the pack has a mesh and textures for each seat.
+    pub fn per_seat(&self) -> bool {
+        self.format >= PER_SEAT_FORMAT
+    }
+
+    /// The seat the pack starts in.
+    pub fn default_seat_name(&self) -> Option<SeatName> {
+        self.seats
+            .get(self.default_seat)
+            .and_then(|s| seat_name(&s.name))
+    }
+
+    /// Which set a viewer in `seat` draws, named by the seat it was baked
+    /// for: `seat`'s own, or the default seat's when the pack has none for
+    /// it. `None` for a pack that has one set for everybody (formats 1 and 2).
+    pub fn set_key(&self, seat: SeatName) -> Option<SeatName> {
+        if !self.per_seat() {
+            return None;
+        }
+        if self.seat_sets.contains_key(seat.id()) {
+            Some(seat)
+        } else {
+            self.default_seat_name()
+        }
+    }
+
+    /// The set key for a request: `seat`'s (see [`Manifest::set_key`]), the
+    /// default seat's when none is asked for. `None` for a pack with one set
+    /// for everybody.
+    pub fn resolve(&self, seat: Option<SeatName>) -> Option<SeatName> {
+        if !self.per_seat() {
+            return None;
+        }
+        seat.and_then(|s| self.set_key(s))
+            .or_else(|| self.default_seat_name())
+    }
+
+    /// The set keys the pack has, one for a pack with one set for everybody
+    /// (`None`).
+    pub fn set_keys(&self) -> Vec<Option<SeatName>> {
+        if !self.per_seat() {
+            return vec![None];
+        }
+        self.seats
+            .iter()
+            .filter_map(|s| seat_name(&s.name))
+            .map(Some)
+            .collect()
+    }
+
+    /// The mesh and textures drawn for set `key` (see [`Manifest::set_key`];
+    /// `None` is the one set of formats 1 and 2, and the default seat's of
+    /// format 3).
+    fn set(&self, key: Option<SeatName>) -> Result<Set<'_>, PackError> {
+        if !self.per_seat() {
+            return match (&self.mesh, &self.textures) {
+                (Some(mesh), Some(textures)) => Ok(Set {
+                    format: self.format,
+                    mesh,
+                    textures,
+                    basis_gain: self.basis_gain,
+                }),
+                (None, _) => bad("mesh is missing"),
+                (_, None) => bad("textures is missing"),
+            };
+        }
+        match self.resolve(key).and_then(|n| self.seat_sets.get(n.id())) {
+            Some(spec) => Ok(Set::of(self, spec)),
+            None => bad("the pack has no set for its default seat"),
+        }
+    }
+}
+
+/// A mesh and its textures: a whole format 1 or 2 pack's, or one seat's of a
+/// format 3 pack.
+#[derive(Clone, Copy)]
+struct Set<'a> {
+    format: u32,
+    mesh: &'a MeshSpec,
+    textures: &'a TextureSpec,
+    /// The gain on its basis textures.
+    basis_gain: f32,
+}
+
+impl<'a> Set<'a> {
+    /// A format 3 pack's set `spec`, with the pack's gain unless it has its own.
+    fn of(manifest: &Manifest, spec: &'a SetSpec) -> Set<'a> {
+        Set {
+            format: manifest.format,
+            mesh: &spec.mesh,
+            textures: &spec.textures,
+            basis_gain: spec.basis_gain.unwrap_or(manifest.basis_gain),
+        }
+    }
+
+    /// Every limit that can be checked without the files.
+    fn check(&self) -> Result<(), PackError> {
+        let mesh = self.mesh;
         if !plain_name(&mesh.file) {
             return bad(format!("mesh file name {:?}", mesh.file));
         }
@@ -235,7 +420,7 @@ impl Manifest {
                 mesh.triangles
             ));
         }
-        let t = &self.textures;
+        let t = self.textures;
         if t.size == 0 || t.size > MAX_TEXTURE || !t.size.is_power_of_two() {
             return bad(format!(
                 "texture size {} (a power of two up to {MAX_TEXTURE} wanted)",
@@ -271,41 +456,12 @@ impl Manifest {
                 return bad(format!("texture file name {name:?}"));
             }
         }
-        if !(self.basis_gain.is_finite() && (0.0..=1000.0).contains(&self.basis_gain)) {
-            return bad(format!("basis_gain {} is out of range", self.basis_gain));
-        }
         Ok(())
-    }
-
-    /// The seats and screen. The floor is the stage floor, y = 0.
-    pub fn layout(&self) -> Layout {
-        let seats = self
-            .seats
-            .iter()
-            .filter_map(|s| {
-                Some(Seat {
-                    name: seat_name(&s.name)?,
-                    eye: Vec3::from(s.eye),
-                })
-            })
-            .collect();
-        Layout {
-            seats,
-            default_seat: self.default_seat,
-            screen: Some(ScreenFrame {
-                centre: Vec3::from(self.screen.centre),
-                max: Vec2::from(self.screen.max),
-                curvature: 0.0,
-            }),
-            floor_y: 0.0,
-        }
     }
 
     /// The bytes `mesh.bin` must have.
     fn mesh_len(&self) -> u64 {
-        HEADER as u64
-            + VERTEX_BYTES as u64 * u64::from(self.mesh.vertices)
-            + 4 * 3 * u64::from(self.mesh.triangles)
+        self.mesh.len()
     }
 
     /// Side of the basis textures.
@@ -316,10 +472,18 @@ impl Manifest {
         }
     }
 
-    fn texture_files(&self) -> impl Iterator<Item = &String> {
-        [&self.textures.house, &self.textures.dark]
-            .into_iter()
-            .chain(&self.textures.basis)
+    fn texture_files(&self) -> impl Iterator<Item = &'a String> + use<'a> {
+        let t = self.textures;
+        [&t.house, &t.dark].into_iter().chain(&t.basis)
+    }
+}
+
+impl MeshSpec {
+    /// The bytes `mesh.bin` must have.
+    fn len(&self) -> u64 {
+        HEADER as u64
+            + VERTEX_BYTES as u64 * u64::from(self.vertices)
+            + 4 * 3 * u64::from(self.triangles)
     }
 }
 
@@ -382,6 +546,10 @@ pub struct Baked {
     /// square-root coded.
     pub basis: TextureArray,
     pub basis_gain: f32,
+    /// The seat whose set this is, for a format 3 pack (the viewer sits in
+    /// that seat, or one that falls back to it); `None` for a pack with one
+    /// set for everybody.
+    pub seat: Option<SeatName>,
 }
 
 impl fmt::Debug for Baked {
@@ -456,6 +624,7 @@ impl Baked {
             colors,
             basis,
             basis_gain: self.basis_gain,
+            seat: self.seat,
         }))
     }
 }
@@ -555,7 +724,10 @@ fn le_f32(b: &[u8], at: usize) -> f32 {
 /// Reads `mesh.bin`'s bytes: the header, the vertices, the indices. Every
 /// count is checked against the manifest and the length before a vertex is
 /// made.
-pub fn parse_mesh(bytes: &[u8], m: &Manifest) -> Result<(Vec<BakedVertex>, Vec<u32>), PackError> {
+pub fn parse_mesh(
+    bytes: &[u8],
+    mesh: &MeshSpec,
+) -> Result<(Vec<BakedVertex>, Vec<u32>), PackError> {
     if bytes.len() < HEADER {
         return bad(format!(
             "mesh is {} bytes, shorter than its header",
@@ -566,18 +738,18 @@ pub fn parse_mesh(bytes: &[u8], m: &Manifest) -> Result<(Vec<BakedVertex>, Vec<u
         return bad("mesh does not start with LPM1");
     }
     let (vc, ic) = (le_u32(bytes, 4), le_u32(bytes, 8));
-    if vc != m.mesh.vertices || u64::from(ic) != 3 * u64::from(m.mesh.triangles) {
+    if vc != mesh.vertices || u64::from(ic) != 3 * u64::from(mesh.triangles) {
         return bad(format!(
             "mesh says {vc} vertices and {ic} indices, the manifest {} and {}",
-            m.mesh.vertices,
-            3 * u64::from(m.mesh.triangles)
+            mesh.vertices,
+            3 * u64::from(mesh.triangles)
         ));
     }
-    if bytes.len() as u64 != m.mesh_len() {
+    if bytes.len() as u64 != mesh.len() {
         return bad(format!(
             "mesh is {} bytes, its counts need {}",
             bytes.len(),
-            m.mesh_len()
+            mesh.len()
         ));
     }
     let (vc, ic) = (vc as usize, ic as usize);
@@ -693,7 +865,10 @@ pub fn validate_download(dir: &Path, id: &str) -> Result<String, PackError> {
         ));
     }
     preflight(dir, &manifest)?;
-    load_with(dir, true)?;
+    // Every seat's set reads, not only the first the app would draw.
+    for key in manifest.set_keys() {
+        load_seat_with(dir, key, true)?;
+    }
     Ok(manifest.version)
 }
 
@@ -707,28 +882,50 @@ pub fn installed_version(dir: &Path) -> Option<String> {
 ///
 /// A format 2 pack's ASTC textures are kept as blocks when the device can
 /// sample them ([`astc_on_gpu`]) and decoded to RGBA8 when it cannot.
+///
+/// A format 3 pack reads the set of its default seat; [`load_seat`] reads
+/// another's.
 pub fn load(dir: &Path) -> Result<Pack, PackError> {
     load_with(dir, astc_on_gpu())
 }
 
 /// [`load`], with `keep_astc` saying whether ASTC textures stay compressed.
 pub fn load_with(dir: &Path, keep_astc: bool) -> Result<Pack, PackError> {
+    load_seat_with(dir, None, keep_astc)
+}
+
+/// [`load`] for the viewer's `seat` (see [`Manifest::set_key`]): the mesh
+/// and textures baked for it when the pack has a set for each seat, else the
+/// pack as it is.
+pub fn load_seat(dir: &Path, seat: Option<SeatName>) -> Result<Pack, PackError> {
+    load_seat_with(dir, seat, astc_on_gpu())
+}
+
+/// [`load_seat`], with `keep_astc` saying whether ASTC textures stay
+/// compressed.
+pub fn load_seat_with(
+    dir: &Path,
+    seat: Option<SeatName>,
+    keep_astc: bool,
+) -> Result<Pack, PackError> {
     let manifest = read_manifest(dir)?;
-    let mesh_path = dir.join(&manifest.mesh.file);
-    let bytes = read_capped(&mesh_path, manifest.mesh_len(), "mesh")?;
-    let (vertices, indices) = parse_mesh(&bytes, &manifest)?;
+    let set = manifest.set(seat)?;
+    let mesh_path = dir.join(&set.mesh.file);
+    let bytes = read_capped(&mesh_path, set.mesh_len(), "mesh")?;
+    let (vertices, indices) = parse_mesh(&bytes, set.mesh)?;
     drop(bytes);
     let (colors, basis, path) = if manifest.format == 1 {
-        load_png_textures(dir, &manifest)?
+        load_png_textures(dir, set)?
     } else {
-        load_ktx2_textures(dir, &manifest, keep_astc)?
+        load_ktx2_textures(dir, set, keep_astc)?
     };
     let baked = Baked {
         vertices,
         indices,
         colors,
         basis,
-        basis_gain: manifest.basis_gain,
+        basis_gain: set.basis_gain,
+        seat: manifest.resolve(seat),
     };
     Ok(Pack {
         manifest,
@@ -740,9 +937,9 @@ pub fn load_with(dir: &Path, keep_astc: bool) -> Result<Pack, PackError> {
 /// Format 1: PNGs, one level each.
 fn load_png_textures(
     dir: &Path,
-    manifest: &Manifest,
+    set: Set<'_>,
 ) -> Result<(TextureArray, TextureArray, TexturePath), PackError> {
-    let t = &manifest.textures;
+    let t = set.textures;
     let decode = |name: &String| decode_png(&dir.join(name), t.size).map(|texels| vec![texels]);
     let colors = vec![decode(&t.house)?, decode(&t.dark)?];
     let basis = t.basis.iter().map(decode).collect::<Result<Vec<_>, _>>()?;
@@ -753,7 +950,7 @@ fn load_png_textures(
     };
     Ok((
         array(t.size, colors),
-        array(manifest.basis_size(), basis),
+        array(set.basis_size(), basis),
         TexturePath::Png,
     ))
 }
@@ -815,11 +1012,11 @@ fn read_texture(dir: &Path, name: &str, size: u32) -> Result<Texture, PackError>
 /// cores there are) unless `keep_astc`.
 fn load_ktx2_textures(
     dir: &Path,
-    manifest: &Manifest,
+    set: Set<'_>,
     keep_astc: bool,
 ) -> Result<(TextureArray, TextureArray, TexturePath), PackError> {
-    let t = &manifest.textures;
-    let (size, basis_size) = (t.size, manifest.basis_size());
+    let t = set.textures;
+    let (size, basis_size) = (t.size, set.basis_size());
     let mut colors = Vec::new();
     for name in [&t.house, &t.dark] {
         colors.push(read_texture(dir, name, size)?);
@@ -960,34 +1157,45 @@ fn par_map<T: Sync, R: Send>(
 /// files are there at the sizes it names. The pixels are not read; a format
 /// 2 pack's texture headers and level tables are.
 fn preflight(dir: &Path, m: &Manifest) -> Result<(), PackError> {
-    let mesh = dir.join(&m.mesh.file);
+    for key in m.set_keys() {
+        let set = m.set(key)?;
+        preflight_set(dir, set).map_err(|e| match key {
+            Some(seat) => PackError(format!("seat {}: {e}", seat.id())),
+            None => e,
+        })?;
+    }
+    Ok(())
+}
+
+fn preflight_set(dir: &Path, set: Set<'_>) -> Result<(), PackError> {
+    let mesh = dir.join(&set.mesh.file);
     let len = std::fs::metadata(&mesh)
         .map_err(|e| io("mesh", &mesh, &e))?
         .len();
-    if len != m.mesh_len() {
+    if len != set.mesh_len() {
         return bad(format!(
             "mesh is {len} bytes, its counts need {}",
-            m.mesh_len()
+            set.mesh_len()
         ));
     }
-    if m.format >= 2 {
-        return preflight_ktx2(dir, m);
+    if set.format >= 2 {
+        return preflight_ktx2(dir, set);
     }
-    for name in m.texture_files() {
+    for name in set.texture_files() {
         let path = dir.join(name);
         let (w, h) = png_size(&path)?;
-        if (w, h) != (m.textures.size, m.textures.size) {
+        if (w, h) != (set.textures.size, set.textures.size) {
             return bad(format!("texture {name} is {w} x {h}"));
         }
     }
     Ok(())
 }
 
-fn preflight_ktx2(dir: &Path, m: &Manifest) -> Result<(), PackError> {
-    let t = &m.textures;
+fn preflight_ktx2(dir: &Path, set: Set<'_>) -> Result<(), PackError> {
+    let t = set.textures;
     let mut total = 0u64;
     let mut headers = Vec::new();
-    for (i, name) in m.texture_files().enumerate() {
+    for (i, name) in set.texture_files().enumerate() {
         let path = dir.join(name);
         let len = std::fs::metadata(&path)
             .map_err(|e| io("texture", &path, &e))?
@@ -999,7 +1207,7 @@ fn preflight_ktx2(dir: &Path, m: &Manifest) -> Result<(), PackError> {
         File::open(&path)
             .and_then(|f| f.take(ktx2::HEAD_BYTES as u64).read_to_end(&mut head))
             .map_err(|e| io("texture", &path, &e))?;
-        let size = if i < 2 { t.size } else { m.basis_size() };
+        let size = if i < 2 { t.size } else { set.basis_size() };
         let header =
             ktx2::parse(&head, len, size).map_err(|e| PackError(format!("texture {name} {e}")))?;
         headers.push((name.as_str(), header));
@@ -1145,6 +1353,22 @@ pub fn replacement(place: Place) -> Option<Arc<Replacement>> {
     catalog.get(&place).cloned()
 }
 
+/// Which set of `place`'s pack a viewer in `seat` draws, named by the seat it
+/// was baked for (see [`Manifest::set_key`]): `None` when the place is the
+/// built-in room, has a pack with one set for everybody, or its pack has
+/// failed. Cheap: the packs were read at the first ask.
+pub fn seat_set(place: Place, seat: SeatName) -> Option<SeatName> {
+    replacement(place)?.manifest.set_key(seat)
+}
+
+/// Makes the packs in `root` the catalog if nobody has asked for it yet, and
+/// says whether that worked: for a test that needs a pack installed, which
+/// the environment cannot do once the catalog has been read.
+#[doc(hidden)]
+pub fn use_catalog_for_tests(root: &Path) -> bool {
+    CATALOG.set(scan(root)).is_ok()
+}
+
 /// Notes that the pack for `place` could not be loaded: from now on the
 /// built-in room is the place, seats and all.
 pub fn mark_failed(place: Place) {
@@ -1159,13 +1383,27 @@ pub fn mark_failed(place: Place) {
 /// The place's pack data if it has a pack that loads; otherwise `None`, and
 /// the built-in room is used (a pack that fails here is dropped for good,
 /// see [`mark_failed`]).
+///
+/// A pack with a set for each seat gives that of its default seat; see
+/// [`load_replacement_for`].
 pub fn load_replacement(place: Place) -> Option<PlaceData> {
+    load_replacement_for(place, None)
+}
+
+/// [`load_replacement`] for the set a viewer in some seat draws (the seat
+/// [`seat_set`] named; `None` for the pack's default). A pack none of whose
+/// sets is for everybody (formats 1 and 2) ignores it. If the seat's set does
+/// not load the whole pack is dropped, as any pack that fails is.
+pub fn load_replacement_for(place: Place, seat: Option<SeatName>) -> Option<PlaceData> {
     let r = replacement(place)?;
-    match load(&r.dir) {
+    match load_seat(&r.dir, seat) {
         Ok(pack) => {
             let b = &pack.baked;
+            let seat = b
+                .seat
+                .map_or(String::new(), |s| format!(", {} seat", s.id()));
             log::info!(
-                "loaded place pack {} (format {}): {} triangles; textures {} \
+                "loaded place pack {} (format {}{seat}): {} triangles; textures {} \
                  ({} px colours, {} px basis, {:.1} MB)",
                 r.manifest.id,
                 r.manifest.format,
@@ -1458,7 +1696,7 @@ mod tests {
             "[]".into(),
             "null".into(),
             "{\"format\": 1}".into(),
-            good.replace("\"format\": 1", "\"format\": 3"),
+            good.replace("\"format\": 1", "\"format\": 4"),
             good.replace("cinema-v2", "Cinema V2"),
             good.replace("cinema-v2", ""),
             good.replace("\"front\"", "\"couch\""),
@@ -1493,7 +1731,7 @@ mod tests {
     #[test]
     fn random_bytes_never_panic_the_mesh_reader() {
         let dir = fixture("fuzz", "cinema-v2");
-        let m = read_manifest(&dir).expect("manifest");
+        let m = read_manifest(&dir).expect("manifest").mesh.expect("a mesh");
         let good = mesh_bytes(&VERTICES, &INDICES);
         let mut seed = 0x1234_5678_9abc_def0u64;
         for round in 0..300 {
@@ -1945,6 +2183,8 @@ mod tests {
             good.replace("\"size\": 16", "\"size\": 8192"),
             good.replace("\"bytes\": ", "\"bytes_\": "),
             good.replace("\"format\": 2", "\"format\": 0"),
+            good.replace("\"format\": 2", "\"format\": 4"),
+            // Format 3 keeps its mesh and textures in seat_sets.
             good.replace("\"format\": 2", "\"format\": 3"),
         ];
         for (i, json) in cases.iter().enumerate() {
@@ -2035,6 +2275,376 @@ mod tests {
         let empty = temp("download-empty");
         assert!(validate_download(&empty, "campsite").is_err());
         assert_eq!(installed_version(&empty), None);
+    }
+
+    // ---- Format 3: a mesh and textures for each seat ----
+
+    /// Each seat's name, house colour and how far its mesh is moved along x
+    /// (so that sets can be told apart by their mesh as well as by colour).
+    const SEATS3: [(&str, [u8; 4], f32); 3] = [
+        ("front", [200, 10, 10, 255], 0.0),
+        ("middle", [10, 200, 10, 255], 1.0),
+        ("back", [10, 10, 200, 255], 2.0),
+    ];
+
+    /// One seat's files, named for the seat; the bytes its textures add up to.
+    fn write_set3(dir: &Path, seat: &str, house: [u8; 4], shift: f32) -> u64 {
+        let moved: Vec<[f32; 5]> = VERTICES
+            .iter()
+            .map(|v| [v[0] + shift, v[1], v[2], v[3], v[4]])
+            .collect();
+        std::fs::write(
+            dir.join(format!("{seat}-mesh.bin")),
+            mesh_bytes(&moved, &INDICES),
+        )
+        .unwrap();
+        let colour = Some(((4, 4), true));
+        let light = Some(((6, 6), false));
+        let mut total = 0;
+        let mut put = |name: String, bytes: Vec<u8>| {
+            total += bytes.len() as u64;
+            std::fs::write(dir.join(name), bytes).unwrap();
+        };
+        put(
+            format!("{seat}-house.ktx2"),
+            solid(COLOR_SIZE, colour, 0, house),
+        );
+        put(
+            format!("{seat}-dark.ktx2"),
+            solid(COLOR_SIZE, colour, 0, DARK),
+        );
+        for i in 0..8 {
+            let rgba = if i == 0 { WHITE } else { BLACK };
+            put(
+                format!("{seat}-basis{i}.ktx2"),
+                solid(BASIS_SIZE, light, 0, rgba),
+            );
+        }
+        total
+    }
+
+    fn set3_json(seat: &str, bytes: u64) -> String {
+        let basis: Vec<String> = (0..8)
+            .map(|i| format!("\"{seat}-basis{i}.ktx2\""))
+            .collect();
+        format!(
+            r#""{seat}": {{
+      "mesh": {{ "file": "{seat}-mesh.bin", "vertices": 5, "triangles": 4 }},
+      "textures": {{ "size": {COLOR_SIZE}, "basis_size": {BASIS_SIZE}, "bytes": {bytes},
+                     "house": "{seat}-house.ktx2", "dark": "{seat}-dark.ktx2",
+                     "basis": [{}] }} }}"#,
+            basis.join(", ")
+        )
+    }
+
+    /// A format 3 manifest with a set for each of `sets` (seat, texture bytes).
+    fn manifest3_json(id: &str, sets: &[(&str, u64)], default_seat: usize) -> String {
+        let seats: Vec<String> = sets
+            .iter()
+            .map(|(s, _)| format!(r#"{{ "name": "{s}", "eye": [0, 3.0, 9.0] }}"#))
+            .collect();
+        let sets: Vec<String> = sets.iter().map(|(s, b)| set3_json(s, *b)).collect();
+        format!(
+            r#"{{ "format": 3, "id": "{id}", "name": "Test", "version": "1",
+  "screen": {{ "centre": [0.0, 3.5, 0.0], "max": [9.0, 3.8] }},
+  "seats": [{}], "default_seat": {default_seat},
+  "seat_sets": {{ {} }}, "basis_gain": 1.0 }}"#,
+            seats.join(", "),
+            sets.join(", ")
+        )
+    }
+
+    /// A good format 3 pack: front, middle and back, the middle the default.
+    fn write_fixture3(dir: &Path, id: &str) {
+        std::fs::create_dir_all(dir).expect("pack dir");
+        let totals: Vec<(&str, u64)> = SEATS3
+            .iter()
+            .map(|&(seat, house, shift)| (seat, write_set3(dir, seat, house, shift)))
+            .collect();
+        std::fs::write(dir.join("manifest.json"), manifest3_json(id, &totals, 1))
+            .expect("manifest");
+    }
+
+    fn fixture3(name: &str) -> PathBuf {
+        let dir = temp(name);
+        write_fixture3(&dir, "cinema-v2");
+        dir
+    }
+
+    /// The manifest of `dir` edited by `edit` and parsed again.
+    fn edited3(
+        dir: &Path,
+        edit: impl FnOnce(&mut serde_json::Value),
+    ) -> Result<Manifest, PackError> {
+        let bytes = std::fs::read(dir.join("manifest.json")).unwrap();
+        let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        edit(&mut json);
+        Manifest::parse(&serde_json::to_vec(&json).unwrap())
+    }
+
+    #[test]
+    fn a_format_3_pack_loads_the_set_of_the_seat_asked_for() {
+        let dir = fixture3("f3seats");
+        for (seat, house, shift) in SEATS3 {
+            let name = SeatName::from_id(seat);
+            // Decoded on the CPU, and as the blocks the GPU takes.
+            for keep in [false, true] {
+                let pack = load_seat_with(&dir, name, keep).expect("loads");
+                let b = &pack.baked;
+                assert_eq!(b.seat, name, "{seat}");
+                assert_eq!(pack.manifest.format, 3);
+                assert_eq!(b.vertices[0].pos[0], -1.0 + shift, "{seat}'s own mesh");
+                assert_eq!(b.indices, INDICES);
+                assert_eq!(b.is_astc(), keep);
+                let top = if keep {
+                    let Encoding::Astc { block } = b.colors.encoding else {
+                        panic!("not kept as ASTC");
+                    };
+                    let (texels, _) =
+                        ktx2::decode_astc(&b.colors.layers[0][0], COLOR_SIZE, COLOR_SIZE, block)
+                            .unwrap();
+                    texels
+                } else {
+                    b.colors.layers[0][0].clone()
+                };
+                assert_eq!(&top[..4], &house, "{seat}'s own house texture");
+                assert_eq!(b.basis.layers.len(), BASIS);
+            }
+        }
+        // Which seat a set is for is kept when the blocks are decoded later.
+        let kept = load_seat_with(&dir, Some(SeatName::Back), true).unwrap();
+        let later = kept.baked.decoded().unwrap().expect("it was ASTC");
+        assert_eq!(later.seat, Some(SeatName::Back));
+    }
+
+    #[test]
+    fn a_format_3_pack_starts_with_its_default_seats_set() {
+        let dir = fixture3("f3default");
+        for pack in [
+            load_with(&dir, false).unwrap(),
+            load_seat_with(&dir, None, false).unwrap(),
+            // A seat the pack has no set for is the default seat's too.
+            load_seat_with(&dir, Some(SeatName::Couch), false).unwrap(),
+        ] {
+            assert_eq!(pack.baked.seat, Some(SeatName::Middle));
+            assert_eq!(pack.baked.vertices[0].pos[0], 0.0);
+            assert_eq!(&pack.baked.colors.layers[0][0][..4], &SEATS3[1].1);
+        }
+    }
+
+    #[test]
+    fn a_pack_with_one_set_ignores_the_seat_asked_for() {
+        let dir = fixture2("f3one");
+        for seat in [None, Some(SeatName::Front), Some(SeatName::Back)] {
+            let pack = load_seat_with(&dir, seat, false).expect("loads");
+            assert_eq!(pack.baked.seat, None);
+            assert_eq!(&pack.baked.colors.layers[0][0][..4], &HOUSE);
+        }
+        let m = read_manifest(&dir).unwrap();
+        assert_eq!(m.set_key(SeatName::Front), None);
+        assert_eq!(m.set_keys(), [None]);
+        let dir = fixture("f3one-png", "cinema-v2");
+        let m = read_manifest(&dir).unwrap();
+        assert_eq!(m.set_key(SeatName::Back), None);
+        let pack = load_seat_with(&dir, Some(SeatName::Back), true).unwrap();
+        assert_eq!(pack.baked.seat, None);
+    }
+
+    #[test]
+    fn the_set_a_seat_draws_is_its_own_or_the_default_seats() {
+        let dir = temp("f3keys");
+        std::fs::write(
+            dir.join("manifest.json"),
+            manifest3_json("cinema-v2", &[("front", 1), ("middle", 1)], 1),
+        )
+        .unwrap();
+        let m = read_manifest(&dir).expect("two seats, a set each");
+        assert_eq!(m.set_key(SeatName::Front), Some(SeatName::Front));
+        assert_eq!(m.set_key(SeatName::Middle), Some(SeatName::Middle));
+        // No back seat: whoever sits there draws the default's.
+        assert_eq!(m.set_key(SeatName::Back), Some(SeatName::Middle));
+        assert_eq!(m.set_key(SeatName::Couch), Some(SeatName::Middle));
+        assert_eq!(
+            m.set_keys(),
+            [Some(SeatName::Front), Some(SeatName::Middle)]
+        );
+        assert_eq!(m.resolve(None), Some(SeatName::Middle));
+        assert_eq!(m.resolve(Some(SeatName::Front)), Some(SeatName::Front));
+    }
+
+    #[test]
+    fn a_format_3_manifest_gives_every_seat_a_set_and_only_its_own() {
+        use serde_json::json;
+        let dir = fixture3("f3manifest");
+        assert!(edited3(&dir, |_| {}).is_ok());
+        let why = edited3(&dir, |v| {
+            v["seat_sets"].as_object_mut().unwrap().remove("back");
+        })
+        .unwrap_err()
+        .0;
+        assert!(why.contains("back") && why.contains("seat_sets"), "{why}");
+        // A set for a seat the pack does not have.
+        let why = edited3(&dir, |v| {
+            let front = v["seat_sets"]["front"].clone();
+            v["seat_sets"]["couch"] = front;
+        })
+        .unwrap_err()
+        .0;
+        assert!(why.contains("couch"), "{why}");
+        // The mesh and textures are in the sets, not beside them.
+        for field in ["mesh", "textures"] {
+            let why = edited3(&dir, |v| {
+                v[field] = v["seat_sets"]["front"][field].clone();
+            })
+            .unwrap_err()
+            .0;
+            assert!(why.contains("seat_sets"), "{field}: {why}");
+        }
+        // A set that breaks a limit names its seat.
+        let why = edited3(&dir, |v| {
+            v["seat_sets"]["middle"]["mesh"]["triangles"] = json!(0);
+        })
+        .unwrap_err()
+        .0;
+        assert!(why.contains("middle") && why.contains("triangles"), "{why}");
+        let why = edited3(&dir, |v| {
+            v["seat_sets"]["front"]["textures"]["basis_size"] = json!(64);
+        })
+        .unwrap_err()
+        .0;
+        assert!(why.contains("front") && why.contains("basis size"), "{why}");
+        let why = edited3(&dir, |v| {
+            v["seat_sets"]["back"]["textures"]["house"] = json!("../house.ktx2");
+        })
+        .unwrap_err()
+        .0;
+        assert!(why.contains("back") && why.contains("file name"), "{why}");
+        // Sets are for format 3 only, and no format is newer than this one.
+        let why = edited3(&dir, |v| v["format"] = json!(2)).unwrap_err().0;
+        assert!(why.contains("seat_sets needs format 3"), "{why}");
+        assert!(edited3(&dir, |v| v["format"] = json!(4)).is_err());
+        assert!(edited3(&dir, |v| v["seat_sets"] = json!({})).is_err());
+        assert!(edited3(&dir, |v| v["seat_sets"] = json!(null)).is_err());
+    }
+
+    #[test]
+    fn each_seats_set_has_the_texture_budget_not_the_whole_pack() {
+        use serde_json::json;
+        let dir = fixture3("f3budget");
+        // Three sets that each fill the budget are fine: 96 MiB in all.
+        let full = edited3(&dir, |v| {
+            for seat in ["front", "middle", "back"] {
+                v["seat_sets"][seat]["textures"]["bytes"] = json!(MAX_TEXTURE_BYTES);
+            }
+        })
+        .expect("each set within the budget");
+        assert_eq!(full.seat_sets.len(), 3);
+        let why = edited3(&dir, |v| {
+            v["seat_sets"]["back"]["textures"]["bytes"] = json!(MAX_TEXTURE_BYTES + 1);
+        })
+        .unwrap_err()
+        .0;
+        assert!(why.contains("back") && why.contains("at most"), "{why}");
+    }
+
+    #[test]
+    fn a_seat_can_have_a_basis_gain_of_its_own() {
+        use serde_json::json;
+        let dir = fixture3("f3gain");
+        let gain = |dir: &Path, seat| {
+            let pack = load_seat_with(dir, Some(seat), false).expect("loads");
+            pack.baked.basis_gain
+        };
+        // No set says: the pack's.
+        for seat in [SeatName::Front, SeatName::Middle, SeatName::Back] {
+            assert_eq!(gain(&dir, seat), 1.0);
+        }
+        let bytes = std::fs::read(dir.join("manifest.json")).unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        manifest["seat_sets"]["front"]["basis_gain"] = json!(0.125);
+        manifest["basis_gain"] = json!(0.0625);
+        std::fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
+        assert_eq!(gain(&dir, SeatName::Front), 0.125);
+        assert_eq!(gain(&dir, SeatName::Middle), 0.0625);
+        assert_eq!(gain(&dir, SeatName::Back), 0.0625);
+        // A gain out of range is refused, whichever set it is in.
+        for bad_gain in [json!(-1.0), json!(1e39), json!(1001.0)] {
+            let why = edited3(&dir, |v| v["seat_sets"]["back"]["basis_gain"] = bad_gain)
+                .unwrap_err()
+                .0;
+            assert!(why.contains("basis_gain"), "{why}");
+        }
+    }
+
+    #[test]
+    fn a_short_or_missing_seat_set_file_refuses_the_whole_pack() {
+        let id = "cinema-v2";
+        let spoiled = |what: &str, spoil: &dyn Fn(&Path)| {
+            let root = temp(&format!("f3bad-{what}"));
+            write_fixture3(&root.join(id), id);
+            spoil(&root.join(id));
+            root
+        };
+        let offered = |root: &Path| scan(root).contains_key(&Place::Cinema);
+        let root = spoiled("good", &|_| {});
+        assert!(offered(&root));
+        // Each of these breaks one seat's set. The scan does not offer the
+        // pack (the app shows the built-in room, as for any pack that is
+        // broken) and a download of it is refused naming the seat.
+        type Case<'a> = (&'a str, &'a str, &'a dyn Fn(&Path));
+        let cases: [Case; 6] = [
+            ("mesh-short", "back", &|d| {
+                std::fs::write(d.join("back-mesh.bin"), b"LPM1").unwrap();
+            }),
+            ("mesh-gone", "front", &|d| {
+                std::fs::remove_file(d.join("front-mesh.bin")).unwrap();
+            }),
+            ("tex-gone", "back", &|d| {
+                std::fs::remove_file(d.join("back-basis5.ktx2")).unwrap();
+            }),
+            ("tex-cut", "middle", &|d| {
+                let whole = std::fs::read(d.join("middle-house.ktx2")).unwrap();
+                std::fs::write(d.join("middle-house.ktx2"), &whole[..whole.len() - 1]).unwrap();
+            }),
+            // Another size: the manifest's bytes no longer add up.
+            ("tex-size", "front", &|d| {
+                let other = solid(COLOR_SIZE, Some(((5, 5), true)), 0, DARK);
+                std::fs::write(d.join("front-dark.ktx2"), other).unwrap();
+            }),
+            ("tex-notktx", "back", &|d| {
+                std::fs::write(d.join("back-house.ktx2"), b"not a texture at all").unwrap();
+            }),
+        ];
+        for (what, seat, spoil) in cases {
+            let root = spoiled(what, spoil);
+            assert!(!offered(&root), "{what}: the pack was offered");
+            let why = validate_download(&root.join(id), id).unwrap_err().0;
+            assert!(why.contains(&format!("seat {seat}")), "{what}: {why}");
+            // And that seat's set does not load.
+            let name = SeatName::from_id(seat);
+            assert!(
+                load_seat_with(&root.join(id), name, false).is_err(),
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_offers_a_good_format_3_pack_and_download_checks_every_set() {
+        let root = temp("f3scan");
+        write_fixture3(&root.join("cinema-v2"), "cinema-v2");
+        let found = scan(&root);
+        let cinema = &found[&Place::Cinema];
+        assert_eq!(cinema.manifest.format, 3);
+        assert_eq!(cinema.layout.seats.len(), 3);
+        assert_eq!(cinema.layout.default_seat, 1);
+        assert_eq!(
+            validate_download(&root.join("cinema-v2"), "cinema-v2").unwrap(),
+            "1"
+        );
+        // A format 2 pack beside it: the higher number wins, whichever format.
+        write_fixture2(&root.join("cinema-v3"), "cinema-v3");
+        assert_eq!(scan(&root)[&Place::Cinema].manifest.id, "cinema-v3");
     }
 
     #[test]
