@@ -198,6 +198,16 @@ The server is the one that knows what you watched, so videos of a server
 that has answered are not listed twice under your own *Continue watching*.
 Each opens in a browser made for that kind of source; Back returns to Home.
 Its title is always the source's name, with where you are in it underneath.
+
+At the top of Home is a button for each library of your servers (Movies,
+TV Shows and so on, in the server's own order). Choose one to open all its
+titles at once, with Back returning to Home; the library's other tabs
+(Recommended, Collections) are one tap away. With more than one server, each
+button also names its server. Libraries you left out of a Plex source (see
+*Editing a source*) are not offered, and neither are those of a locked
+source, or of a Plex Home member who is not the one watching. The buttons are
+kept like the rows, so they are there at once and change when the server
+answers.
 Sources locked with a PIN stay off Home until unlocked; the padlock on a
 tile locks it (or, without a PIN yet, asks for one).
 

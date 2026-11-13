@@ -204,6 +204,14 @@ impl LibraryPage {
         }
     }
 
+    /// Opens on the Library tab, the library's titles as a grid, not on
+    /// Recommended: no tab is asked for until the first goes out.
+    fn open_on_titles(&mut self) {
+        self.tab = LibraryTab::Library;
+        self.target = LibraryTab::Library;
+        self.asked = [false; 3];
+    }
+
     /// The tabs shown. A server with no rows for the library has no
     /// Recommended.
     fn tabs(&self) -> Vec<(LibraryTab, &'static str)> {
@@ -662,6 +670,21 @@ impl CatalogView {
                     search: String::new(),
                     typed: None,
                 },
+            }],
+        }
+    }
+
+    /// A server's page that begins on `body`, loading under `seq`, with no
+    /// front page under it: backing out of it leaves the server.
+    pub fn on(seq: u64, body: Body) -> CatalogView {
+        CatalogView {
+            pages: vec![Page {
+                seq,
+                request_seq: None,
+                loading: true,
+                error: None,
+                loaded_at: None,
+                body,
             }],
         }
     }
@@ -1237,6 +1260,21 @@ fn page_for(item: CatalogItem, caps: CatalogCapabilities) -> (Load, Body) {
             let body = Body::Grid(Box::new(Grid::new(item.name.clone(), query.clone())));
             (Load::Grid(query), body)
         }
+    }
+}
+
+/// What opening a library from Home loads, and the page that shows it: all
+/// of its titles (a server with library pages opens its Library tab, not
+/// Recommended, which would be asked for only when its tab is chosen).
+pub fn titles_page(library: CatalogItem, caps: CatalogCapabilities) -> (Load, Body) {
+    match library.kind {
+        CatalogKind::Library if caps.library_pages => {
+            let mut page = LibraryPage::new(library);
+            page.open_on_titles();
+            let load = page.load_for(LibraryTab::Library);
+            (load, Body::Library(Box::new(page)))
+        }
+        _ => page_for(library, caps),
     }
 }
 

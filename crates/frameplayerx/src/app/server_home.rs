@@ -8,7 +8,10 @@
 //! is half watched on it: this headset's own records of that server are
 //! then left off Home.
 
-use fp_sources::{CatalogHome, CatalogRow, RowShape, SourceConfig, SourceKind, write_private};
+use fp_sources::{
+    CatalogHome, CatalogItem, CatalogKind, CatalogRow, RowShape, SourceConfig, SourceKind,
+    write_private,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -43,7 +46,8 @@ pub fn shown(
 
 /// A front page cut down to what Home shows: what is half watched, and the
 /// first [`ROWS`] rows, the server's own or, for one with none, its next
-/// episodes and newest titles. Its libraries are not kept.
+/// episodes and newest titles, and its libraries (those it shows, in its
+/// order), which Home offers as buttons.
 pub fn cut(home: CatalogHome) -> CatalogHome {
     let mut rows = home.rows;
     if rows.is_empty() {
@@ -70,10 +74,69 @@ pub fn cut(home: CatalogHome) -> CatalogHome {
     rows.retain(|r| !r.items.is_empty());
     rows.truncate(ROWS);
     CatalogHome {
+        libraries: home.libraries,
         resume: home.resume,
         rows,
         ..Default::default()
     }
+}
+
+/// A library of a server, as a button on Home.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryLink {
+    /// The source whose library it is.
+    pub source: String,
+    pub library: CatalogItem,
+    /// The library's name.
+    pub label: String,
+    /// The server's name, when Home shows more than one server: it tells
+    /// two libraries of one name apart.
+    pub server: Option<String>,
+}
+
+/// Whether the user left `library` out of `config`'s source.
+fn left_out(config: Option<&SourceConfig>, library: &CatalogItem) -> bool {
+    let Some(SourceConfig::Plex(plex)) = config else {
+        return false;
+    };
+    library
+        .id
+        .strip_prefix("section:")
+        .is_some_and(|section| plex.hidden_sections.iter().any(|h| h == section))
+}
+
+/// The libraries Home offers as buttons: those of each server in `servers`
+/// (as [`shown`] has it: not locked, not another profile's) whose front page
+/// is known, in the server's order and the servers' order. A library the
+/// user left out is not among them. Each is named by its library alone,
+/// until there are several servers.
+pub fn library_links(
+    servers: &[(String, String)],
+    configs: &[SourceConfig],
+    homes: &ServerHomes,
+) -> Vec<LibraryLink> {
+    let several = servers.len() > 1;
+    let mut links = Vec::new();
+    for (source, name) in servers {
+        let Some(home) = homes.get(source) else {
+            continue;
+        };
+        let config = configs.iter().find(|c| c.id() == source);
+        for library in &home.libraries {
+            let label = library.name.trim();
+            if library.kind != CatalogKind::Library || label.is_empty() || left_out(config, library)
+            {
+                continue;
+            }
+            links.push(LibraryLink {
+                source: source.clone(),
+                library: library.clone(),
+                label: label.to_string(),
+                server: several.then(|| name.clone()),
+            });
+        }
+    }
+    links
 }
 
 /// The folder the copies of the front pages are kept in.
@@ -263,8 +326,8 @@ pub enum Block {
     Sources,
 }
 
-/// The parts of Home in the order they are drawn: the featured video,
-/// Continue watching, each server's Continue watching and first rows, the
+/// The parts of Home in the order they are drawn, under the library buttons:
+/// the featured video, Continue watching, each server's Continue watching and first rows, the
 /// favourites and the sources. `servers` are the front pages of the servers
 /// shown; a part with nothing in it is left out.
 pub fn layout(
@@ -368,14 +431,14 @@ mod tests {
     }
 
     #[test]
-    fn a_page_is_cut_to_the_first_rows_without_libraries() {
+    fn a_page_is_cut_to_the_first_rows_and_keeps_the_libraries() {
         let mut full = home(
             1,
             &[("a", 2), ("b", 0), ("c", 1), ("d", 1), ("e", 1), ("f", 1)],
         );
         full.libraries = vec![item("lib")];
         let page = cut(full);
-        assert!(page.libraries.is_empty());
+        assert_eq!(page.libraries, vec![item("lib")]);
         assert_eq!(page.resume.len(), 1);
         let ids: Vec<&str> = page.rows.iter().map(|r| r.id.as_str()).collect();
         // The empty row is left out; four rows remain.
@@ -571,5 +634,163 @@ mod tests {
         );
         // Nothing to show but the sources.
         assert_eq!(layout(0, false, 0, &[]), [Block::Sources]);
+    }
+
+    fn library(key: &str, name: &str) -> CatalogItem {
+        CatalogItem {
+            id: format!("section:{key}"),
+            name: name.into(),
+            kind: CatalogKind::Library,
+            location: format!("plex://server/section/{key}"),
+            ..Default::default()
+        }
+    }
+
+    fn with_libraries(libraries: Vec<CatalogItem>) -> CatalogHome {
+        CatalogHome {
+            libraries,
+            ..home(0, &[("a", 1)])
+        }
+    }
+
+    fn labels(links: &[LibraryLink]) -> Vec<(String, Option<String>)> {
+        links
+            .iter()
+            .map(|l| (l.label.clone(), l.server.clone()))
+            .collect()
+    }
+
+    fn server(id: &str) -> (String, String) {
+        (id.to_string(), format!("Server {id}"))
+    }
+
+    #[test]
+    fn one_server_names_its_libraries_in_its_own_order_without_its_own_name() {
+        let mut homes = ServerHomes::default();
+        homes.put(
+            "nas",
+            cut(with_libraries(vec![
+                library("3", "TV Shows"),
+                library("1", "Movies"),
+                library("2", "Home videos"),
+            ])),
+        );
+        let links = library_links(&[server("nas")], &[plex("nas")], &homes);
+        assert_eq!(
+            labels(&links),
+            [
+                ("TV Shows".to_string(), None),
+                ("Movies".to_string(), None),
+                ("Home videos".to_string(), None),
+            ]
+        );
+        assert_eq!(links[0].source, "nas");
+        assert_eq!(links[0].library.id, "section:3");
+    }
+
+    #[test]
+    fn several_servers_name_each_library_with_its_server() {
+        let mut homes = ServerHomes::default();
+        homes.put("a", with_libraries(vec![library("1", "Movies")]));
+        homes.put(
+            "b",
+            with_libraries(vec![library("1", "Movies"), library("2", "TV Shows")]),
+        );
+        let servers = [server("a"), server("b")];
+        let links = library_links(&servers, &[plex("a"), plex("b")], &homes);
+        let named = |server: &str| Some(format!("Server {server}"));
+        assert_eq!(
+            labels(&links),
+            [
+                ("Movies".to_string(), named("a")),
+                ("Movies".to_string(), named("b")),
+                ("TV Shows".to_string(), named("b")),
+            ]
+        );
+        // The server is told apart even when its own page is not here yet.
+        let mut homes = ServerHomes::default();
+        homes.put("b", with_libraries(vec![library("2", "TV Shows")]));
+        let links = library_links(&servers, &[plex("a"), plex("b")], &homes);
+        assert_eq!(labels(&links), [("TV Shows".to_string(), named("b"))]);
+    }
+
+    #[test]
+    fn hidden_and_odd_libraries_are_left_out() {
+        let mut config = PlexConfig {
+            id: "nas".into(),
+            name: "Server nas".into(),
+            url: "http://10.0.0.2:32400".into(),
+            ..Default::default()
+        };
+        config.hidden_sections = vec!["2".into()];
+        let mut homes = ServerHomes::default();
+        let odd = CatalogItem {
+            kind: CatalogKind::Movie,
+            ..library("9", "Not a library")
+        };
+        homes.put(
+            "nas",
+            with_libraries(vec![
+                library("1", "Movies"),
+                library("2", "Kids"),
+                library("3", "  "),
+                odd,
+                library("4", "TV Shows"),
+            ]),
+        );
+        let links = library_links(&[server("nas")], &[SourceConfig::Plex(config)], &homes);
+        let names: Vec<&str> = links.iter().map(|l| l.label.as_str()).collect();
+        assert_eq!(names, ["Movies", "TV Shows"]);
+        // A server that has no page yet offers nothing.
+        let none = library_links(&[server("nas")], &[plex("nas")], &ServerHomes::default());
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn a_locked_server_and_an_inactive_profile_offer_no_libraries() {
+        let base = own("m1");
+        let set = crate::plex_profiles::siblings(
+            std::slice::from_ref(&base),
+            &profile("guest"),
+            &[resource("m1")],
+        );
+        let guest_id = set.sources[0].id.clone();
+        let mut configs: Vec<SourceConfig> =
+            set.sources.into_iter().map(SourceConfig::Plex).collect();
+        let own_id = base.id.clone();
+        configs.push(SourceConfig::Plex(base));
+        configs.push(plex("manual"));
+        let mut homes = ServerHomes::default();
+        for id in [&guest_id, &own_id, &"manual".to_string()] {
+            homes.put(id, with_libraries(vec![library("1", id)]));
+        }
+        let mut chosen = crate::plex_profiles::Chosen::new();
+        chosen.insert("acct".into(), "guest".into());
+        let mut pins = BTreeMap::new();
+        pins.insert("manual".to_string(), "hash".to_string());
+        let mut unlocked = HashSet::new();
+        let offered = |pins: &BTreeMap<String, String>, unlocked: &HashSet<String>| {
+            let servers = shown(&configs, &chosen, pins, unlocked);
+            library_links(&servers, &configs, &homes)
+                .into_iter()
+                .map(|l| l.source)
+                .collect::<Vec<_>>()
+        };
+        // The guest profile plays: its source's libraries, not the account's,
+        // and not the locked server's.
+        assert_eq!(offered(&pins, &unlocked), [guest_id.clone()]);
+        // Unlocked, the server's libraries come.
+        unlocked.insert("manual".to_string());
+        let now = offered(&pins, &unlocked);
+        assert_eq!(now.len(), 2);
+        assert!(now.contains(&"manual".to_string()) && !now.contains(&own_id));
+    }
+
+    #[test]
+    fn libraries_survive_the_disk_copy() {
+        let page = cut(with_libraries(vec![library("1", "Movies")]));
+        let text = String::from_utf8(encode(&page, 7).unwrap()).unwrap();
+        let saved: Saved = serde_json::from_str(&text).unwrap();
+        assert_eq!(saved.home.libraries, vec![library("1", "Movies")]);
     }
 }
