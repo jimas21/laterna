@@ -57,8 +57,8 @@ impl FragmentCounter {
         // used the query has finished (the callers wait for the device).
         unsafe {
             gpu.device
-                .cmd_reset_query_pool(cmd, self.pool, eye as u32, 1)
-        };
+                .cmd_reset_query_pool(cmd, self.pool, eye as u32, 1);
+        }
         self.written[eye] = false;
     }
 
@@ -67,8 +67,8 @@ impl FragmentCounter {
         // SAFETY: recording; the query was reset by `reset` and is not active.
         unsafe {
             gpu.device
-                .cmd_begin_query(cmd, self.pool, eye as u32, vk::QueryControlFlags::empty())
-        };
+                .cmd_begin_query(cmd, self.pool, eye as u32, vk::QueryControlFlags::empty());
+        }
         self.written[eye] = true;
     }
 

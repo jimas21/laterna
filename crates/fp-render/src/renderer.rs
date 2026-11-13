@@ -2602,7 +2602,7 @@ impl Renderer {
     /// made for, once the sorter has answered: it changes when a seat change
     /// has been answered. For tests.
     #[doc(hidden)]
-    pub fn place_order_eye(&self) -> Option<glam::Vec3> {
+    pub fn place_order_eye(&self) -> Option<Vec3> {
         self.env.as_ref().and_then(EnvPass::sorted_eye)
     }
 
