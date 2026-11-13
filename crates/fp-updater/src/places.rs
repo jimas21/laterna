@@ -23,7 +23,7 @@ use std::sync::atomic::AtomicBool;
 use crate::client::{Target, download_file};
 use crate::error::{Error, IoContext, Result};
 use crate::install::{extract_zip_capped, safe_entry_components};
-use crate::url::{check_download_url, parse_url};
+use crate::url::{check_download_url, is_loopback_host, parse_url};
 
 /// The most a pack's zip may be, and so the most the app will download.
 pub const MAX_PACK_BYTES: u64 = 40 << 20;
@@ -151,6 +151,17 @@ pub fn parse_catalog(
         out.push(entry);
     }
     Ok(out)
+}
+
+/// Whether downloads for this catalog must use the https-only agent: always,
+/// unless the catalog is not empty and every entry's host is this machine
+/// (a test or preview catalog). One remote entry keeps the whole catalog on
+/// https, so a catalog file cannot switch TLS off for a real host.
+pub fn needs_https_only(catalog: &[CatalogEntry]) -> bool {
+    catalog.is_empty()
+        || !catalog
+            .iter()
+            .all(|e| parse_url(&e.url).is_ok_and(|p| is_loopback_host(p.host)))
 }
 
 /// Where a pack is unpacked and checked before it is moved into place.
@@ -804,16 +815,18 @@ mod tests {
     }
 
     #[test]
-    fn a_redirect_to_plain_http_is_refused_by_the_https_only_agent() {
+    fn the_https_only_agent_refuses_plain_http_before_connecting() {
+        // ureq 3.5 checks the scheme of every hop (run.rs `call_run`, which
+        // the redirect loop calls again for each Location), so a redirect to
+        // plain http is refused the same way. A real redirect needs an https
+        // server first, which these tests do not have: this covers the
+        // check itself, and that nothing is sent.
         let tmp = tempfile::tempdir().unwrap();
         let server = Server::start();
         let zip = good_zip(tmp.path(), "campsite");
-        server.route("/real.zip", Route::Bytes(zip.clone()));
-        server.route("/campsite.zip", Route::Redirect(server.url("/real.zip")));
+        server.route("/campsite.zip", Route::Bytes(zip.clone()));
         let entry = entry_for(&server, "campsite", &zip);
         let places = tmp.path().join("places");
-        // The loopback url passes the entry check, but the app's agent will
-        // not speak plain http at all.
         let r = install_pack(
             &crate::https_only_agent(),
             &entry,
@@ -823,9 +836,40 @@ mod tests {
             &AtomicBool::new(false),
         );
         assert!(r.is_err());
+        assert_eq!(server.hits(), 0, "the agent connected");
         assert_nothing_left(&places);
-        // The default agent follows it, which is what proves the point.
-        run(&entry, &places, accept).unwrap();
+    }
+
+    #[test]
+    fn the_default_agent_follows_a_redirect_which_is_what_the_https_check_guards() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = Server::start();
+        let zip = good_zip(tmp.path(), "campsite");
+        server.route("/real.zip", Route::Bytes(zip.clone()));
+        server.route("/campsite.zip", Route::Redirect(server.url("/real.zip")));
+        let entry = entry_for(&server, "campsite", &zip);
+        run(&entry, &tmp.path().join("places"), accept).unwrap();
+        assert_eq!(server.hits(), 2);
+    }
+
+    #[test]
+    fn only_a_catalog_wholly_on_this_machine_may_use_plain_http() {
+        let entry = |url: &str| CatalogEntry {
+            id: "a".into(),
+            version: "1".into(),
+            url: url.into(),
+            sha256: "0".repeat(64),
+            bytes: 1,
+            title: "A".into(),
+        };
+        let local = entry("http://127.0.0.1:9/a.zip");
+        let v6 = entry("http://[::1]:9/a.zip");
+        let name = entry("http://localhost:9/a.zip");
+        let remote = entry("https://github.com/x/a.zip");
+        assert!(!needs_https_only(&[local.clone(), v6, name]));
+        assert!(needs_https_only(&[]));
+        assert!(needs_https_only(std::slice::from_ref(&remote)));
+        assert!(needs_https_only(&[local, remote]));
     }
 
     #[test]

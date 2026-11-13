@@ -84,7 +84,8 @@ fn host_ip(host: &str) -> Option<IpAddr> {
     host.parse::<Ipv4Addr>().ok().map(IpAddr::V4)
 }
 
-fn is_loopback_host(host: &str) -> bool {
+/// Whether `host` (as [`parse_url`] gives it) is this machine.
+pub fn is_loopback_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost") || host_ip(host).is_some_and(|ip| ip.is_loopback())
 }
 

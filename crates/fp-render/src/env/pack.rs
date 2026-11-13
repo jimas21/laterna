@@ -1055,7 +1055,13 @@ pub fn scan(root: &Path) -> HashMap<Place, Arc<Replacement>> {
     };
     let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     dirs.sort();
-    for dir in dirs.into_iter().filter(|d| d.is_dir()) {
+    // A dot-folder is an install's working area (`.<id>.part`, `.<id>.old`),
+    // never a pack.
+    let hidden = |d: &Path| {
+        d.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+    };
+    for dir in dirs.into_iter().filter(|d| d.is_dir() && !hidden(d)) {
         let manifest = match read_manifest(&dir) {
             Ok(m) => m,
             // A folder with no manifest is not a pack: not worth a warning.
@@ -1530,6 +1536,9 @@ mod tests {
         // Newer, but broken: the short mesh keeps it out.
         write_fixture(&root.join("cinema-v11"), "cinema-v11");
         std::fs::write(root.join("cinema-v11/mesh.bin"), b"LPM1").unwrap();
+        // An update's working folders hold whole packs but are not packs.
+        write_fixture(&root.join(".cinema-v12.part"), "cinema-v12");
+        write_fixture(&root.join(".cinema-v13.old"), "cinema-v13");
         // Not packs.
         std::fs::create_dir_all(root.join("empty")).unwrap();
         std::fs::write(root.join("stray.txt"), b"hello").unwrap();
