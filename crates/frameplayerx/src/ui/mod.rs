@@ -918,6 +918,11 @@ pub struct UiState {
     pub adjust_tab: usize,
     /// The audio and subtitles picker shows above the control bar.
     pub tracks_open: bool,
+    /// The More list shows above the control bar (instead of the picker).
+    pub more_open: bool,
+    /// The bar's keys that gave way to the More list as the bar was too
+    /// narrow for them, as the bar last drew.
+    pub bar_dropped: player::Dropped,
     /// The last run crashed: asks whether to send a report.
     pub crash: Option<crash::CrashPrompt>,
     /// The What's new card, after an update or from About.
@@ -1006,6 +1011,8 @@ impl Default for UiState {
             multitask: false,
             adjust_tab: 0,
             tracks_open: false,
+            more_open: false,
+            bar_dropped: Default::default(),
             crash: None,
             whats_new: None,
             open_error: None,

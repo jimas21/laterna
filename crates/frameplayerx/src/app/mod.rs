@@ -128,6 +128,10 @@ const VIDEO_TOAST_SECS: f32 = 3.0;
 /// seven on a flat video: close, hide, room, place, follow, bookmark, adjust)
 /// stay clear of the transport keys in the middle.
 const BAR_PX: [u32; 2] = [1540, 268];
+/// The panel over the control bar's end in pixels, which holds the audio and
+/// subtitles picker and the More list: wide enough for the list's two
+/// columns, tall enough for them with the bar's keys moved into it.
+const PICKER_PX: [u32; 2] = [1100, 640];
 /// Metres per pixel of the control bar and of the picker on it.
 const BAR_M_PER_PX: f32 = 1.2 / 1400.0;
 /// The performance overlay's quad layer (the panels' are their indices).
@@ -177,6 +181,9 @@ pub struct App {
     pub ui: UiState,
     thumbs: ui::thumbs::Thumbs,
     panels: [Panel; 6],
+    /// Whether the panel above the bar last showed the More list rather than
+    /// the audio and subtitles picker.
+    tracks_showing: bool,
     subs: Panel,
     /// The performance overlay, its sampler and readings while it shows, and
     /// what it last showed.
@@ -341,7 +348,7 @@ impl App {
             floating_panel([900, 1020], 0.75, 1.25),
             growing_panel([1200, 456], 1.0, 1.25),
             // As fine as the bar it sits on, and growing with it.
-            growing_panel([850, 560], 850.0 * BAR_M_PER_PX, 1.25),
+            growing_panel(PICKER_PX, PICKER_PX[0] as f32 * BAR_M_PER_PX, 1.25),
             growing_panel([1100, 90], 1100.0 * BAR_M_PER_PX, 1.25),
         ];
         panels[BAR].refresh = Some(Duration::from_millis(250));
@@ -364,6 +371,7 @@ impl App {
             ui: UiState::default(),
             thumbs,
             panels,
+            tracks_showing: false,
             subs,
             perf,
             perf_monitor: None,
@@ -518,7 +526,7 @@ impl App {
             "bar" => BAR,
             "adjust" => ADJUST,
             "keyboard" => KEYBOARD,
-            "tracks" => TRACKS,
+            "tracks" | "more" => TRACKS,
             "toast" => TOAST,
             _ => return None,
         })

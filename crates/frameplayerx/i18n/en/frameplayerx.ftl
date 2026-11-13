@@ -1510,7 +1510,7 @@ earbuds-pause-desc = The video stays paused when the earbud goes back in.
 
 # Short: a tab, and the title of its page.
 settings-places = Places
-settings-places-desc = The place round flat videos and the menus. Plain is the empty background. The film button on the control bar changes it while a video plays. Your choice stays until you change it.
+settings-places-desc = The place round flat videos and the menus. Plain is the empty background. Place around the screen, in the control bar's More list, changes it while a video plays. Your choice stays until you change it.
 # The picker's heading in the adjust panel, and a heading in Settings.
 place-heading = Place
 # Short: a chip. The empty background, no place.
@@ -1568,6 +1568,32 @@ player-place = Place
 player-multitask = Browse beside the video
 # A tooltip on the bed button while a place shows.
 player-follow-place = Screen follows you (not inside a place)
+
+# A tooltip: the three-dot key at the end of the control bar, which opens the
+# list of the controls the bar leaves out.
+player-more = More controls
+# Headings over the two columns of that list.
+more-playback = Playback
+more-screen = Screen and room
+# Rows of that list, each said as plainly as it can be. Some are switches (shown
+# On or Off), some step through choices (the choice is shown), some open
+# something.
+more-speed = Playback speed
+more-loop = Loop this video
+more-autoplay = Autoplay the next video
+more-up-next = Up next list
+more-browse = Browse the library
+more-bookmark = Bookmark this moment
+more-hide = Hide the controls
+more-size = Screen size
+more-size-custom = Custom
+more-follow = Screen follows you
+more-follow-place = Does nothing inside a place
+more-multitask = Browse beside the video
+more-place = Place around the screen
+more-room = Show my room
+more-on = On
+more-off = Off
 
 # Plex server list: the button that adds every server switched on.
 plex-servers-add = { $count ->

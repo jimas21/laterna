@@ -364,8 +364,17 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(6)?;
             }
+            // The More list, over the bar's end; `more off` closes it.
+            Some("more") => {
+                let open = parts.get(1) != Some(&"off");
+                self.app.ui.more_open = open;
+                self.app.ui.tracks_open = false;
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             Some("tracks") => {
                 self.app.ui.tracks_open = true;
+                self.app.ui.more_open = false;
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }

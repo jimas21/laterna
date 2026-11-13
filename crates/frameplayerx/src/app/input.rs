@@ -293,7 +293,9 @@ impl App {
         // The player's controls are up: not under the library, unless side by
         // side with it.
         let controls_up = !self.show_browser || self.multitasking();
-        if playing && self.ui.tracks_open && self.ui_visible && controls_up {
+        if playing && self.ui.more_open && self.ui_visible && controls_up {
+            self.ui.more_open = false;
+        } else if playing && self.ui.tracks_open && self.ui_visible && controls_up {
             self.ui.tracks_open = false;
         } else if playing && self.ui.adjust_open && self.ui_visible && controls_up {
             self.ui.adjust_open = false;

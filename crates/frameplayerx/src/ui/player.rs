@@ -253,34 +253,72 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
         seek_row(ui, pb, v.state, v.actions);
         ui.add_space(8.0);
 
-        // Controls: three groups on one row, transport always centred.
+        // Controls: three groups on one row, transport always centred. Each
+        // side has the room between the transport and the bar's end; what
+        // would not fit there goes into the More list instead of over the
+        // transport.
         let (row, _) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 72.0), Sense::hover());
+        let room = side_room(row.width());
         let mut left = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        widgets::well(&mut left, |ui| {
-            browse_and_sound(ui, pb, v.state, v.settings, v.actions);
-        });
+        widgets::well(&mut left, |ui| volume_key(ui, pb, v.state, v.actions));
         transport(ui, row, pb, v.settings, v.queue, v.actions);
+        let dropped = Dropped::for_room(room);
+        v.state.bar_dropped = dropped;
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
                 .layout(Layout::right_to_left(Align::Center)),
         );
         widgets::well(&mut right, |ui| {
-            let keys = ViewKeys {
-                passthrough: v.settings.passthrough,
-                passthrough_available: v.passthrough_available,
-                follow: v.settings.follow,
-                places_offered: v.places_enabled,
-                place_shown: v.place_shown,
-            };
-            view_keys(ui, pb, v.state, keys, v.actions);
+            right_keys(ui, v.state, dropped, v.actions);
         });
     });
+}
+
+/// How wide a key on the bar is, and the gap between keys in a group.
+const BAR_KEY: f32 = 52.0;
+const BAR_KEY_GAP: f32 = 4.0;
+/// A group's tray round its keys, both sides together.
+const WELL_PAD: f32 = 10.0;
+/// What the centred transport takes of the row: its five keys and the gaps.
+const TRANSPORT_WIDTH: f32 = 52.0 + 56.0 + 72.0 + 56.0 + 52.0 + 4.0 * TRANSPORT_GAP;
+const TRANSPORT_GAP: f32 = 12.0;
+/// Clear space kept between the transport and either group.
+const SIDE_GAP: f32 = 24.0;
+
+/// How much of a `row_width` wide row one side's group may take: from the
+/// bar's end to the transport's, less a gap.
+fn side_room(row_width: f32) -> f32 {
+    ((row_width - TRANSPORT_WIDTH) / 2.0 - SIDE_GAP).max(0.0)
+}
+
+/// How wide a group of `n` keys is, tray included.
+fn group_width(n: usize) -> f32 {
+    n as f32 * BAR_KEY + n.saturating_sub(1) as f32 * BAR_KEY_GAP + WELL_PAD
+}
+
+/// The keys of the bar's right group that gave way to the More list because
+/// the room for the group was too small for them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Dropped {
+    pub hide: bool,
+    pub adjust: bool,
+}
+
+impl Dropped {
+    /// What does not fit in `room`: the group is Adjust, More, Hide and Close;
+    /// Hide goes first, then Adjust. More and Close always stay.
+    fn for_room(room: f32) -> Dropped {
+        Dropped {
+            hide: group_width(4) > room,
+            adjust: group_width(3) > room,
+        }
+    }
 }
 
 /// The control bar's side margin; the audio and subtitles picker lines up
@@ -332,6 +370,7 @@ fn title_row(
                     .clicked()
             {
                 state.tracks_open = !state.tracks_open;
+                state.more_open = false;
             }
             match (pb.player.error(), &pb.notice) {
                 (Some(e), _) => {
@@ -428,51 +467,13 @@ fn seek_row(
     });
 }
 
-/// Browse, Up next, Loop video, Autoplay, speed and sound.
-fn browse_and_sound(
+/// The speaker key, which mutes and unmutes, and the volume slider over it.
+fn volume_key(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
     state: &mut super::UiState,
-    settings: &Settings,
     actions: &mut Vec<Action>,
 ) {
-    if widgets::key(ui, icons::SQUARES_FOUR, 52.0, false)
-        .tip(tr!("player-browse"))
-        .clicked()
-    {
-        actions.push(Action::ShowBrowser(true));
-    }
-    if widgets::key(ui, icons::QUEUE, 52.0, false)
-        .tip(tr!("player-up-next"))
-        .clicked()
-    {
-        actions.push(Action::ShowUpNext);
-    }
-    if widgets::key(ui, icons::REPEAT_ONCE, 52.0, settings.loop_video)
-        .tip(tr!("player-loop-video"))
-        .clicked()
-    {
-        actions.push(Action::ToggleLoopVideo);
-    }
-    if widgets::key_nested(
-        ui,
-        icons::ARROW_CLOCKWISE,
-        icons::PLAY,
-        52.0,
-        settings.autoplay,
-    )
-    .tip(tr!("player-autoplay"))
-    .clicked()
-    {
-        actions.push(Action::ToggleAutoplay);
-    }
-    let speed = pb.player.speed();
-    if widgets::pill_key(ui, &fmt_speed(speed), (speed - 1.0).abs() > 1e-3)
-        .tip(tr!("player-speed"))
-        .clicked()
-    {
-        actions.push(Action::SetSpeed(next_speed(speed)));
-    }
     let vol = pb.player.volume();
     let speaker = if vol <= 0.001 {
         icons::SPEAKER_X
@@ -571,14 +572,14 @@ fn transport(
 ) {
     let (step, loops) = (settings.seek_step, settings.loop_playlist);
     let paused = pb.player.is_paused() || pb.player.state() == PlayerState::Ended;
-    let centre_w = 52.0 + 56.0 + 72.0 + 56.0 + 52.0 + 4.0 * 12.0;
-    let centre = egui::Rect::from_center_size(row.center(), Vec2::new(centre_w, row.height()));
+    let centre =
+        egui::Rect::from_center_size(row.center(), Vec2::new(TRANSPORT_WIDTH, row.height()));
     let mut mid = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(centre)
             .layout(Layout::left_to_right(Align::Center)),
     );
-    mid.spacing_mut().item_spacing.x = 12.0;
+    mid.spacing_mut().item_spacing.x = TRANSPORT_GAP;
     queue_key(&mut mid, queue, -1, loops, actions);
     if skip_button(&mut mid, -step)
         .tip(tr!("player-rewind"))
@@ -638,114 +639,465 @@ fn queue_key(
     }
 }
 
-/// What the keys on the right of the bar depend on.
-#[derive(Clone, Copy)]
-struct ViewKeys {
-    passthrough: bool,
-    passthrough_available: bool,
-    follow: bool,
-    /// Places may show at all (the kill switch is not set).
-    places_offered: bool,
-    /// The place showing round the picture now.
-    place_shown: Option<Place>,
-}
-
-/// Close, hide, room, place, size, follow, multitask, bookmark and adjust.
-fn view_keys(
+/// What a viewer reaches for while watching, at the bar's end: Adjust, More,
+/// Hide and Close. Everything else is in the More list. A key in `dropped`
+/// is there instead of on the bar.
+fn right_keys(
     ui: &mut egui::Ui,
-    pb: &crate::playback::Playback,
     state: &mut super::UiState,
-    keys: ViewKeys,
+    dropped: Dropped,
     actions: &mut Vec<Action>,
 ) {
-    let flat = pb.format.projection == Projection::Flat;
-    if widgets::key(ui, icons::X, 52.0, false)
+    if widgets::key(ui, icons::X, BAR_KEY, false)
         .tip(tr!("player-close"))
         .clicked()
     {
         actions.push(Action::ClosePlayback);
     }
-    if widgets::key(ui, icons::EYE_SLASH, 52.0, false)
-        .tip(tr!("player-hide"))
-        .clicked()
+    if !dropped.hide
+        && widgets::key(ui, icons::EYE_SLASH, BAR_KEY, false)
+            .tip(tr!("player-hide"))
+            .clicked()
     {
         actions.push(Action::HideControls);
     }
-    // Your room shows around a flat video's screen, or through a
-    // side-by-side passthrough video's own mask.
-    if keys.passthrough_available {
-        if flat {
-            if widgets::key(ui, icons::ARMCHAIR, 52.0, keys.passthrough)
-                .tip(tr!("player-room"))
-                .clicked()
-            {
-                actions.push(Action::TogglePassthrough);
-            }
-        } else if let Some(f) = pb.mask_toggled()
-            && widgets::key(ui, icons::ARMCHAIR, 52.0, pb.format.alpha_packed)
-                .tip(tr!("player-room-mask"))
-                .clicked()
-        {
-            actions.push(Action::SetFormat(Some(f)));
-        }
-    }
-    // A place surrounds a flat screen only: it opens the picker, one click
-    // from the bar.
-    if keys.places_offered
-        && flat
-        && widgets::key(ui, icons::FILM_STRIP, 52.0, keys.place_shown.is_some())
-            .tip(tr!("player-place"))
-            .clicked()
-    {
-        toggle_adjust_tab(state, POSITION_TAB);
-    }
-    // Size steps Home theater, Cinema, Giant (a room's seats, round a room).
-    if flat
-        && widgets::key(ui, icons::FRAME_CORNERS, 52.0, false)
-            .tip(tr!("player-size"))
-            .clicked()
-    {
-        actions.push(Action::CycleSize);
-    }
-    // Only a flat screen follows: around 180°/360° video you look about.
-    // Inside a place it does nothing, and the tip says so.
-    if flat {
-        let tip = if keys.place_shown.is_some() {
-            tr!("player-follow-place")
-        } else {
-            tr!("settings-follow")
-        };
-        if widgets::key(ui, icons::BED, 52.0, keys.follow)
-            .tip(tip)
-            .clicked()
-        {
-            actions.push(Action::ToggleFollow);
-        }
-    }
-    // Browse beside the video: only a flat screen, and not inside a room (the
-    // room sets where its screen is).
-    if flat
-        && !keys
-            .place_shown
-            .is_some_and(|p| p.kind() == PlaceKind::Room)
-        && widgets::key(ui, icons::FOLDERS, 52.0, state.multitask)
-            .tip(tr!("player-multitask"))
-            .clicked()
-    {
-        actions.push(Action::ToggleMultitask);
-    }
-    if widgets::key(ui, icons::BOOKMARK_SIMPLE, 52.0, false)
-        .tip(tr!("player-bookmark"))
+    if widgets::key(ui, icons::DOTS_THREE, BAR_KEY, state.more_open)
+        .tip(tr!("player-more"))
         .clicked()
     {
-        actions.push(Action::AddBookmark);
+        // One list at a time over the bar.
+        state.more_open = !state.more_open;
+        state.tracks_open = false;
     }
-    if widgets::key(ui, icons::SLIDERS_HORIZONTAL, 52.0, state.adjust_open)
-        .tip(tr!("player-adjust"))
-        .clicked()
+    if !dropped.adjust
+        && widgets::key(ui, icons::SLIDERS_HORIZONTAL, BAR_KEY, state.adjust_open)
+            .tip(tr!("player-adjust"))
+            .clicked()
     {
         state.adjust_open = !state.adjust_open;
+        state.more_open = false;
     }
+}
+
+/// How wide a column of the More list is, and the gap between columns.
+const MORE_COLUMN: f32 = 380.0;
+const MORE_GAP: f32 = 20.0;
+const MORE_ROW: f32 = 50.0;
+
+/// What a row of the More list shows at its right end.
+#[derive(Debug, PartialEq)]
+enum Mark {
+    /// A choice that opens something.
+    Go,
+    /// A switch, and whether it is on.
+    On(bool),
+    /// The setting a press steps on from.
+    Value(String),
+}
+
+/// What a row of the More list does when pressed.
+#[derive(Debug)]
+enum Does {
+    Act(Box<Action>),
+    /// Opens (or closes) the adjust panel at a tab.
+    Tab(usize),
+    /// Opens (or closes) the adjust panel where it was.
+    AdjustPanel,
+}
+
+impl Does {
+    fn act(action: Action) -> Does {
+        Does::Act(Box::new(action))
+    }
+}
+
+/// One row of the More list: its icon, what it does in plain words, and its
+/// state. `closes` shuts the list when it is pressed; switches and steppers
+/// leave it open to show what they did.
+#[derive(Debug)]
+struct MoreRow {
+    icon: &'static str,
+    /// A small filled icon inside `icon`.
+    inner: Option<&'static str>,
+    label: &'static str,
+    note: Option<&'static str>,
+    mark: Mark,
+    does: Does,
+    closes: bool,
+}
+
+impl MoreRow {
+    fn go(icon: &'static str, label: &'static str, does: Does) -> MoreRow {
+        MoreRow {
+            icon,
+            inner: None,
+            label,
+            note: None,
+            mark: Mark::Go,
+            does,
+            closes: true,
+        }
+    }
+
+    fn switch(icon: &'static str, label: &'static str, on: bool, action: Action) -> MoreRow {
+        MoreRow {
+            mark: Mark::On(on),
+            closes: false,
+            ..MoreRow::go(icon, label, Does::act(action))
+        }
+    }
+
+    fn value(icon: &'static str, label: &'static str, value: String, action: Action) -> MoreRow {
+        MoreRow {
+            mark: Mark::Value(value),
+            closes: false,
+            ..MoreRow::go(icon, label, Does::act(action))
+        }
+    }
+}
+
+/// What the More list depends on.
+#[derive(Clone, Copy)]
+struct MoreState {
+    /// The video is on a flat screen: only then do its size, following and
+    /// the rest apply.
+    flat: bool,
+    /// A room (not a sky) is the place showing, which sets where the screen is.
+    in_room: bool,
+    /// Some place is showing round the picture.
+    place: Option<Place>,
+    /// Places may show at all (the kill switch is not set).
+    places_offered: bool,
+    passthrough_available: bool,
+    passthrough: bool,
+    /// The format with the video's own mask switched, when it has one.
+    mask: Option<VideoFormat>,
+    mask_on: bool,
+    multitask: bool,
+    follow: bool,
+    loop_video: bool,
+    autoplay: bool,
+    speed: f64,
+    size: Option<ScreenSize>,
+    /// Keys the bar was too narrow for.
+    dropped: Dropped,
+}
+
+/// The list's two columns: how the video plays, then the screen and the
+/// room round it. A column with nothing to say is left out by the panel.
+fn more_columns(m: &MoreState) -> [Vec<MoreRow>; 2] {
+    let mut play = vec![
+        MoreRow::value(
+            icons::GAUGE,
+            tr!("more-speed"),
+            fmt_speed(m.speed),
+            Action::SetSpeed(next_speed(m.speed)),
+        ),
+        MoreRow::switch(
+            icons::REPEAT_ONCE,
+            tr!("more-loop"),
+            m.loop_video,
+            Action::ToggleLoopVideo,
+        ),
+        MoreRow {
+            inner: Some(icons::PLAY),
+            ..MoreRow::switch(
+                icons::ARROW_CLOCKWISE,
+                tr!("more-autoplay"),
+                m.autoplay,
+                Action::ToggleAutoplay,
+            )
+        },
+        MoreRow::go(
+            icons::QUEUE,
+            tr!("more-up-next"),
+            Does::act(Action::ShowUpNext),
+        ),
+        MoreRow::go(
+            icons::SQUARES_FOUR,
+            tr!("more-browse"),
+            Does::act(Action::ShowBrowser(true)),
+        ),
+        MoreRow::go(
+            icons::BOOKMARK_SIMPLE,
+            tr!("more-bookmark"),
+            Does::act(Action::AddBookmark),
+        ),
+    ];
+    // What the bar had no room for.
+    if m.dropped.adjust {
+        play.push(MoreRow::go(
+            icons::SLIDERS_HORIZONTAL,
+            tr!("player-adjust"),
+            Does::AdjustPanel,
+        ));
+    }
+    if m.dropped.hide {
+        play.push(MoreRow::go(
+            icons::EYE_SLASH,
+            tr!("more-hide"),
+            Does::act(Action::HideControls),
+        ));
+    }
+
+    let mut screen = Vec::new();
+    if m.flat {
+        screen.push(MoreRow::value(
+            icons::FRAME_CORNERS,
+            tr!("more-size"),
+            m.size
+                .map_or_else(|| tr!("more-size-custom"), super::size::name)
+                .to_string(),
+            Action::CycleSize,
+        ));
+        screen.push(MoreRow {
+            note: m.place.is_some().then(|| tr!("more-follow-place")),
+            ..MoreRow::switch(
+                icons::BED,
+                tr!("more-follow"),
+                m.follow,
+                Action::ToggleFollow,
+            )
+        });
+        if !m.in_room {
+            screen.push(MoreRow::switch(
+                icons::FOLDERS,
+                tr!("more-multitask"),
+                m.multitask,
+                Action::ToggleMultitask,
+            ));
+        }
+        if m.places_offered {
+            let place = m.place.map_or_else(
+                || tr!("place-plain"),
+                |p| place_label(PlaceChoice::Place(p)).1,
+            );
+            screen.push(MoreRow {
+                mark: Mark::Value(place.to_string()),
+                ..MoreRow::go(
+                    icons::FILM_STRIP,
+                    tr!("more-place"),
+                    Does::Tab(POSITION_TAB),
+                )
+            });
+        }
+    }
+    // Your room shows around a flat video's screen, or through a
+    // side-by-side passthrough video's own mask.
+    if m.passthrough_available {
+        if m.flat {
+            screen.push(MoreRow::switch(
+                icons::ARMCHAIR,
+                tr!("more-room"),
+                m.passthrough,
+                Action::TogglePassthrough,
+            ));
+        } else if let Some(f) = m.mask {
+            screen.push(MoreRow::switch(
+                icons::ARMCHAIR,
+                tr!("adjust-mask"),
+                m.mask_on,
+                Action::SetFormat(Some(f)),
+            ));
+        }
+    }
+    [play, screen]
+}
+
+/// The More list over the end of the control bar (in the picker's panel,
+/// since only one of them shows at a time): the controls the bar leaves
+/// out, as rows with an icon, a plain name and where it is a switch, whether
+/// it is on. Its body is as tall as the longer column needs, standing on the
+/// panel's bottom edge; a click on the rest of the panel closes it.
+pub fn more_panel(ctx: &egui::Context, v: &mut View) {
+    let Some(pb) = v.playback.as_deref() else {
+        return;
+    };
+    let m = MoreState {
+        flat: pb.format.projection == Projection::Flat,
+        in_room: v.place_shown.is_some_and(|p| p.kind() == PlaceKind::Room),
+        place: v.place_shown,
+        places_offered: v.places_enabled,
+        passthrough_available: v.passthrough_available,
+        passthrough: v.settings.passthrough,
+        mask: pb.mask_toggled(),
+        mask_on: pb.format.alpha_packed,
+        multitask: v.state.multitask,
+        follow: v.settings.follow,
+        loop_video: v.settings.loop_video,
+        autoplay: v.settings.autoplay,
+        speed: pb.player.speed(),
+        size: super::size::current(v.settings, &pb.settings, v.place_shown),
+        dropped: v.state.bar_dropped,
+    };
+    let [play, screen] = more_columns(&m);
+    let columns: Vec<_> = [(tr!("more-playback"), play), (tr!("more-screen"), screen)]
+        .into_iter()
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect();
+    let n = columns.len() as f32;
+    let rows = columns.iter().map(|(_, r)| r.len()).max().unwrap_or(0) as f32;
+    let label_h = ctx.fonts(|f| f.row_height(&theme::font(Weight::SemiBold, 13.0)));
+    let full = ctx.screen_rect() - widgets::SHADOW_ROOM;
+    let wide = 2.0 * TRACK_PAD + n * MORE_COLUMN + (n - 1.0).max(0.0) * MORE_GAP;
+    let tall = 2.0 * TRACK_PAD + label_h + LIST_GAP + rows * MORE_ROW;
+    let body = egui::Rect::from_min_max(
+        egui::pos2(
+            (full.right() - wide).max(full.left()),
+            (full.bottom() - tall).max(full.top()),
+        ),
+        full.max,
+    );
+    widgets::slab(ctx, body, 24.0);
+    if ctx.input(|i| {
+        i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| !body.contains(p))
+    }) {
+        v.state.more_open = false;
+    }
+    let (state, actions) = (&mut *v.state, &mut *v.actions);
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show(ctx, |ui| {
+            let inner = body.shrink(TRACK_PAD);
+            for (i, (name, rows)) in columns.into_iter().enumerate() {
+                let x = inner.left() + i as f32 * (MORE_COLUMN + MORE_GAP);
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(x, inner.top()),
+                    Vec2::new(MORE_COLUMN, inner.height()),
+                );
+                let mut col = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(rect)
+                        .layout(Layout::top_down(Align::Min)),
+                );
+                col.spacing_mut().item_spacing.y = 0.0;
+                widgets::section_label(&mut col, name);
+                col.add_space(LIST_GAP);
+                for row in rows {
+                    if more_row(&mut col, &row).clicked() {
+                        match row.does {
+                            Does::Act(a) => actions.push(*a),
+                            Does::Tab(tab) => toggle_adjust_tab(state, tab),
+                            Does::AdjustPanel => state.adjust_open = !state.adjust_open,
+                        }
+                        if row.closes {
+                            state.more_open = false;
+                        }
+                        // Shows what it did at once, not at the next refresh.
+                        ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                    }
+                }
+            }
+        });
+}
+
+/// A row of the More list: the icon, the name (and a note under it), and
+/// at the right end its state.
+fn more_row(ui: &mut egui::Ui, row: &MoreRow) -> egui::Response {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, MORE_ROW), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return resp;
+    }
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
+    let on = row.mark == Mark::On(true);
+    let p = ui.painter();
+    let face = rect.shrink2(Vec2::new(0.0, 2.0));
+    if t > 0.0 {
+        p.rect_filled(
+            face,
+            egui::CornerRadius::same(10),
+            Color32::from_white_alpha((t * 14.0) as u8),
+        );
+    }
+    let fg = if on {
+        theme::ACCENT_HOVER
+    } else {
+        theme::TEXT_2
+    };
+    let icon_at = egui::pos2(face.left() + 30.0, face.center().y);
+    p.text(
+        icon_at,
+        egui::Align2::CENTER_CENTER,
+        row.icon,
+        theme::icon(24.0),
+        fg,
+    );
+    if let Some(inner) = row.inner {
+        // A play sign's middle is left of its box's.
+        p.text(
+            icon_at + Vec2::splat(0.3),
+            egui::Align2::CENTER_CENTER,
+            inner,
+            theme::icon_fill(9.5),
+            fg,
+        );
+    }
+    // The state, right-aligned: a chip for a switch's On or Off or a
+    // stepper's value, a caret for a row that opens something.
+    let right = face.right() - 14.0;
+    let chip = |text: &str, text_color: Color32, fill: Color32| {
+        let g = p.layout_no_wrap(
+            text.to_string(),
+            theme::font(Weight::SemiBold, 15.0),
+            text_color,
+        );
+        let width = (g.size().x + 28.0).max(60.0);
+        let r = egui::Rect::from_center_size(
+            egui::pos2(right - width / 2.0, face.center().y),
+            Vec2::new(width, 30.0),
+        );
+        p.rect_filled(r, egui::CornerRadius::same(15), fill);
+        p.galley_with_override_text_color(r.center() - g.size() / 2.0, g, text_color);
+        r.left()
+    };
+    let mark_left = match &row.mark {
+        Mark::Go => {
+            p.text(
+                egui::pos2(right - 8.0, face.center().y),
+                egui::Align2::CENTER_CENTER,
+                icons::CARET_RIGHT,
+                theme::icon(18.0),
+                theme::TEXT_3,
+            );
+            right - 20.0
+        }
+        Mark::On(true) => chip(
+            tr!("more-on"),
+            theme::ACCENT_HOVER,
+            theme::ACCENT.gamma_multiply(0.22),
+        ),
+        Mark::On(false) => chip(tr!("more-off"), theme::TEXT_3, theme::SURFACE_3),
+        Mark::Value(text) => chip(text, theme::TEXT, theme::SURFACE_3),
+    };
+    let text_x = face.left() + 62.0;
+    let text_w = (mark_left - 12.0 - text_x).max(40.0);
+    let name = widgets::one_line(
+        p,
+        row.label.to_string(),
+        theme::font(Weight::Medium, 17.0),
+        theme::TEXT,
+        text_w,
+    );
+    let note = row.note.map(|n| {
+        widgets::one_line(
+            p,
+            n.to_string(),
+            theme::font(Weight::Regular, 13.0),
+            theme::TEXT_3,
+            text_w,
+        )
+    });
+    let name_h = name.size().y;
+    let note_h = note.as_ref().map_or(0.0, |g| 2.0 + g.size().y);
+    let y = face.center().y - (name_h + note_h) / 2.0;
+    p.galley(egui::pos2(text_x, y), name, theme::TEXT);
+    if let Some(g) = note {
+        p.galley(egui::pos2(text_x, y + name_h + 2.0), g, theme::TEXT_3);
+    }
+    resp
 }
 
 const SPEEDS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
@@ -2755,5 +3107,122 @@ mod tests {
             assert!(!label.is_empty());
             assert!(!seats[..i].contains(label));
         }
+    }
+
+    #[test]
+    fn the_bar_gives_up_keys_before_it_covers_the_transport() {
+        let mut last = Dropped::default();
+        // From a bar far too narrow to a very wide one.
+        for width in (0..3000).step_by(10) {
+            let room = side_room(width as f32);
+            let dropped = Dropped::for_room(room);
+            let keys = 2 + usize::from(!dropped.adjust) + usize::from(!dropped.hide);
+            // What stays on the bar fits beside the transport, or is as few
+            // keys as it can be.
+            assert!(group_width(keys) <= room || keys == 2, "{width}: {keys}");
+            // Hide goes before Adjust, and a wider bar never drops more.
+            assert!(!dropped.adjust || dropped.hide);
+            assert!(!(dropped.hide && !last.hide) || width == 0, "{width}");
+            last = dropped;
+        }
+        // The bar as it is built keeps all four.
+        assert_eq!(Dropped::for_room(side_room(1444.0)), Dropped::default());
+        assert!(Dropped::for_room(side_room(600.0)).adjust);
+    }
+
+    fn watching(flat: bool) -> MoreState {
+        MoreState {
+            flat,
+            in_room: false,
+            place: None,
+            places_offered: true,
+            passthrough_available: true,
+            passthrough: false,
+            mask: None,
+            mask_on: false,
+            multitask: false,
+            follow: true,
+            loop_video: false,
+            autoplay: true,
+            speed: 1.0,
+            size: Some(ScreenSize::Cinema),
+            dropped: Dropped::default(),
+        }
+    }
+
+    fn labels(rows: &[MoreRow]) -> Vec<&'static str> {
+        rows.iter().map(|r| r.label).collect()
+    }
+
+    #[test]
+    fn the_more_list_holds_what_the_bar_leaves_out_in_plain_words() {
+        let [play, screen] = more_columns(&watching(true));
+        assert_eq!(
+            labels(&play),
+            [
+                "Playback speed",
+                "Loop this video",
+                "Autoplay the next video",
+                "Up next list",
+                "Browse the library",
+                "Bookmark this moment",
+            ]
+        );
+        assert_eq!(
+            labels(&screen),
+            [
+                "Screen size",
+                "Screen follows you",
+                "Browse beside the video",
+                "Place around the screen",
+                "Show my room",
+            ]
+        );
+        // Switches say whether they are on; steppers say what they are at.
+        assert_eq!(play[0].mark, Mark::Value("1×".into()));
+        assert_eq!(play[1].mark, Mark::On(false));
+        assert_eq!(play[2].mark, Mark::On(true));
+        assert_eq!(screen[0].mark, Mark::Value("Cinema".into()));
+        assert_eq!(screen[1].mark, Mark::On(true));
+        // Only the rows that open something shut the list.
+        assert!(play[3].closes && play[4].closes && play[5].closes);
+        assert!(!play[0].closes && !screen[1].closes);
+    }
+
+    #[test]
+    fn a_room_sets_the_screen_so_browsing_beside_it_is_not_offered() {
+        let mut m = watching(true);
+        m.in_room = true;
+        m.place = Some(Place::Cinema);
+        let [_, screen] = more_columns(&m);
+        assert!(!labels(&screen).contains(&"Browse beside the video"));
+        // Following does nothing in a place, and the row says so.
+        assert!(screen[1].note.is_some());
+    }
+
+    #[test]
+    fn around_a_vr_video_only_its_mask_remains_of_the_screen_column() {
+        let mut m = watching(false);
+        assert!(more_columns(&m)[1].is_empty());
+        m.mask = Some(VideoFormat::default());
+        let [play, screen] = more_columns(&m);
+        assert_eq!(labels(&screen), ["Use the video's mask"]);
+        assert_eq!(play.len(), 6);
+        m.passthrough_available = false;
+        assert!(more_columns(&m)[1].is_empty());
+    }
+
+    #[test]
+    fn keys_the_bar_dropped_are_in_the_list_instead() {
+        let mut m = watching(false);
+        m.dropped = Dropped {
+            hide: true,
+            adjust: false,
+        };
+        let [play, _] = more_columns(&m);
+        assert_eq!(labels(&play).last(), Some(&"Hide the controls"));
+        m.dropped.adjust = true;
+        let [play, _] = more_columns(&m);
+        assert_eq!(&labels(&play)[6..], ["Adjust", "Hide the controls"]);
     }
 }

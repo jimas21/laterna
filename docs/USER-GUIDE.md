@@ -243,8 +243,8 @@ are deleted too.
 
 ### Up next and playlists
 
-**Up next** is the list of videos playing in turn; the button beside
-Browse on the control bar shows it over the video. Opening a video from a
+**Up next** is the list of videos playing in turn; **Up next list** in the
+control bar's **More** list (the three dots) shows it over the video. Opening a video from a
 folder, grid or season makes that list Up next, and **⏮** and **⏭** either
 side of the play button (or X and Y) step through it; pointing at one names
 the video it goes to, and it dims at either end of the list or when the
@@ -261,15 +261,15 @@ other entry in a new random order, including entries that came before it.
 The current video keeps playing; press **Shuffle** again for another order.
 To keep this order as a playlist, press **Save as playlist** afterwards.
 
-**Autoplay** (the play sign in a circular arrow, on the control bar) plays
-any list through, one opened from a folder, grid or season too: the next
+**Autoplay** (**Autoplay the next video** in the More list, with the play sign
+in a circular arrow) plays any list through, one opened from a folder, grid or season too: the next
 video starts when one ends.
 **Loop** on the Up next page plays the first video again after the last,
 and ⏮ and ⏭ step round the list past either end. The repeat key beside Up
-next on the control bar loops the video playing instead: it starts again
-from the beginning each time it ends, before anything in Up next. All
-three stay on, from video to video and after a restart, until you turn
-them off.
+next, **Loop this video** in the More list, loops the video playing
+instead: it starts again from the beginning each time it ends, before
+anything in Up next. All three stay on, from video to video and after a
+restart, until you turn them off.
 
 **Playlists**, a tab beside Watch history, holds your playlists: make one
 there or with *Add to playlist*, which offers your playlists and a name
@@ -535,9 +535,9 @@ rest of its adjustments. Your room replaces it while it shows.
 **Size** is how big the screen looks: **Home theater**, **Cinema** or
 **Giant**, with the degrees across your view in small type beside each name
 (58°, 72° and 90°). Bigger fills more of your view. Cinema is where every
-video starts. To compare them while you watch, press the **Size** button on
-the control bar (beside the film button): each press steps to the next size
-and shows its name, and the picture changes at once. The adjust panel's
+video starts. To compare them while you watch, press **Screen size** in the
+control bar's More list: each press steps to the next size, shows its name
+on the row and in a message, and the picture changes at once. The adjust panel's
 Position tab has the same three buttons, and so does Settings › Video
 position, for where videos start. Inside the Cinema place the screen is the
 room's own, so Size picks your seat instead: Giant is the front, Cinema the
@@ -678,8 +678,8 @@ track or subtitles next time, while they are still there. Only what you
 picked is kept, so a video whose subtitles you never changed follows
 **Subtitles** above, even after you change it.
 
-**⚙ › Chapters** lists the video's chapters and your bookmarks (**Bookmark**
-on the control bar, or grip + A on the right controller, adds one where you
+**⚙ › Chapters** lists the video's chapters and your bookmarks (**Bookmark this moment**
+in the control bar's More list, or grip + A on the right controller, adds one where you
 are), each with a button to go there; grip + X and grip + Y step through
 them.
 
@@ -847,8 +847,36 @@ video, when a video is open). FramePlayerX keeps running and the video keeps
 playing under the dashboard; close the dashboard and you are back. The button
 only shows in SteamVR, and pressing it again within two seconds does nothing.
 
-On the control bar, point at the speaker for the volume slider above it;
-press the speaker to mute. What a controller shortcut changes, such as the
+The control bar keeps what you use while watching: the title, the seek bar,
+the transport (previous, back, play and pause, forward, next), the speaker,
+**Adjust**, **Hide** and **Close**, with the audio and subtitles pill above.
+Point at the speaker for the volume slider above it; press the speaker to
+mute. Everything else is behind the three-dot **More** key at the end of the
+bar, in a list of rows with an icon and a plain name each; a switch shows
+**On** or **Off**, and a row that steps through choices (speed, size) shows
+the one it is at:
+
+| Row | What it does |
+| --- | --- |
+| Playback speed | Steps through 0.5×, 0.75×, 1×, 1.25×, 1.5× and 2× |
+| Loop this video | Start the video again each time it ends (switch) |
+| Autoplay the next video | Play the next video in the list when one ends (switch) |
+| Up next list | Shows Up next over the video |
+| Browse the library | Shows the library over the video |
+| Bookmark this moment | Adds a bookmark where you are |
+| Screen size | Steps Home theater, Cinema, Giant (flat videos) |
+| Screen follows you | The flat screen and menus follow your head (switch; flat videos) |
+| Browse beside the video | The library beside the screen (switch; flat videos, not in a room) |
+| Place around the screen | Opens the Position tab's place picker (flat videos) |
+| Show my room | Passthrough room behind a flat screen, or a video's own mask (switch) |
+
+The list is two columns, Playback and Screen and room, and leaves out what
+does not apply to the video (a 360° video has no screen to size). Switches
+and steps leave the list open so you see the change; the rest close it.
+Press the three dots again, Back, or the empty space round the list to
+close it. If the
+bar is ever too narrow to keep Adjust and Hide beside the transport, they
+move into the Playback column as rows rather than covering the transport. What a controller shortcut changes, such as the
 volume or a minute's skip, shows for a moment in a small message above where
 the control bar sits.
 
@@ -904,8 +932,8 @@ smaller (from 0.6 to 1.8 times its usual size). Its middle stays where it is,
 and the new size is remembered. **Put back** returns it to its usual size.
 The same Window controls switch turns these off too.
 
-To pick another video while one plays, press **Browse beside the video** on
-the control bar (flat videos only, not inside a room). The screen moves to
+To pick another video while one plays, press **Browse beside the video** in
+the control bar's More list (flat videos only, not inside a room). The screen moves to
 the left and gets a little narrower if it needs to, and the browse panel
 comes up to the right of it. Both stay up and nothing hides on its own.
 Choose a video in the browse panel and it plays on the screen. Press the key
@@ -949,7 +977,7 @@ recenter: it comes up to where you look. Inside a place, the whole place
 tips with you, so the room and its screen face you however far back you lie,
 even looking straight up. (A glance within about 10 degrees of level doesn't
 tip it.) Or turn on **Screen follows you**
-(the bed button on the control bar, or Settings › General): a flat video
+(**Screen follows you** in the control bar's More list, or Settings › General): a flat video
 and the menus then follow your head and stay in front of you as you turn,
 lie back or roll onto your side. 180° and 360° videos don't follow, since
 you look around those.
@@ -978,8 +1006,8 @@ you pick one. 180°, 360° and fisheye videos fill your view, so they hide the
 place. **Your room** (see [Passthrough videos](#passthrough-videos)) wins over
 a place while it shows.
 
-- **Pick one while a video plays:** press the film button on the control bar,
-  beside the armchair. It opens the adjust panel's Position tab with the
+- **Pick one while a video plays:** press **Place around the screen** in the control
+  bar's More list. It opens the adjust panel's Position tab with the
   picker at the top: Plain, Your room and Cinema.
 - **Or set it for every video** in Settings › Places. It is the same
   choice: it stays until you change it, and a restart keeps it.
@@ -989,8 +1017,8 @@ a place while it shows.
   see the whole picture over the heads in front. In the cinema, Size is your
   seat: Giant is the front row, Cinema (the first choice) the middle and Home
   theater the back. A film that fills the screen is about 85° across from the
-  front, 72° from the middle and 58° from the back. The **Size** button on the
-  control bar steps through them while you watch. Each place remembers its
+  front, 72° from the middle and 58° from the back. **Screen size** in the
+  control bar's More list steps through them while you watch. Each place remembers its
   own seat.
 - **Seat height.** Beside the seats, a slider raises or lowers where your
   eyes sit in the room, from 30 cm lower to 30 cm higher in steps of 5 cm.
@@ -1008,8 +1036,8 @@ a place while it shows.
 - **The screen.** A room has a screen of its own, so the Position tab leaves
   out the screen's distance, width and curvature there: pick a Size to change
   how big it looks. A place replaces the background colour.
-- **Screen follows you** (the bed button) does nothing inside a place: the
-  place stays where it is, and the button's tip says so. Lie back and
+- **Screen follows you** does nothing inside a place: the
+  place stays where it is, and its row in the More list says so. Lie back and
   **recenter** to bring the whole place in front of you, tilted with you,
   so the screen faces where you look. A recenter with your head near level
   only turns the place, as before.
@@ -1021,8 +1049,8 @@ If a place ever gets in the way, set `FRAMEPLAYERX_PLACES=0` in the env file
 
 The adjust panel's **Passthrough** tab (the sliders button on the control
 bar, then the glasses tab) makes part of a video see-through so your room
-shows behind it. The **Room** button (the armchair) on the bar shows your
-room around a flat video's screen; on a side-by-side 180° or fisheye
+shows behind it. **Show my room** in the control bar's More list
+shows your room around a flat video's screen; on a side-by-side 180° or fisheye
 video it turns the video's own mask on and off.
 
 ### Videos with their own mask (`_alpha`)
@@ -1032,7 +1060,7 @@ picture, and their names end in `_alpha` (for example
 `Scene_4096p_FISHEYE190_alpha.mp4`). Laterna reads the mask by itself:
 only the people stay and the room shows around them, with nothing to set.
 For a file whose name doesn't say so (renamed, or named by a server), press
-**Room** on the control bar, or turn on **Use the video's mask** in the
+**Use the video's mask** in the control bar's More list, or turn on the same switch in the
 Passthrough tab; either is remembered for that file. Only side-by-side
 videos can carry a mask.
 

@@ -674,6 +674,7 @@ impl App {
                 self.ui.open_error = None;
                 self.ui.adjust_open = false;
                 self.ui.tracks_open = false;
+                self.ui.more_open = false;
                 self.show_browser = false;
                 self.ui_visible = true;
                 self.last_activity = Instant::now();
