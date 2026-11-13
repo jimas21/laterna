@@ -744,7 +744,7 @@ struct Texture {
 }
 
 /// Checks that the textures of one kind agree in format (and are the sRGB
-/// ones where `srgb`, UNORM where not, when they are ASTC), and says which
+/// ones where `srgb`, UNORM where not, ASTC or RGBA8), and says which
 /// format that is.
 fn same_format(
     kind: &str,
@@ -759,14 +759,14 @@ fn same_format(
             ));
         }
     }
-    if matches!(first.encoding, Encoding::Astc { .. }) && first.srgb != srgb {
+    if first.srgb != srgb {
         let (want, got) = if srgb {
             ("sRGB", "UNORM")
         } else {
             ("UNORM", "sRGB")
         };
         return bad(format!(
-            "{kind} texture {first_name} is ASTC {got} ({want} wanted)"
+            "{kind} texture {first_name} is labelled {got} ({want} wanted)"
         ));
     }
     Ok(first.encoding)
@@ -1831,6 +1831,37 @@ mod tests {
                 );
             }
             assert!(refused_with(&dir, keep).contains("UNORM wanted"));
+            // The same labels on uncompressed textures: colours UNORM,
+            // basis sRGB.
+            let dir = case("rgba-unorm");
+            for name in ["house.ktx2", "dark.ktx2"] {
+                write(&dir, name, solid(COLOR_SIZE, None, 37, HOUSE));
+            }
+            for i in 0..8 {
+                write(
+                    &dir,
+                    &format!("basis{i}.ktx2"),
+                    solid(BASIS_SIZE, None, 37, BLACK),
+                );
+            }
+            let msg = refused_with(&dir, keep);
+            assert!(
+                msg.contains("house.ktx2") && msg.contains("sRGB wanted"),
+                "{msg}"
+            );
+            let dir = case("rgba-srgb");
+            for i in 0..8 {
+                write(
+                    &dir,
+                    &format!("basis{i}.ktx2"),
+                    solid(BASIS_SIZE, None, 43, BLACK),
+                );
+            }
+            let msg = refused_with(&dir, keep);
+            assert!(
+                msg.contains("basis0.ktx2") && msg.contains("UNORM wanted"),
+                "{msg}"
+            );
             // A texture of the other size, or not a texture at all.
             let dir = case("size");
             write(&dir, "basis2.ktx2", solid(COLOR_SIZE, light, 0, BLACK));

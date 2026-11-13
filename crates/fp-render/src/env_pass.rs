@@ -311,7 +311,7 @@ impl EnvPass {
             generation: 0,
             ordered_for: None,
         };
-        if let Err(e) = p.create(gpu, color_format, depth, samples, slots) {
+        if let Err(e) = p.create(gpu, depth, samples, slots) {
             p.destroy(gpu);
             return Err(e);
         }
@@ -321,7 +321,6 @@ impl EnvPass {
     fn create(
         &mut self,
         gpu: &Gpu,
-        color_format: vk::Format,
         depth: vk::Format,
         samples: vk::SampleCountFlags,
         slots: usize,
@@ -329,7 +328,6 @@ impl EnvPass {
         let d = &gpu.device;
         self.set_layout = pipeline::set_layout(gpu, &[(0, vk::DescriptorType::UNIFORM_BUFFER)])?;
         self.layout = pipeline::layout(gpu, self.set_layout, 4)?;
-        let _ = (color_format, depth);
         (self.env_pipe, self.sky_pipe) = self.make_pipes(gpu, depth, samples)?;
         let n = slots as u32;
         let sizes = [vk::DescriptorPoolSize {
