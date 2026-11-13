@@ -107,8 +107,9 @@ pub const HOUSE_PLAYING_START: f32 = 0.04;
 
 /// Settings > Places > Screen light: the level to begin with, as a share of
 /// the slider (0 is off). Half the slider is the strength the places are
-/// tuned for (a baked place's own, measured to match a physical render of
-/// the room lit by a white 100-nit picture); the top of it is
+/// tuned for (a baked place's own: the light a white 100-nit picture casts,
+/// which a diffuse-only render of the Cinema matched within about 25%); the
+/// top of it is
 /// [`SCREEN_LIGHT_TOP`] times that.
 pub const SCREEN_LIGHT_START: f32 = 0.5;
 

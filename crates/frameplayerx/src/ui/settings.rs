@@ -706,10 +706,12 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
                 v.state.place_confirm = Some(entry.id.clone());
             }
             if start {
-                v.state.place_confirm = None;
-                let started = v.state.place_downloads.start(&ctx, entry, dir.clone());
-                if started && consent {
-                    v.settings.places_download_ok = true;
+                // The card goes only once the download has really begun.
+                if v.state.place_downloads.start(&ctx, entry, dir.clone()) {
+                    v.state.place_confirm = None;
+                    if consent {
+                        v.settings.places_download_ok = true;
+                    }
                 }
             }
         }

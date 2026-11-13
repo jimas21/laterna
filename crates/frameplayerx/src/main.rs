@@ -220,7 +220,6 @@ fn main() {
     logger::init(args.verbose);
     fp_media::init_logging();
     log::info!("Laterna {} starting", env!("CARGO_PKG_VERSION"));
-    place_downloads::startup();
     if args.bench.is_some() || args.seek_test.is_some() {
         allow_hevc_10bit_headless();
     }
@@ -253,7 +252,12 @@ fn main() {
     }
     let r = match &args.preview {
         Some(dir) => preview::run(&args, dir),
-        None => run_xr(&args),
+        None => {
+            // Only the app itself: a bench, seek test or preview run beside
+            // it must not clear an install it has under way.
+            place_downloads::startup();
+            run_xr(&args)
+        }
     };
     if let Err(e) = r {
         log::error!("{e}");
