@@ -181,6 +181,30 @@ pub(crate) fn pick_depth_format(supported: impl Fn(vk::Format) -> bool) -> vk::F
         .unwrap_or(vk::Format::D16_UNORM)
 }
 
+/// The depth format that has `bits` bits of depth: 16, 24 or 32 (a
+/// `FRAMEPLAYERX_DEPTH` value). Anything else is `None`.
+pub(crate) fn depth_format_of_bits(bits: u32) -> Option<vk::Format> {
+    match bits {
+        16 => Some(vk::Format::D16_UNORM),
+        24 => Some(vk::Format::X8_D24_UNORM_PACK32),
+        32 => Some(vk::Format::D32_SFLOAT),
+        _ => None,
+    }
+}
+
+/// The depth format asked for with `wanted` bits (see [`depth_format_of_bits`])
+/// when `supported` accepts it, else what [`pick_depth_format`] picks: a
+/// device that cannot do what a knob asks for still draws.
+pub(crate) fn pick_depth_format_wanted(
+    wanted: Option<u32>,
+    supported: impl Fn(vk::Format) -> bool,
+) -> vk::Format {
+    wanted
+        .and_then(depth_format_of_bits)
+        .filter(|&f| supported(f))
+        .unwrap_or_else(|| pick_depth_format(supported))
+}
+
 /// The anisotropy limit to use: the device's, when it has the feature and a
 /// limit above 1 (a limit of 1 filters nothing extra).
 fn anisotropy_limit(supported: bool, max: f32) -> Option<f32> {
@@ -393,7 +417,14 @@ impl Gpu {
     /// 32-bit float, 24-bit and 16-bit that can be a depth attachment in
     /// optimal tiling.
     pub fn depth_format(&self) -> vk::Format {
-        let format = pick_depth_format(|f| {
+        self.depth_format_for(None)
+    }
+
+    /// Like [`Gpu::depth_format`], but with `wanted` bits of depth (16, 24 or
+    /// 32: `FRAMEPLAYERX_DEPTH`) when the device can attach that format; the
+    /// default pick otherwise.
+    pub fn depth_format_for(&self, wanted: Option<u32>) -> vk::Format {
+        let format = pick_depth_format_wanted(wanted, |f| {
             // SAFETY: valid physical device.
             let p = unsafe {
                 self.instance
@@ -402,7 +433,13 @@ impl Gpu {
             p.optimal_tiling_features
                 .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
         });
-        log::info!("GPU: eye passes use a {format:?} depth buffer");
+        let asked = wanted.and_then(depth_format_of_bits);
+        match asked {
+            Some(a) if a != format => log::warn!(
+                "GPU: asked for a {a:?} depth buffer, which this device cannot attach, so the eye passes use {format:?}"
+            ),
+            _ => log::info!("GPU: eye passes use a {format:?} depth buffer"),
+        }
         format
     }
 
@@ -497,6 +534,42 @@ mod tests {
         // None offered: 16-bit, which every device can attach.
         let none = pick_depth_format(|_| false);
         assert_eq!(none, vk::Format::D16_UNORM);
+    }
+
+    #[test]
+    fn a_depth_size_asked_for_is_used_when_the_device_has_it() {
+        for (bits, f) in [
+            (16, vk::Format::D16_UNORM),
+            (24, vk::Format::X8_D24_UNORM_PACK32),
+            (32, vk::Format::D32_SFLOAT),
+        ] {
+            assert_eq!(pick_depth_format_wanted(Some(bits), |_| true), f);
+        }
+        // Not asked for: the default.
+        assert_eq!(
+            pick_depth_format_wanted(None, |_| true),
+            vk::Format::D32_SFLOAT
+        );
+    }
+
+    #[test]
+    fn a_depth_size_the_device_lacks_falls_back_to_the_default_pick() {
+        let no_24 = |f: vk::Format| f != vk::Format::X8_D24_UNORM_PACK32;
+        assert_eq!(
+            pick_depth_format_wanted(Some(24), no_24),
+            vk::Format::D32_SFLOAT
+        );
+        let only_16 = |f: vk::Format| f == vk::Format::D16_UNORM;
+        assert_eq!(
+            pick_depth_format_wanted(Some(32), only_16),
+            vk::Format::D16_UNORM
+        );
+        // Not a depth size: the default.
+        assert_eq!(
+            pick_depth_format_wanted(Some(8), |_| true),
+            vk::Format::D32_SFLOAT
+        );
+        assert_eq!(pick_depth_format_wanted(Some(16), |_| false), vk::Format::D16_UNORM);
     }
 
     #[test]

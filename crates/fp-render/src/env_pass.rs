@@ -48,7 +48,9 @@ pub(crate) struct EnvUniform {
     pub sky_horizon: Vec4,
     pub palette: [Vec4; MATERIALS],
     pub palette2: [Vec4; MATERIALS],
-    /// A baked place: x its basis gain.
+    /// A baked place: x its basis gain, y the picture's light on (1) or off
+    /// (0), z the basis read anisotropically, w the colours read
+    /// anisotropically.
     pub baked: Vec4,
 }
 
@@ -223,6 +225,8 @@ pub(crate) struct EnvPass {
     /// anisotropic reads, and the nearest-first order.
     basis: bool,
     basis_aniso: bool,
+    /// A baked place's colour textures read anisotropically (the default).
+    place_aniso: bool,
     sort: bool,
     /// Whether the order is made at all (it is when the knob or the A/B
     /// cycle can want it).
@@ -298,6 +302,7 @@ impl EnvPass {
             baked_pipe: vk::Pipeline::null(),
             basis: true,
             basis_aniso: false,
+            place_aniso: true,
             sort: true,
             sort_work: true,
             sorter: None,
@@ -323,7 +328,7 @@ impl EnvPass {
         self.set_layout = pipeline::set_layout(gpu, &[(0, vk::DescriptorType::UNIFORM_BUFFER)])?;
         self.layout = pipeline::layout(gpu, self.set_layout, 4)?;
         let _ = (color_format, depth);
-        (self.env_pipe, self.sky_pipe) = self.make_pipes(gpu, samples)?;
+        (self.env_pipe, self.sky_pipe) = self.make_pipes(gpu, depth, samples)?;
         let n = slots as u32;
         let sizes = [vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -379,9 +384,10 @@ impl EnvPass {
     fn make_pipes(
         &self,
         gpu: &Gpu,
+        depth: vk::Format,
         samples: vk::SampleCountFlags,
     ) -> Result<(vk::Pipeline, vk::Pipeline)> {
-        let (color_format, depth, _) = self.target;
+        let color_format = self.target.0;
         let attributes = vertex_attributes();
         let env_pipe = pipeline::create(
             gpu,
@@ -423,8 +429,13 @@ impl EnvPass {
 
     /// The baked pipeline at `samples` samples a pixel, in the layout made by
     /// `ensure_baked_pipe`.
-    fn make_baked_pipe(&self, gpu: &Gpu, samples: vk::SampleCountFlags) -> Result<vk::Pipeline> {
-        let (color_format, depth, _) = self.target;
+    fn make_baked_pipe(
+        &self,
+        gpu: &Gpu,
+        depth: vk::Format,
+        samples: vk::SampleCountFlags,
+    ) -> Result<vk::Pipeline> {
+        let color_format = self.target.0;
         let attributes = baked_attributes();
         pipeline::create(
             gpu,
@@ -448,25 +459,30 @@ impl EnvPass {
         if self.baked_pipe != vk::Pipeline::null() {
             return Ok(());
         }
-        let samples = self.target.2;
+        let (depth, samples) = (self.target.1, self.target.2);
         self.baked_set_layout = pipeline::set_layout(gpu, &env_baked::BINDINGS)?;
         self.baked_layout = pipeline::layout(gpu, self.baked_set_layout, 4)?;
-        self.baked_pipe = self.make_baked_pipe(gpu, samples)?;
+        self.baked_pipe = self.make_baked_pipe(gpu, depth, samples)?;
         Ok(())
     }
 
-    /// Makes the pipelines again for `samples` samples a pixel (the eye
-    /// passes' count changed). The device must be idle. Nothing changes when
-    /// it fails.
-    pub fn set_samples(&mut self, gpu: &Gpu, samples: vk::SampleCountFlags) -> Result<()> {
-        if samples == self.target.2 {
+    /// Makes the pipelines again for a depth attachment of `depth` and
+    /// `samples` samples a pixel (the eye passes' count or depth format
+    /// changed). The device must be idle. Nothing changes when it fails.
+    pub fn set_target(
+        &mut self,
+        gpu: &Gpu,
+        depth: vk::Format,
+        samples: vk::SampleCountFlags,
+    ) -> Result<()> {
+        if (depth, samples) == (self.target.1, self.target.2) {
             return Ok(());
         }
-        let (env_pipe, sky_pipe) = self.make_pipes(gpu, samples)?;
+        let (env_pipe, sky_pipe) = self.make_pipes(gpu, depth, samples)?;
         let baked = if self.baked_pipe == vk::Pipeline::null() {
             Ok(vk::Pipeline::null())
         } else {
-            self.make_baked_pipe(gpu, samples)
+            self.make_baked_pipe(gpu, depth, samples)
         };
         let baked_pipe = match baked {
             Ok(p) => p,
@@ -486,7 +502,7 @@ impl EnvPass {
             gpu.device.destroy_pipeline(self.baked_pipe, None);
         }
         (self.env_pipe, self.sky_pipe, self.baked_pipe) = (env_pipe, sky_pipe, baked_pipe);
-        self.target.2 = samples;
+        (self.target.1, self.target.2) = (depth, samples);
         Ok(())
     }
 
@@ -494,6 +510,7 @@ impl EnvPass {
     pub fn set_knobs(&mut self, knobs: &Knobs) {
         self.basis = knobs.basis;
         self.basis_aniso = knobs.basis_aniso;
+        self.place_aniso = knobs.place_aniso;
         self.sort = knobs.sort;
         // The order is worth making when something can want it.
         self.sort_work = knobs.sort || knobs.ab;
@@ -502,6 +519,12 @@ impl EnvPass {
     /// The picture's light on a baked place, on or off (the A/B cycle).
     pub fn set_basis(&mut self, on: bool) {
         self.basis = on;
+    }
+
+    /// A baked place's colour textures read anisotropically, or trilinear
+    /// (the A/B cycle).
+    pub fn set_place_aniso(&mut self, on: bool) {
+        self.place_aniso = on;
     }
 
     /// A baked place drawn nearest first, or in its pack's order (the A/B
@@ -691,6 +714,7 @@ impl EnvPass {
             if l.baked.is_some() {
                 u.baked.y = f32::from(self.basis);
                 u.baked.z = f32::from(self.basis_aniso);
+                u.baked.w = f32::from(self.place_aniso);
             }
             u
         })

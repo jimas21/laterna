@@ -1217,6 +1217,104 @@ fn the_samples_can_change_on_the_fly_and_the_room_is_still_drawn() {
 }
 
 #[test]
+fn the_depth_buffer_can_change_size_on_the_fly_and_the_room_is_still_drawn() {
+    let Some((mut r, mut e)) = setup_samples(SIZE, 4) else {
+        return;
+    };
+    let (house, dark) = ([180, 90, 30], [12, 24, 36]);
+    load_wall(&mut r, "depth", house, dark);
+    let first = r.depth_format();
+    let mut seen = vec![first];
+    // Each size the knob knows, the default, and back: the wall is the same
+    // colour in all of them (a size the device cannot attach gives the
+    // default one).
+    for bits in [Some(16), Some(24), None, Some(32), Some(16)] {
+        let got = r.set_depth_bits(bits).expect("changes");
+        assert_eq!(got, r.depth_format());
+        seen.push(got);
+        let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+        assert!(near(up, house, 4), "{bits:?} ({got:?}): {up:?}");
+        let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
+        assert!(near(down, dark, 4), "{bits:?} ({got:?}), dark: {down:?}");
+    }
+    // Asking for what it already has is no change.
+    let now = r.depth_format();
+    assert_eq!(r.set_depth_bits(Some(16)).expect("same"), now);
+    // The samples and the depth change together too.
+    r.set_samples(1).expect("one sample");
+    assert!(near(
+        wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None)),
+        house,
+        4
+    ));
+    eprintln!("depth formats visited: {seen:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn nearer_geometry_hides_farther_with_a_16_bit_depth_buffer() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    r.set_depth_bits(Some(16)).expect("16 bit");
+    // The same scene as `nearer_geometry_hides_farther`.
+    let mut data = red_and_blue();
+    square(&mut data, -2.0, 1.0, 0);
+    square(&mut data, -4.0, 4.0, 1);
+    r.set_place_data(Place::Cinema, data);
+    let anchor = Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0));
+    let env = EnvFrame {
+        place: Place::Cinema,
+        room_to_world: anchor,
+        house: 1.0,
+        screen_light: 0.0,
+        time: 0.0,
+    };
+    let mut p = plain_params();
+    p.background = [0.0, 0.0, 0.0, 1.0];
+    p.env = Some(env);
+    let [l, _] = render(&mut r, &mut e, None, &p, &[]);
+    assert!(is_red(centre(&l)), "centre {:?}", centre(&l));
+    let beside = px(&l, SIZE / 2 + 48, SIZE / 2);
+    assert!(is_blue(beside), "beside the red {beside:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn the_colours_read_trilinear_look_the_same_on_a_flat_wall() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let (house, dark) = ([180, 90, 30], [12, 24, 36]);
+    load_wall(&mut r, "aniso", house, dark);
+    for on in [true, false, true] {
+        r.set_place_aniso(on);
+        let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+        assert!(near(up, house, 4), "aniso {on}: {up:?}");
+        let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
+        assert!(near(down, dark, 4), "aniso {on}, dark: {down:?}");
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn a_house_level_between_the_ends_still_mixes_both_colours() {
+    // The shader reads one texture at the ends and both between them.
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let (house, dark) = ([180, 90, 30], [12, 24, 36]);
+    load_wall(&mut r, "mix", house, dark);
+    let mid = wall_colour(&baked_wall(&mut r, &mut e, 0.5, 0.0, None));
+    assert!(dark[0] + 20 < mid[0] && mid[0] + 20 < house[0], "{mid:?}");
+    assert!(dark[1] + 10 < mid[1] && mid[1] + 10 < house[1], "{mid:?}");
+    let up = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 0.0, None));
+    let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
+    assert!(near(up, house, 4) && near(down, dark, 4), "{up:?} {down:?}");
+    e.destroy(&r);
+}
+
+#[test]
 fn the_built_in_room_survives_a_sample_change_too() {
     let Some((mut r, mut e)) = setup_samples(SIZE, 4) else {
         return;
