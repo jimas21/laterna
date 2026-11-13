@@ -518,4 +518,52 @@ mod tests {
             let _ = decode_astc(&block, 5, 3, (6, 5));
         }
     }
+
+    /// Real astcenc output (tools/make-astc-fixture.py): a 16 x 16 pattern with
+    /// a full mip chain, and astcenc's own decode of every level. The CPU
+    /// fallback has to reproduce it, within the rounding of the conversion.
+    fn against_astcenc(ktx2: &[u8], rgba: &[u8], block: (u32, u32), srgb: bool, tolerance: u8) {
+        let h = check(ktx2, 16).expect("the fixture is a valid pack texture");
+        assert_eq!(h.encoding, Encoding::Astc { block });
+        assert_eq!(h.srgb, srgb);
+        let mut at = 0usize;
+        for (i, level) in level_bytes(ktx2, &h).iter().enumerate() {
+            let edge = (16u32 >> i).max(1);
+            let want = &rgba[at..at + (edge * edge * 4) as usize];
+            at += want.len();
+            let (got, bad) = decode_astc(level, edge, edge, block).expect("decodes");
+            assert_eq!(bad, 0, "level {i}");
+            assert_eq!(got.len(), want.len(), "level {i}");
+            let worst = got
+                .iter()
+                .zip(want)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(worst <= tolerance, "level {i}: off by {worst}");
+        }
+        assert_eq!(at, rgba.len(), "every reference level was compared");
+    }
+
+    #[test]
+    fn the_fallback_decodes_astcenc_output_8x8_srgb() {
+        against_astcenc(
+            include_bytes!("../../tests/data/astc/p8-srgb.ktx2"),
+            include_bytes!("../../tests/data/astc/p8-srgb.rgba"),
+            (8, 8),
+            true,
+            1,
+        );
+    }
+
+    #[test]
+    fn the_fallback_decodes_astcenc_output_12x12_unorm() {
+        against_astcenc(
+            include_bytes!("../../tests/data/astc/p12-unorm.ktx2"),
+            include_bytes!("../../tests/data/astc/p12-unorm.rgba"),
+            (12, 12),
+            false,
+            1,
+        );
+    }
 }
