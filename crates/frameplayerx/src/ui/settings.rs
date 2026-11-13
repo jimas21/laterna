@@ -649,11 +649,12 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
                     });
                 }
                 Row::Available if asking => {
+                    let host = entry.host();
                     let text = tr!(
                         "place-more-confirm",
                         title = entry.title.as_str(),
                         size = size.as_str(),
-                        host = entry.host().as_str()
+                        host = host.as_str()
                     );
                     r.row(&entry.title, Some(text.as_str()), |ui| {
                         if widgets::button(
