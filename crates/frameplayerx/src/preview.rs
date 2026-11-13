@@ -578,6 +578,12 @@ impl Sim {
                 };
                 self.run_frames(2)?;
             }
+            // `screen-light 0.5`: the Screen light slider's level, 0 to 1
+            // (0 off, 0.5 where it starts).
+            Some("screen-light") => {
+                self.app.settings.screen_light_level = num(1)?.clamp(0.0, 1.0);
+                self.run_frames(2)?;
+            }
             // Turns the global chroma key on, or off with `chroma-global off`
             // (Settings > Passthrough).
             Some("chroma-global") => {
