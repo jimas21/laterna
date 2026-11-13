@@ -167,6 +167,35 @@ pub(crate) fn linked_name(
     None
 }
 
+/// Who is watching now, for the library header: the first linked account in
+/// a Plex Home, as the id of its own source (whose form chooses the person)
+/// and the name of the person it plays as. `None` without such an account.
+pub(crate) fn watching_now(configs: &[SourceConfig], chosen: &Chosen) -> Option<(String, String)> {
+    configs.iter().find_map(|c| {
+        let SourceConfig::Plex(p) = c else {
+            return None;
+        };
+        let account = p.auth.as_ref()?.account.as_ref()?;
+        if p.profile.is_some() || !account.home {
+            return None;
+        }
+        let key = p.account_key()?;
+        let active = plex_profiles::active(configs, chosen, &key);
+        let profile = configs.iter().find_map(|c| match c {
+            SourceConfig::Plex(q) if q.account_key().as_deref() == Some(key.as_str()) => q
+                .profile
+                .as_ref()
+                .filter(|pr| !active.is_empty() && pr.uuid == active)
+                .map(|pr| pr.title.clone()),
+            _ => None,
+        });
+        Some((
+            p.id.clone(),
+            profile.unwrap_or_else(|| account.title.clone()),
+        ))
+    })
+}
+
 fn is_linked(configs: &[SourceConfig], credentials: &PlexCredentials, machine: &str) -> bool {
     linked_name(configs, credentials, machine).is_some()
 }
@@ -1622,6 +1651,28 @@ mod tests {
             })),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn the_header_names_who_is_watching_for_an_account_in_a_home() {
+        let mut configs = vec![source_of("m1", "Plex"), profile_source_of("kid-m1", "m1")];
+        let mut chosen = Chosen::new();
+        // Not in a Plex Home: nobody to choose, no button.
+        assert_eq!(watching_now(&configs, &chosen), None);
+        for c in &mut configs {
+            if let SourceConfig::Plex(p) = c {
+                p.auth.as_mut().unwrap().account.as_mut().unwrap().home = true;
+            }
+        }
+        let own = Some(("existing-m1".to_string(), "Owner".to_string()));
+        assert_eq!(watching_now(&configs, &chosen), own);
+        // The chosen person's name, and still the account's own source.
+        chosen.insert("account-uuid-1".into(), "profile-1".into());
+        let kid = Some(("existing-m1".to_string(), "Kid".to_string()));
+        assert_eq!(watching_now(&configs, &chosen), kid);
+        // A profile with no source left counts as the account.
+        configs.pop();
+        assert_eq!(watching_now(&configs, &chosen), own);
     }
 
     #[test]

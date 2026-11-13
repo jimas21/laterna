@@ -218,6 +218,19 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
             // The dashboard button.
             right += 56.0;
         }
+        // Who is watching, for an account in a Plex Home: its name, and the
+        // way to choose another person.
+        let watcher =
+            super::plex::watching_now(&v.services.source_configs, &v.settings.plex_profiles);
+        if let Some((_, name)) = &watcher {
+            let font = theme::font(Weight::SemiBold, 18.0);
+            right += ui
+                .painter()
+                .layout_no_wrap(name.clone(), font, Color32::WHITE)
+                .size()
+                .x
+                + 72.0;
+        }
         let labelled = ui.available_width() >= labels + right;
         for (s, icon, label) in tabs {
             let selected =
@@ -281,6 +294,13 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
                     .clicked()
             {
                 v.actions.push(Action::TogglePassthrough);
+            }
+            if let Some((source, name)) = &watcher
+                && widgets::button(ui, Some(icons::USER), name, Kind::Ghost)
+                    .tip(tr!("plex-watching-as"))
+                    .clicked()
+            {
+                super::sources::choose_watcher(v, source);
             }
             if let Some(s) = &v.state.worker_status {
                 ui.label(

@@ -358,6 +358,32 @@ fn lock_source(v: &mut View, id: &str, name: &str) {
     }
 }
 
+/// The header's Who is watching: opens Plex source `id` (an account's own)
+/// with its people being listed. A locked source opens only the Sources
+/// list, where its PIN is asked as usual.
+pub(super) fn choose_watcher(v: &mut View, id: &str) {
+    v.state.screen = Screen::Sources;
+    v.state.details = None;
+    v.state.picking = None;
+    v.state.source = None;
+    v.state.pin_form = None;
+    v.state.source_form = None;
+    if lock_of(v, id) == Lock::Locked {
+        return;
+    }
+    let Some(cfg) = v.services.source_config(id) else {
+        return;
+    };
+    let mut f = edit_form(cfg);
+    if let Some(SourceConfig::Plex(p)) = &f.editing
+        && let Some(credentials) = p.auth.clone()
+    {
+        f.plex.profiles = super::plex::Profiles::Loading;
+        v.actions.push(Action::PlexProfiles { credentials });
+    }
+    v.state.source_form = Some(f);
+}
+
 /// Opens the form editing source `id`.
 fn edit(v: &mut View, id: &str) {
     if let Some(cfg) = v.services.source_config(id) {
