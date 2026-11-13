@@ -679,6 +679,29 @@ fn read_manifest(dir: &Path) -> Result<Manifest, PackError> {
     Manifest::parse(&read_capped(&path, MAX_MANIFEST_FILE, "manifest")?)
 }
 
+/// The checks for a pack the app has just downloaded into `dir`, before it
+/// is moved into the places folder: it names itself `id` (the catalog's id),
+/// every limit in the manifest holds, every file is there at its size, and the
+/// whole pack reads. The textures are not decoded when they are ASTC. Takes a
+/// moment: for a worker thread. Returns the pack's own version.
+pub fn validate_download(dir: &Path, id: &str) -> Result<String, PackError> {
+    let manifest = read_manifest(dir)?;
+    if manifest.id != id {
+        return bad(format!(
+            "the pack calls itself {:?}, the catalog has {id:?}",
+            manifest.id
+        ));
+    }
+    preflight(dir, &manifest)?;
+    load_with(dir, true)?;
+    Ok(manifest.version)
+}
+
+/// The version an installed pack's manifest names, if it has a readable one.
+pub fn installed_version(dir: &Path) -> Option<String> {
+    read_manifest(dir).ok().map(|m| m.version)
+}
+
 /// Reads the whole pack in `dir`, or says what is wrong with it. Takes a
 /// moment (the textures are decoded): not for the render thread.
 ///
@@ -1981,6 +2004,28 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[&Place::Cinema].manifest.id, "cinema-v3");
         assert_eq!(found[&Place::Cinema].manifest.format, 2);
+    }
+
+    #[test]
+    fn a_downloaded_pack_must_name_itself_and_read_whole() {
+        let dir = temp("download-ok");
+        write_fixture2(&dir, "campsite");
+        assert_eq!(validate_download(&dir, "campsite").unwrap(), "1");
+        assert_eq!(installed_version(&dir).as_deref(), Some("1"));
+        // Another pack under the catalog's id is refused.
+        let e = validate_download(&dir, "cinema-v2").unwrap_err().0;
+        assert!(e.contains("calls itself"), "{e}");
+        // A missing texture, a short mesh and a folder with no manifest too.
+        std::fs::remove_file(dir.join("basis3.ktx2")).unwrap();
+        assert!(validate_download(&dir, "campsite").is_err());
+        let dir = temp("download-mesh");
+        write_fixture2(&dir, "campsite");
+        let mesh = std::fs::read(dir.join("mesh.bin")).unwrap();
+        std::fs::write(dir.join("mesh.bin"), &mesh[..mesh.len() - 4]).unwrap();
+        assert!(validate_download(&dir, "campsite").is_err());
+        let empty = temp("download-empty");
+        assert!(validate_download(&empty, "campsite").is_err());
+        assert_eq!(installed_version(&empty), None);
     }
 
     #[test]

@@ -216,6 +216,12 @@ fn parse_version_text(text: &str) -> Result<Version> {
 /// overwrite; no symbolic links are ever created; permission bits are kept
 /// minus setuid/setgid/sticky.
 pub fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
+    extract_zip_capped(zip_path, dest, MAX_TOTAL_BYTES)
+}
+
+/// [`extract_zip`] with its own limit on the bytes written, counted as they
+/// are written, so an archive that declares less than it holds still stops.
+pub fn extract_zip_capped(zip_path: &Path, dest: &Path, max_bytes: u64) -> Result<()> {
     let mut archive = open_archive(zip_path)?;
     let mut entries = Vec::with_capacity(archive.len());
     for i in 0..archive.len() {
@@ -223,7 +229,7 @@ pub fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
     }
     let strip = usize::from(common_root(&entries).is_some());
     fs::create_dir(dest).ctx("cannot create", dest)?;
-    let mut budget = MAX_TOTAL_BYTES;
+    let mut budget = max_bytes;
     for (i, e) in entries.iter().enumerate() {
         let rel = &e.comps[strip..];
         if rel.is_empty() {

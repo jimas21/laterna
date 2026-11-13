@@ -1,0 +1,14 @@
+# Optional place packs the app offers to download (Settings > Places),
+# one per line:  <id> <version> <url> <sha256> <bytes> <title>
+#
+# The list is compiled into the app, so a signed release vouches for each
+# pack: its zip must be exactly <bytes> long (at most 40 MB) and have this
+# sha256, which pack-encode.py --zip prints. Nothing is bundled into the
+# install archive; the app fetches a pack only when the person asks, over
+# https, from the public jimas21/laterna-places repository's release assets.
+#   <id>       the id in the pack's manifest.json: lowercase words joined by hyphens
+#   <version>  the manifest's version; a different installed version shows Update
+#   <title>    the name shown in Settings, to the end of the line
+#
+# Empty for now: Settings shows nothing new while this has no lines. Example:
+#   campsite 2027.1-1 https://github.com/jimas21/laterna-places/releases/download/campsite-2027.1-1/campsite-2027.1-1.zip <64 hex digits> 12582912 Campsite

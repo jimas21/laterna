@@ -705,6 +705,13 @@ panel bar plex-player-bar
 EOF
 
 cargo build -p frameplayerx
+# Two optional places for Settings > Places (the built-in list is empty). The
+# urls are never fetched: the shots only show the rows.
+cat >"$home/places-catalog.lock" <<'EOF'
+campsite 1 http://127.0.0.1:9/campsite.zip 0000000000000000000000000000000000000000000000000000000000000000 12582912 Campsite at night
+lakeside 1 http://127.0.0.1:9/lakeside.zip 1111111111111111111111111111111111111111111111111111111111111111 14680064 Lakeside deck
+EOF
+LATERNA_PLACES_CATALOG="$home/places-catalog.lock" \
 HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
   XDG_CACHE_HOME="$home/.cache" \
   "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" --script "$script" --size 1400

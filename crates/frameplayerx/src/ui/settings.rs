@@ -261,7 +261,7 @@ fn general(ui: &mut egui::Ui, v: &mut View) {
                 language = name(crate::i18n::automatic())
             ),
         };
-        r.row(tr!("settings-language"), Some(&shown), |ui| {
+        r.row(tr!("settings-language"), Some(shown.as_str()), |ui| {
             let label = if *open {
                 tr!("common-done")
             } else {
@@ -542,6 +542,172 @@ fn places(ui: &mut egui::Ui, v: &mut View) {
         v.places_enabled,
         false,
     );
+    more_places(ui, v);
+}
+
+/// The places that are not in the app: each a download, listed only when the
+/// app's catalog has any. The first download asks once, inside its row.
+fn more_places(ui: &mut egui::Ui, v: &mut View) {
+    use crate::place_downloads::{Failure, Row, catalog};
+    let catalog = catalog();
+    if catalog.is_empty() {
+        return;
+    }
+    heading(ui, tr!("place-more-heading"));
+    note(ui, tr!("place-more-desc"));
+    ui.add_space(6.0);
+    let dir = fp_render::env::pack::places_dir();
+    let busy = v.state.place_downloads.busy();
+    let ctx = ui.ctx().clone();
+    widgets::rows(ui, |r| {
+        for entry in catalog {
+            let size = super::fmt_size(entry.bytes);
+            let row = v.state.place_downloads.row(entry);
+            let asking = v.state.place_confirm.as_deref() == Some(entry.id.as_str());
+            // Pressed Download: starts now, or asks first the one time.
+            let mut start = false;
+            let mut ask = false;
+            match row {
+                Row::Downloading { done, total } => {
+                    let shown = format!("{} / {}", super::fmt_size(done), super::fmt_size(total));
+                    r.row(&entry.title, Some(shown.as_str()), |ui| {
+                        let frac = if total > 0 {
+                            done as f32 / total as f32
+                        } else {
+                            0.0
+                        };
+                        if widgets::button(
+                            ui,
+                            Some(icons::X),
+                            tr!("place-more-cancel"),
+                            Kind::Ghost,
+                        )
+                        .clicked()
+                        {
+                            v.state.place_downloads.cancel();
+                        }
+                        ui.add(
+                            egui::ProgressBar::new(frac)
+                                .desired_width(180.0)
+                                .show_percentage(),
+                        );
+                    });
+                }
+                Row::Checking => {
+                    r.row(&entry.title, Some(tr!("place-more-checking")), |ui| {
+                        ui.spinner();
+                    });
+                }
+                Row::Installed { update } => {
+                    r.row(&entry.title, Some(tr!("place-more-installed")), |ui| {
+                        // Right to left: Remove shows first.
+                        ui.add_enabled_ui(!busy, |ui| {
+                            if widgets::button(
+                                ui,
+                                Some(icons::TRASH),
+                                tr!("place-more-remove"),
+                                Kind::Secondary,
+                            )
+                            .clicked()
+                            {
+                                v.state.place_downloads.remove(&entry.id, &dir);
+                            }
+                            if update
+                                && widgets::button(
+                                    ui,
+                                    Some(icons::DOWNLOAD_SIMPLE),
+                                    tr!("place-more-update"),
+                                    Kind::Primary,
+                                )
+                                .clicked()
+                            {
+                                start = true;
+                            }
+                        });
+                    });
+                }
+                Row::Failed(why) => {
+                    let text = match why {
+                        Failure::Network => tr!("place-more-failed-network"),
+                        Failure::Mismatch => tr!("place-more-failed-mismatch"),
+                        Failure::Unusable => tr!("place-more-failed-unusable"),
+                        Failure::Disk => tr!("place-more-failed-disk"),
+                    };
+                    r.row(&entry.title, Some(text), |ui| {
+                        ui.add_enabled_ui(!busy, |ui| {
+                            if widgets::button(
+                                ui,
+                                Some(icons::DOWNLOAD_SIMPLE),
+                                tr!("place-more-retry"),
+                                Kind::Secondary,
+                            )
+                            .clicked()
+                            {
+                                start = true;
+                            }
+                        });
+                    });
+                }
+                Row::Available if asking => {
+                    let host = entry.host();
+                    let text = tr!(
+                        "place-more-confirm",
+                        title = entry.title.as_str(),
+                        size = size.as_str(),
+                        host = host.as_str()
+                    );
+                    r.row(&entry.title, Some(text.as_str()), |ui| {
+                        if widgets::button(
+                            ui,
+                            Some(icons::DOWNLOAD_SIMPLE),
+                            tr!("place-more-download"),
+                            Kind::Primary,
+                        )
+                        .clicked()
+                        {
+                            v.settings.places_download_ok = true;
+                            start = true;
+                        }
+                        if widgets::button(ui, None, tr!("place-more-not-now"), Kind::Ghost)
+                            .clicked()
+                        {
+                            v.state.place_confirm = None;
+                        }
+                    });
+                }
+                Row::Available => {
+                    r.row(&entry.title, Some(size.as_str()), |ui| {
+                        ui.add_enabled_ui(!busy, |ui| {
+                            if widgets::button(
+                                ui,
+                                Some(icons::DOWNLOAD_SIMPLE),
+                                tr!("place-more-download"),
+                                Kind::Secondary,
+                            )
+                            .clicked()
+                            {
+                                if v.settings.places_download_ok {
+                                    start = true;
+                                } else {
+                                    ask = true;
+                                }
+                            }
+                        });
+                    });
+                }
+            }
+            if ask {
+                v.state.place_confirm = Some(entry.id.clone());
+            }
+            if start {
+                v.state.place_confirm = None;
+                v.state.place_downloads.start(&ctx, entry, dir.clone());
+            }
+        }
+    });
+    if v.state.place_downloads.changed() {
+        note(ui, tr!("place-more-restart"));
+    }
 }
 
 fn sound(ui: &mut egui::Ui, v: &mut View) {

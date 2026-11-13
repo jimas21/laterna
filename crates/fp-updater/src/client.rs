@@ -29,7 +29,18 @@ pub fn default_agent() -> ureq::Agent {
 
 /// Like [`default_agent`] but with an explicit proxy (or none).
 pub fn agent_with_proxy(proxy: Option<ureq::Proxy>) -> ureq::Agent {
+    build_agent(proxy, false)
+}
+
+/// [`default_agent`] that refuses plain `http` everywhere, redirects
+/// included: for fetches that must never leave TLS (place packs).
+pub fn https_only_agent() -> ureq::Agent {
+    build_agent(ureq::Proxy::try_from_env(), true)
+}
+
+fn build_agent(proxy: Option<ureq::Proxy>, https_only: bool) -> ureq::Agent {
     ureq::Agent::config_builder()
+        .https_only(https_only)
         .http_status_as_error(false)
         .proxy(proxy)
         .timeout_connect(Some(Duration::from_secs(20)))
@@ -205,15 +216,45 @@ pub fn download_with(
     agent: &ureq::Agent,
     update: &Update,
     dest_dir: &Path,
+    progress: impl FnMut(u64, u64),
+    cancel: &AtomicBool,
+) -> Result<PathBuf> {
+    let art = &update.artifact;
+    let fallback = format!("frameplayerx-{}-{}.zip", update.version, art.arch);
+    let target = Target {
+        url: &art.url,
+        sha256: &art.sha256,
+        size: art.size,
+        fallback_name: &fallback,
+    };
+    download_file(agent, &target, dest_dir, progress, cancel)
+}
+
+/// One file to download: where from, and the size and SHA-256 it must have.
+/// Both come from something the app trusts, never from the server.
+pub struct Target<'a> {
+    pub url: &'a str,
+    /// Hex SHA-256, either case.
+    pub sha256: &'a str,
+    pub size: u64,
+    /// The file's name when the URL does not give a usable one.
+    pub fallback_name: &'a str,
+}
+
+/// [`download_with`] for any [`Target`]: the same resume, size check,
+/// checksum check and `.part` file then rename, into `dest_dir`.
+pub fn download_file(
+    agent: &ureq::Agent,
+    target: &Target<'_>,
+    dest_dir: &Path,
     mut progress: impl FnMut(u64, u64),
     cancel: &AtomicBool,
 ) -> Result<PathBuf> {
     {
-        let art = &update.artifact;
-        check_download_url(&art.url)?;
+        let art = target;
+        check_download_url(art.url)?;
         fs::create_dir_all(dest_dir).ctx("cannot create", dest_dir)?;
-        let name = file_name_from_url(&art.url)
-            .unwrap_or_else(|| format!("frameplayerx-{}-{}.zip", update.version, art.arch));
+        let name = file_name_from_url(art.url).unwrap_or_else(|| target.fallback_name.to_string());
         let final_path = dest_dir.join(&name);
         let part_path = dest_dir.join(format!("{name}.part"));
         let expected = art.sha256.to_ascii_lowercase();
@@ -231,7 +272,7 @@ pub fn download_with(
         // server's range answer was unusable.
         let mut restarted = false;
         let received = loop {
-            match fetch_into(agent, &art.url, &part_path, art.size, &mut progress, cancel)? {
+            match fetch_into(agent, art.url, &part_path, art.size, &mut progress, cancel)? {
                 Fetch::Done(n) => break n,
                 Fetch::RestartNeeded if !restarted => {
                     restarted = true;
@@ -239,7 +280,7 @@ pub fn download_with(
                 }
                 Fetch::RestartNeeded => {
                     return Err(Error::HttpStatus {
-                        url: art.url.clone(),
+                        url: art.url.to_string(),
                         status: 416,
                     });
                 }
@@ -250,7 +291,7 @@ pub fn download_with(
                 let _ = fs::remove_file(&part_path);
             }
             return Err(Error::SizeMismatch {
-                url: art.url.clone(),
+                url: art.url.to_string(),
                 expected: art.size,
                 actual: received,
             });

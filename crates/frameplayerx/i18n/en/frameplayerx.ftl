@@ -1542,6 +1542,25 @@ place-screen-light = Screen light
 place-screen-light-desc = How much the walls, ceiling and seats take on the colours of the picture. 0 turns it off.
 # Under the adjust panel's Screen heading while a room is chosen.
 place-sets-screen = This room has its own screen. Size above picks your seat to make it look bigger or smaller.
+# Settings > Places: places that are not in the app and can be downloaded. Shown
+# only when there is at least one.
+place-more-heading = More places
+place-more-desc = These places are not part of the app. Each is a download of about 10 to 15 MB, kept on this device. Remove one any time to get the space back.
+place-more-download = Download
+place-more-update = Update
+place-more-remove = Remove
+place-more-cancel = Cancel
+place-more-retry = Try again
+place-more-not-now = Not now
+# Asked once, before the first download. $size is like "12 MB", $host like "github.com".
+place-more-confirm = Download { $title }? It is { $size }, fetched from { $host }. You are only asked this once; later downloads start right away.
+place-more-checking = Unpacking and checking
+place-more-installed = On this device
+place-more-restart = Changes to your places show in the Place list the next time Laterna starts.
+place-more-failed-network = The download did not finish. Check the connection and try again.
+place-more-failed-mismatch = What arrived was not the file expected, so it was thrown away. Try again later.
+place-more-failed-unusable = The download could not be used, so it was thrown away.
+place-more-failed-disk = It could not be saved. Check there is room on this device.
 # A tooltip: opens the place picker.
 player-place = Place
 # A tooltip: puts the library beside the playing video, so you can pick another
