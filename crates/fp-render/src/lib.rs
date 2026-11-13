@@ -33,6 +33,7 @@ pub mod capture;
 pub mod env;
 mod env_baked;
 mod env_pass;
+mod fragment_count;
 mod glow;
 pub mod gpu;
 pub mod hdr;

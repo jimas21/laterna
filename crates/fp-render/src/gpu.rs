@@ -75,6 +75,15 @@ pub(crate) fn graphics_queue(instance: &ash::Instance, pdev: vk::PhysicalDevice)
         .map(|i| i as u32)
 }
 
+/// What a device is asked to have beyond what the player needs. The default
+/// asks for nothing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GpuOptions {
+    /// Turn on `pipelineStatisticsQuery` where the device has it, for
+    /// [`crate::Renderer::count_place_fragments`] (tests and tools).
+    pub pipeline_statistics: bool,
+}
+
 pub struct Gpu {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
@@ -108,6 +117,8 @@ pub struct Gpu {
     /// `framebuffer_depth_sample_counts`): what multisampling the eye passes
     /// may ask for ([`pick_samples`]).
     pub framebuffer_samples: vk::SampleCountFlags,
+    /// Pipeline statistics queries are enabled (see [`GpuOptions`]).
+    pub pipeline_statistics: bool,
 }
 
 /// Device extensions [`crate::q10c`] needs.
@@ -263,6 +274,11 @@ pub fn sample_count(flags: vk::SampleCountFlags) -> u32 {
 
 impl Gpu {
     pub fn new(creator: &dyn Creator, app_name: &str) -> Result<Gpu> {
+        Gpu::with_options(creator, app_name, GpuOptions::default())
+    }
+
+    /// Like [`Gpu::new`], with `options` on top of what the player needs.
+    pub fn with_options(creator: &dyn Creator, app_name: &str, options: GpuOptions) -> Result<Gpu> {
         // SAFETY: loads the system Vulkan loader.
         let entry = unsafe { ash::Entry::load() }.map_err(|e| Error::Load(e.to_string()))?;
         let name = CString::new(app_name).unwrap_or_default();
@@ -339,13 +355,16 @@ impl Gpu {
                     .optimal_tiling_features
             },
         );
+        let pipeline_statistics =
+            options.pipeline_statistics && supported.pipeline_statistics_query == vk::TRUE;
         // Always passed: the video's anisotropic sampler needs
         // `samplerAnisotropy`, the Q10C converter the extended storage formats;
         // ASTC only where the device has it.
         let features = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(max_anisotropy.is_some())
             .shader_storage_image_extended_formats(q10c_features)
-            .texture_compression_astc_ldr(astc);
+            .texture_compression_astc_ldr(astc)
+            .pipeline_statistics_query(pipeline_statistics);
         let mut dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&qci)
             .enabled_features(&features)
@@ -405,12 +424,18 @@ impl Gpu {
             astc,
             framebuffer_samples: props.limits.framebuffer_color_sample_counts
                 & props.limits.framebuffer_depth_sample_counts,
+            pipeline_statistics,
         })
     }
 
     /// Headless device for tests and tools.
     pub fn headless() -> Result<Gpu> {
         Gpu::new(&DirectCreator, "frameplayerx")
+    }
+
+    /// Headless device with `options`.
+    pub fn headless_with(options: GpuOptions) -> Result<Gpu> {
+        Gpu::with_options(&DirectCreator, "frameplayerx", options)
     }
 
     /// The format of the depth attachment the eye passes use: the first of
@@ -569,7 +594,10 @@ mod tests {
             pick_depth_format_wanted(Some(8), |_| true),
             vk::Format::D32_SFLOAT
         );
-        assert_eq!(pick_depth_format_wanted(Some(16), |_| false), vk::Format::D16_UNORM);
+        assert_eq!(
+            pick_depth_format_wanted(Some(16), |_| false),
+            vk::Format::D16_UNORM
+        );
     }
 
     #[test]

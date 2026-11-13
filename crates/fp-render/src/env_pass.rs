@@ -201,6 +201,8 @@ struct Loaded {
     /// A pack's indices ordered nearest the viewer first, and how many,
     /// once the sorter has made them.
     sorted: Option<(Buffer, u32)>,
+    /// The eye (room space) `sorted` was made for.
+    sorted_eye: Option<Vec3>,
 }
 
 struct SlotEnv {
@@ -567,6 +569,7 @@ impl EnvPass {
                     if let Some((old, _)) = l.sorted.replace((b, done.indices.len() as u32)) {
                         garbage.push(old);
                     }
+                    l.sorted_eye = Some(done.eye);
                 }
                 Err(e) => {
                     log::warn!("the place is drawn unsorted: {e}");
@@ -585,6 +588,12 @@ impl EnvPass {
     /// drawn nearest first (when the sort is on). For tests.
     pub fn has_sorted_order(&self) -> bool {
         self.loaded.as_ref().is_some_and(|l| l.sorted.is_some())
+    }
+
+    /// The eye (room space) the loaded pack's drawn order was made for, once
+    /// the sorter has answered. For tests, which wait for a new seat's order.
+    pub fn sorted_eye(&self) -> Option<Vec3> {
+        self.loaded.as_ref().and_then(|l| l.sorted_eye)
     }
 
     /// Whether `place` is the one loaded. (The renderer gets it built off the
@@ -673,6 +682,7 @@ impl EnvPass {
             baked,
             generation: self.generation + 1,
             sorted: None,
+            sorted_eye: None,
         };
         self.generation += 1;
         self.ordered_for = None;

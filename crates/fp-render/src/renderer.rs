@@ -9,6 +9,7 @@
 use crate::env::light::{PATCHES, ScreenLight, screen_patches};
 use crate::env::{EnvFrame, Place, PlaceData, PlaceKind, sky_floor};
 use crate::env_pass::{EnvInput, EnvPass, LitScreen};
+use crate::fragment_count::FragmentCounter;
 use crate::glow::ScreenGlow;
 use crate::gpu::Gpu;
 use crate::hdr::PeakDetector;
@@ -354,6 +355,9 @@ pub struct Renderer {
     ab: Option<AbCycle>,
     /// A place was drawn in the last eye passes.
     env_shown: bool,
+    /// Counts the place's fragment shader invocations in each eye pass,
+    /// once a test or tool asks (see [`Renderer::count_place_fragments`]).
+    fragments: Option<FragmentCounter>,
     pool: vk::CommandPool,
     dpool: vk::DescriptorPool,
     sampler: vk::Sampler,
@@ -609,6 +613,7 @@ impl Renderer {
                 knobs,
                 ab: None,
                 env_shown: false,
+                fragments: None,
                 pool,
                 dpool,
                 sampler,
@@ -2031,6 +2036,9 @@ impl Renderer {
                 offset: vk::Offset2D::default(),
                 extent: t.extent,
             };
+            if let Some(counter) = self.fragments.as_mut() {
+                counter.reset(gpu, cmd, eye);
+            }
             // SAFETY: recording with valid pipelines, sets and buffers.
             unsafe {
                 d.cmd_begin_rendering(
@@ -2056,7 +2064,13 @@ impl Renderer {
                 d.cmd_set_scissor(cmd, 0, &[area]);
                 // The place first, with depth: the picture is drawn over it.
                 if let Some(env) = self.env.as_ref().filter(|_| env_on) {
+                    if let Some(counter) = self.fragments.as_mut() {
+                        counter.begin(gpu, cmd, eye);
+                    }
                     env.record(gpu, cmd, slot_idx, eye as u32);
+                    if let Some(counter) = self.fragments.as_mut() {
+                        counter.end(gpu, cmd, eye);
+                    }
                 }
                 let scene_pl = match self.tp10_eyes.as_ref().filter(|_| tp10) {
                     Some(t) => {
@@ -2582,6 +2596,39 @@ impl Renderer {
         if let Some(e) = self.env.as_mut() {
             e.set_place_aniso(on);
         }
+    }
+
+    /// The eye (room space) the loaded baked place's nearest-first order was
+    /// made for, once the sorter has answered: it changes when a seat change
+    /// has been answered. For tests.
+    #[doc(hidden)]
+    pub fn place_order_eye(&self) -> Option<glam::Vec3> {
+        self.env.as_ref().and_then(EnvPass::sorted_eye)
+    }
+
+    /// Starts counting the fragment shader invocations of the place's draw
+    /// in each eye pass (a pipeline statistics query), for the frames drawn
+    /// from now on; [`Renderer::place_fragment_counts`] reads the last
+    /// frame's. Needs a device made with
+    /// [`GpuOptions::pipeline_statistics`](crate::gpu::GpuOptions): an error
+    /// where there is none. For tests and tools.
+    #[doc(hidden)]
+    pub fn count_place_fragments(&mut self) -> Result<()> {
+        if self.fragments.is_none() {
+            self.fragments = Some(FragmentCounter::new(&self.gpu)?);
+        }
+        Ok(())
+    }
+
+    /// The fragment shader invocations of the place's draw in each eye of
+    /// the last frame, waiting for the GPU; `None` for an eye with no place
+    /// (or when [`Renderer::count_place_fragments`] was not called).
+    #[doc(hidden)]
+    pub fn place_fragment_counts(&mut self) -> [Option<u64>; 2] {
+        self.gpu.wait_idle();
+        self.fragments
+            .as_ref()
+            .map_or([None; 2], |c| c.read(&self.gpu))
     }
 
     /// Whether the loaded baked place has its nearest-first order, so the
@@ -3146,6 +3193,9 @@ impl Drop for Renderer {
             }
             if let Some(mut e) = self.env.take() {
                 e.destroy(&gpu);
+            }
+            if let Some(mut f) = self.fragments.take() {
+                f.destroy(&gpu);
             }
             if let Some(mut g) = self.glow.take() {
                 g.destroy(&gpu);

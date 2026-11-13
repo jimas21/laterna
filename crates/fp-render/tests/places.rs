@@ -21,40 +21,9 @@ use std::time::{Duration, Instant};
 
 mod common;
 use common::{
-    SIZE, centre, eyes_looking, frame, is_blue, is_red, near, params, px, render, render_eyes,
-    setup, setup_samples, srgb,
+    EYE_HEIGHT, SIZE, centre, cinema_params, eyes_looking, frame, is_blue, is_red, near, params,
+    place_frame, px, render, render_eyes, setup, setup_samples, srgb,
 };
-
-/// Where the viewer's eyes are in the world, metres up.
-const EYE_HEIGHT: f32 = 1.6;
-
-/// A place with `seat`'s eye at the viewer's eyes, and the house lights at
-/// `house`.
-fn place_frame(place: Place, seat: SeatName, house: f32) -> EnvFrame {
-    let layout = place.layout();
-    let index = layout.seat_index(seat).unwrap_or(layout.default_seat);
-    let anchor = Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0));
-    EnvFrame {
-        place,
-        room_to_world: layout.seat(index).room_to_world(anchor),
-        house,
-        screen_light: 0.0,
-        time: 0.0,
-    }
-}
-
-/// The cinema's own screen holds the picture: the room's frame, the biggest
-/// picture that fits it.
-fn cinema_params(settings: ViewSettings, env: EnvFrame) -> VideoParams {
-    let layout = Place::Cinema.layout();
-    let screen = layout.screen.expect("the cinema has a screen");
-    let mut p = params(Projection::Flat, StereoLayout::Mono, settings);
-    p.screen_pose = env.room_to_world * Mat4::from_translation(screen.centre);
-    p.screen_fit = Some(screen.max);
-    p.background = [0.0, 0.0, 0.0, 1.0];
-    p.env = Some(env);
-    p
-}
 
 /// The same picture on a screen of the user's own, in front of nothing.
 fn plain_params() -> VideoParams {
@@ -1312,6 +1281,51 @@ fn a_house_level_between_the_ends_still_mixes_both_colours() {
     let down = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, None));
     assert!(near(up, house, 4) && near(down, dark, 4), "{up:?} {down:?}");
     e.destroy(&r);
+}
+
+/// The left eye's fragment shader invocations of two overlapping squares
+/// drawn in the order `far_first` says, or `None` where the device cannot
+/// count them.
+fn invocations_of_two_squares(far_first: bool) -> Option<u64> {
+    let (mut r, mut e) = setup_counting(SIZE)?;
+    let mut data = red_and_blue();
+    if far_first {
+        square(&mut data, -4.0, 4.0, 1);
+        square(&mut data, -2.0, 1.0, 0);
+    } else {
+        square(&mut data, -2.0, 1.0, 0);
+        square(&mut data, -4.0, 4.0, 1);
+    }
+    r.set_place_data(Place::Cinema, data);
+    let mut p = plain_params();
+    p.background = [0.0, 0.0, 0.0, 1.0];
+    p.env = Some(place_frame(Place::Cinema, SeatName::Middle, 1.0));
+    p.env.as_mut().expect("set above").room_to_world =
+        Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0));
+    render(&mut r, &mut e, None, &p, &[]);
+    let counted = r.place_fragment_counts()[0];
+    e.destroy(&r);
+    counted
+}
+
+#[test]
+fn the_fragment_counter_sees_what_the_draw_order_saves() {
+    let (Some(far_first), Some(near_first)) = (
+        invocations_of_two_squares(true),
+        invocations_of_two_squares(false),
+    ) else {
+        return;
+    };
+    let pixels = u64::from(SIZE * SIZE);
+    eprintln!("two squares: far first {far_first}, near first {near_first}, {pixels} pixels");
+    // The far square fills the view; the near one is a ninth of it. Drawn far
+    // first, its covered part is shaded twice; drawn near first the depth test
+    // keeps the far square's fragments behind it from being shaded at all.
+    assert!(near_first >= pixels, "{near_first} < {pixels}");
+    assert!(
+        far_first > near_first + pixels / 20,
+        "far first {far_first}, near first {near_first}"
+    );
 }
 
 #[test]
