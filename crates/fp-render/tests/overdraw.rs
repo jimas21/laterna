@@ -82,7 +82,9 @@ fn measure(
     r.end_frame().unwrap();
     let image = e.read(r, 0).unwrap();
     let covered = image
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[..3] != MAGENTA)
         .count() as u64;
     let invocations = r.place_fragment_counts()[0].expect("the place was drawn and counted");

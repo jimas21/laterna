@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 mod common;
 use common::{
     EYE_HEIGHT, SIZE, centre, cinema_params, eyes_looking, frame, is_blue, is_red, near, params,
-    place_frame, px, render, render_eyes, setup, setup_samples, srgb,
+    place_frame, px, render, render_eyes, setup, setup_counting, setup_samples, srgb,
 };
 
 /// The same picture on a screen of the user's own, in front of nothing.
