@@ -668,6 +668,7 @@ impl App {
             None => {}
         }
         self.move_panels(panel_grab, input, anchor, &mut buzz);
+        self.track_screen_pointing(input, anchor);
         self.update_window_drag(input, anchor, &mut buzz);
         self.update_panel_resize(input, &mut buzz);
         if let Some(hand) = routed.pressed {

@@ -872,7 +872,9 @@ panel stay where they are. The browse panel (or the keyboard under it)
 moves the same way, with grip, and stays where you leave it.
 
 While the controls are up, a flat screen has a bar under it and a handle at
-its bottom right corner, like the Steam Frame's own windows. Point at the
+its bottom right corner, like the Steam Frame's own windows. With the
+controls hidden, point at the screen and only the bar and the handle come
+up (the player's controls stay hidden; press B for them). Point at the
 bar, hold the trigger (or the grip) and move your hand: the screen goes with
 your hand as if you held it, turning as your hand turns and moving as your
 hand moves, and it keeps facing you. Bring your hand in to bring the screen

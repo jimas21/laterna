@@ -41,6 +41,14 @@ pub const CORNER_LAYER: u64 = 10;
 /// How long the control bar takes to ease to a new height, seconds.
 const BAR_EASE: f32 = 0.15;
 
+/// How long the move bar and the resize handle stay after the laser leaves
+/// the screen while the player's controls are hidden, seconds.
+const POINTED_LINGER: f32 = 2.0;
+
+/// How much past its edges the screen counts as pointed at, as a share of
+/// its size: the handles sit just outside it.
+const POINTED_MARGIN: f32 = 1.12;
+
 /// The window controls' panels and what is held.
 pub struct ScreenChrome {
     pub bar: Panel,
@@ -58,6 +66,10 @@ pub struct ScreenChrome {
     /// The screen and the library side by side (see [`multitask`]); session
     /// only.
     multitask: Option<multitask::Multitask>,
+    /// When a laser was last on the screen or on one of its handles: with
+    /// the player's controls hidden, pointing at the screen shows its move
+    /// bar and resize handle alone, as a Steam Frame window shows its own.
+    pointed_at: Option<Instant>,
 }
 
 impl Default for ScreenChrome {
@@ -81,6 +93,7 @@ impl Default for ScreenChrome {
             bar_drop_to: BAR_DROP,
             painted: [None; 2],
             multitask: None,
+            pointed_at: None,
         }
     }
 }
@@ -203,13 +216,37 @@ impl App {
     /// sits over it.
     pub(super) fn show_window_controls(&mut self) {
         let part = self.chrome.drag.map(|d| d.part);
-        let with_bar = self.panels[BAR].visible || part.is_some();
+        let pointed = self
+            .chrome
+            .pointed_at
+            .is_some_and(|at| at.elapsed().as_secs_f32() < POINTED_LINGER);
+        let with_bar = self.panels[BAR].visible || part.is_some() || pointed;
         // A docked screen whose hand is not tracked is not where they would be.
         let hand_lost = self.docked().is_some_and(Dock::lost);
         let shown = self.window_controls_allowed() && with_bar && !hand_lost;
         self.chrome.bar.visible = shown;
         let under_adjust = self.ui.adjust_open && part != Some(Part::Resize);
         self.chrome.corner.visible = shown && !under_adjust;
+    }
+
+    /// Notes whether a laser is on the flat screen (or on its move bar or
+    /// resize handle) this frame. Pointing alone shows the window controls;
+    /// the player's controls stay hidden until asked for.
+    pub(super) fn track_screen_pointing(&mut self, input: &FrameInput, anchor: Mat4) {
+        if !self.window_controls_allowed() {
+            self.chrome.pointed_at = None;
+            return;
+        }
+        let on_handle = matches!(self.pointer.hovered(), Some(WINDOW_BAR | WINDOW_CORNER));
+        let on_screen = self.screen_geometry().is_some_and(|(shape, distance)| {
+            let picture = self.controls_frame(anchor);
+            input.hands.iter().filter_map(|h| h.aim).any(|(pos, rot)| {
+                pointed_at_screen(picture, pos, rot * Vec3::NEG_Z, &shape, distance)
+            })
+        });
+        if on_handle || on_screen {
+            self.chrome.pointed_at = Some(Instant::now());
+        }
     }
 
     /// Puts the window controls where the screen is, and returns how far
@@ -477,5 +514,48 @@ impl App {
             }
             None => "docked=0".to_string(),
         }
+    }
+}
+
+/// Whether a ray from `origin` along `dir` meets the flat screen of `shape`,
+/// `distance` metres ahead of `picture`'s origin (a little past its edges
+/// counts). A curved screen is taken as the plane through its middle.
+fn pointed_at_screen(
+    picture: Mat4,
+    origin: Vec3,
+    dir: Vec3,
+    shape: &fp_render::ScreenShape,
+    distance: f32,
+) -> bool {
+    drag::on_plane_ray(picture, origin, dir, -distance).is_some_and(|hit| {
+        hit.x.abs() <= shape.width / 2.0 * POINTED_MARGIN
+            && hit.y.abs() <= shape.height / 2.0 * POINTED_MARGIN
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointing_at_the_screen_or_just_past_its_edge_counts() {
+        let shape = fp_render::ScreenShape {
+            width: 4.0,
+            height: 2.25,
+            arc: 0.0,
+        };
+        let at = |x: f32, y: f32| {
+            let dir = Vec3::new(x, y, -3.0).normalize();
+            pointed_at_screen(Mat4::IDENTITY, Vec3::ZERO, dir, &shape, 3.0)
+        };
+        assert!(at(0.0, 0.0));
+        assert!(at(1.9, -1.0));
+        // The handles sit just outside the corner.
+        assert!(at(2.1, -1.2));
+        assert!(!at(3.0, 0.0));
+        assert!(!at(0.0, 2.0));
+        // Pointing away from it never counts.
+        let back = pointed_at_screen(Mat4::IDENTITY, Vec3::ZERO, Vec3::Z, &shape, 3.0);
+        assert!(!back);
     }
 }
