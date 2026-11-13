@@ -199,6 +199,9 @@ impl App {
             // The picture is not dragged while it is in your hand: take hold of
             // its bar to tear it off.
             Cmd::DragBegin if self.docked().is_some() => {}
+            // Inside a place the picture turns the room with it: the world
+            // you sit in never moves, so there is nothing to drag.
+            Cmd::DragBegin if self.in_room() => {}
             Cmd::DragBegin => {
                 let view = self.playback.as_ref().map(|p| p.settings);
                 self.drag_start = view.map(|s| (s.yaw, s.pitch, s.screen_distance));

@@ -836,7 +836,7 @@ picture. Play/pause and seeking are under either thumb.
 | Grip + X / Y | Previous / next chapter or bookmark (back within 3 s of one's start goes to the one before) | As without the grip |
 | Grip + A | Bookmark where you are | As without the grip |
 | Grip + thumbstick press | Subtitles off, or back on: the ones you had, else those in your language | As without the grip |
-| Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand); moving your hand towards your head brings a flat screen nearer, away from it pushes the screen further | The same |
+| Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand); moving your hand towards your head brings a flat screen nearer, away from it pushes the screen further. Inside a place it does nothing: the room never moves | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 | Hold trigger (or grip) on the bar under a flat screen, move | Move the screen with your hand; the thumbstick pushes it away (up) or pulls it near (down) | The same |
 | Hold trigger (or grip) on the handle at its bottom right corner, move | Resize the screen about its middle, keeping its shape | The same |
