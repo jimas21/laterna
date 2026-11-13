@@ -212,7 +212,18 @@ impl PlexSource {
             return Ok(false);
         }
         let credentials = self.auth_api.refresh(auth)?;
-        let resources = self.auth_api.resources(&credentials)?;
+        // A Plex Home profile asks for the servers with its own token, so a
+        // renewed account never turns its source into the account itself.
+        let token = profile_token(&before).unwrap_or(&credentials.access_token);
+        let resources = match self
+            .auth_api
+            .resources_with(&credentials.client_identifier, token)
+        {
+            Err(e) if before.profile.is_some() && account_refused(&e) => {
+                return Err(Error::SignedOut(self.name.clone()));
+            }
+            listed => listed?,
+        };
         let resource = resources
             .into_iter()
             .find(|r| r.machine_identifier == before.machine_identifier)
@@ -220,9 +231,7 @@ impl PlexSource {
                 Error::Auth("Plex account no longer has access to this server".into())
             })?;
         let mut config = lock(&self.config);
-        config.access_token = resource
-            .access_token
-            .unwrap_or_else(|| credentials.access_token.clone());
+        config.access_token = resource.access_token.unwrap_or_else(|| token.to_owned());
         config.auth = Some(credentials);
         config.connections = resource.connections;
         self.reset_connections();
@@ -258,12 +267,7 @@ impl PlexSource {
             };
         }
         // A Plex Home profile lists the servers with its own token.
-        let token = before
-            .profile
-            .as_ref()
-            .map(|p| p.token.as_str())
-            .filter(|t| !t.is_empty())
-            .unwrap_or(&auth.access_token);
+        let token = profile_token(before).unwrap_or(&auth.access_token);
         let api = &self.auth_api;
         let listed = api.resources_with(&auth.client_identifier, token);
         let answered = match &listed {
@@ -710,6 +714,15 @@ fn unix_now() -> u64 {
 }
 
 /// Whether plex.tv answered, and said this token is not accepted.
+/// The plex.tv token of the Plex Home profile `config` plays as, if any.
+fn profile_token(config: &PlexConfig) -> Option<&str> {
+    config
+        .profile
+        .as_ref()
+        .map(|p| p.token.as_str())
+        .filter(|t| !t.is_empty())
+}
+
 fn account_refused(error: &Error) -> bool {
     match error {
         Error::Auth(_) => true,

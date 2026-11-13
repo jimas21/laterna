@@ -95,6 +95,89 @@ fn rejected_saved_credentials_renew_at_handshake_or_on_a_later_request() {
 }
 
 #[test]
+fn a_home_profile_stays_itself_when_the_account_renews() {
+    let server = TestServer::start(move |r| {
+        let body = match (r.path(), r.header("X-Plex-Token")) {
+            ("/identity", _) => json!({"MediaContainer":{"machineIdentifier":"machine"}}),
+            ("/", Some("kid-server-new")) => json!({"MediaContainer":{}}),
+            ("/library/sections", Some("kid-server-new")) => {
+                json!({"MediaContainer":{"Directory":[]}})
+            }
+            _ => return resp(401, Vec::new(), &[]),
+        };
+        resp(
+            200,
+            serde_json::to_vec(&body).unwrap(),
+            &[("Content-Type", "application/json")],
+        )
+    });
+    let base = server.base.clone();
+    let account = TestServer::start(move |r| {
+        let body = match r.path() {
+            "/auth/nonce" => json!({"nonce":"nonce"}),
+            "/auth/token" => json!({"auth_token":"account-new"}),
+            // Asked with the account's token this would hand back the
+            // account's own server token, and the profile would be gone.
+            "/resources" if r.header("X-Plex-Token") == Some("kid-plextv") => {
+                json!([{"name":"Plex","provides":"server","clientIdentifier":"machine","accessToken":"kid-server-new",
+                    "connections":[{"uri":base,"local":true,"relay":false}]}])
+            }
+            "/resources" => {
+                json!([{"name":"Plex","provides":"server","clientIdentifier":"machine","accessToken":"owner-server",
+                    "connections":[{"uri":base,"local":true,"relay":false}]}])
+            }
+            _ => return resp(404, Vec::new(), &[]),
+        };
+        resp(
+            200,
+            serde_json::to_vec(&body).unwrap(),
+            &[("Content-Type", "application/json")],
+        )
+    });
+    let private = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+    let auth = serde_json::from_value::<PlexCredentials>(json!({
+        "access_token":"account-old", "client_identifier":"saved-client",
+        "device_key":{"id":"saved-key", "pkcs8":URL_SAFE_NO_PAD.encode(private.as_ref())},
+        // Due: renews before the first request.
+        "expires_at":1_u64,
+    }))
+    .unwrap();
+    let config = PlexConfig {
+        id: "source-kid".into(),
+        name: "Plex".into(),
+        url: server.base.clone(),
+        machine_identifier: "machine".into(),
+        access_token: "kid-server-old".into(),
+        auth: Some(auth),
+        allow_relay: true,
+        profile: Some(Box::new(crate::plex::auth::PlexProfile {
+            id: 7,
+            uuid: "kid-uuid".into(),
+            title: "Kid".into(),
+            protected: false,
+            restricted: true,
+            token: "kid-plextv".into(),
+        })),
+        ..Default::default()
+    };
+    let mut source = PlexSource::new(&config).unwrap();
+    source.auth_api = PlexAuthClient::with_test_endpoint(&account.base).unwrap();
+    source.probe().unwrap();
+    assert_eq!(account.count(|r| r.path() == "/auth/token"), 1);
+    let Some(SourceConfig::Plex(updated)) = source.updated_config() else {
+        panic!("renewed credentials must be persisted");
+    };
+    assert_eq!(updated.access_token, "kid-server-new");
+    assert_eq!(updated.profile.unwrap().uuid, "kid-uuid");
+    assert!(
+        server
+            .requests()
+            .iter()
+            .all(|r| r.header("X-Plex-Token") != Some("owner-server"))
+    );
+}
+
+#[test]
 fn a_listed_remote_address_has_to_be_encrypted() {
     let listed = |uri: &str| PlexConnection {
         uri: uri.into(),
