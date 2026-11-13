@@ -998,8 +998,9 @@ a place while it shows.
   bright they stay while playing (4 % to begin with; 0 is dark).
 - **Screen light.** The walls, ceiling, curtains and seats take on the colours of the
   picture, and a dark scene never leaves the room completely black. The
-  slider sets how much (50 % to begin with; 0 turns it off to keep the place
-  steady).
+  slider sets how much (50 % to begin with, the light a real room would get from a
+  picture that bright; 0 turns it off to keep the place steady; 100 % is
+  four times that, for a room that follows the picture more).
 - **The screen.** A room has a screen of its own, so the Position tab leaves
   out the screen's distance, width and curvature there: pick a Size to change
   how big it looks. A place replaces the background colour.

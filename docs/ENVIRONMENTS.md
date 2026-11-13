@@ -244,7 +244,9 @@ other packs are copied by hand.
   picture mixed toward the lit one by the house lights, plus each of the eight
   screen pictures times the colour the film has in that part of the screen.
   So the room takes the film's colour as the built-in one does, with the
-  Screen light slider, and the house lights fade the same way. The seats and
+  Screen light slider (its middle is the strength the pack's `basis_gain` was
+  made for: a white picture of radiance 1.0 over a patch; its top is four
+  times that), and the house lights fade the same way. The seats and
   the screen come from the manifest, so Size still picks Front, Middle or Back.
 - **Limits.** At most 100,000 triangles and 200,000 vertices; textures a power
   of two up to 4096 pixels across; every number a real number; every file the
