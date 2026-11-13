@@ -219,7 +219,7 @@ pub fn remove_pack(places_dir: &Path, id: &str) -> Result<()> {
 fn inspect(zip_path: &Path, id: &str) -> Result<()> {
     let file = File::open(zip_path).ctx("cannot open", zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
-    if archive.len() == 0 || archive.len() > MAX_ENTRIES {
+    if archive.is_empty() || archive.len() > MAX_ENTRIES {
         return Err(Error::ArchiveTooLarge(format!(
             "{} files (1 to {MAX_ENTRIES} allowed)",
             archive.len()
