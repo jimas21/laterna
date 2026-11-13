@@ -107,13 +107,27 @@ pub const HOUSE_PLAYING_START: f32 = 0.04;
 
 /// Settings > Places > Screen light: the level to begin with, as a share of
 /// the slider (0 is off). Half the slider is the strength the places are
-/// tuned for; the top of it is twice that.
+/// tuned for (a baked place's own, measured to match a physical render of
+/// the room lit by a white 100-nit picture); the top of it is
+/// [`SCREEN_LIGHT_TOP`] times that.
 pub const SCREEN_LIGHT_START: f32 = 0.5;
 
-/// What a screen light level (0 to 1) asks of the renderer: 0 is off, and
-/// [`SCREEN_LIGHT_START`] is 1, the places' own strength.
+/// What the top of the Screen light slider asks of the renderer, as a
+/// multiple of the places' own strength: two stops of headroom, for a viewer
+/// who wants the room to follow the picture more than a real cinema's does.
+pub const SCREEN_LIGHT_TOP: f32 = 4.0;
+
+/// What a screen light level (0 to 1) asks of the renderer: 0 is off,
+/// [`SCREEN_LIGHT_START`] is 1, the places' own strength, and the top is
+/// [`SCREEN_LIGHT_TOP`]. Straight lines between those, so the lower half
+/// still dims in even steps.
 pub fn screen_light_gain(level: f32) -> f32 {
-    level.clamp(0.0, 1.0) / SCREEN_LIGHT_START
+    let level = level.clamp(0.0, 1.0);
+    if level <= SCREEN_LIGHT_START {
+        level / SCREEN_LIGHT_START
+    } else {
+        1.0 + (level - SCREEN_LIGHT_START) / (1.0 - SCREEN_LIGHT_START) * (SCREEN_LIGHT_TOP - 1.0)
+    }
 }
 
 /// What [`Settings::last_version`] holds for a settings file from before
@@ -689,8 +703,17 @@ mod tests {
         // top of the slider is twice the start.
         assert_eq!(screen_light_gain(SCREEN_LIGHT_START), 1.0);
         assert_eq!(screen_light_gain(0.0), 0.0);
-        assert_eq!(screen_light_gain(1.0), 2.0);
-        assert_eq!(screen_light_gain(7.0), 2.0);
+        assert_eq!(screen_light_gain(1.0), SCREEN_LIGHT_TOP);
+        assert_eq!(screen_light_gain(7.0), SCREEN_LIGHT_TOP);
+        // Straight lines either side of the start.
+        assert_eq!(screen_light_gain(0.25), 0.5);
+        assert_eq!(screen_light_gain(0.75), 2.5);
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let g = screen_light_gain(i as f32 / 100.0);
+            assert!(g >= last, "the gain never falls as the slider rises");
+            last = g;
+        }
         assert_eq!(screen_light_gain(-1.0), 0.0);
         let name = format!("fp-screen-light-{}", std::process::id());
         let dir = std::env::temp_dir().join(name);
