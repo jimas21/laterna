@@ -211,7 +211,7 @@ What shipped first, and where it differs from the sketch above.
   `studio`), not an enum: a settings file with a value this build lacks
   would otherwise reset every setting. A place this build does not know shows
   Plain.
-- **The picker** is the film button on the control bar (the Position tab) and
+- **The picker** is Place around the screen in the control bar's More list (the Position tab) and
   Settings › Places. The preview harness has `place`, `seat` and `house`
   commands, and `tools/ui-preview.sh` takes the shots.
 - **Seat height and lying down.** `Settings::place_height` (place id to

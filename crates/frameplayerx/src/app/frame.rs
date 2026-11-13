@@ -520,6 +520,7 @@ impl App {
             && !paused
             && !self.ui.adjust_open
             && !self.ui.tracks_open
+            && !self.ui.more_open
             && !self.show_browser
             && self.last_activity.elapsed().as_secs_f32() > self.settings.auto_hide_secs
         {
@@ -533,7 +534,13 @@ impl App {
         }
         self.panels[BAR].visible = playing && self.ui_visible && (!self.show_browser || multitask);
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
-        self.panels[TRACKS].visible = self.panels[BAR].visible && self.ui.tracks_open;
+        // The More list takes the picker's place above the bar.
+        self.panels[TRACKS].visible =
+            self.panels[BAR].visible && (self.ui.tracks_open || self.ui.more_open);
+        if self.tracks_showing != self.ui.more_open {
+            self.tracks_showing = self.ui.more_open;
+            self.panels[TRACKS].request_repaint();
+        }
         self.show_window_controls();
         let over_video = playing && !browser;
         let live = self
@@ -759,6 +766,7 @@ impl App {
             let r = panels[idx].paint(renderer, input.time, |ctx| match idx {
                 MAIN => ui::library::browser(ctx, &mut view),
                 BAR => ui::player::control_bar(ctx, &mut view),
+                TRACKS if view.state.more_open => ui::player::more_panel(ctx, &mut view),
                 TRACKS => ui::player::tracks_panel(ctx, &mut view),
                 TOAST => ui::player::toast_panel(ctx, &mut view),
                 _ => ui::player::adjust_panel(ctx, &mut view),
@@ -1368,7 +1376,7 @@ mod tests {
     fn the_picker_sits_on_the_bar_without_covering_it() {
         for scale in [1.0, 1.4] {
             let mut bar = growing_panel(BAR_PX, BAR_PX[0] as f32 * BAR_M_PER_PX, 1.25);
-            let mut picker = growing_panel([850, 560], 850.0 * BAR_M_PER_PX, 1.25);
+            let mut picker = growing_panel(PICKER_PX, PICKER_PX[0] as f32 * BAR_M_PER_PX, 1.25);
             bar.set_scale(scale);
             picker.set_scale(scale);
             bar.pose = place(Mat4::IDENTITY, 0.0, BAR_DISTANCE, -0.32, 22.0);

@@ -487,6 +487,13 @@ point bar 0.5 0.5
 frames 8
 panel bar player-bar
 sbs player-scene
+# The More list over the bar's end, round a 180 degree video: its few rows.
+more
+frames 8
+panel more more-menu
+panel bar player-bar-more-vr
+more off
+frames 4
 # Places, round the paused video. The room shows once the room renderer is in
 # the build: until then these are the plain background. The clip is named as a
 # 180 degree video and a place shows round flat ones only, so it is shown flat
@@ -499,13 +506,28 @@ sbs player-scene
 flat
 frames 6
 panel bar player-bar-flat
-point bar 0.806 0.69
+# The bar's keys from the right: Close, Hide, More, Adjust. The More key's label,
+# then the list it opens, every row of a flat video's.
+point bar 0.85 0.69
 frames 10
-panel bar player-bar-place-tip
+panel bar player-bar-more-tip
+more
+frames 8
+panel more more-menu-flat
+panel bar player-bar-more
+more off
+frames 4
 place cinema
 house 0
 wait 1
 sbs place-cinema
+# In a room the screen is the room's: no browsing beside it, and following says
+# it does nothing there.
+more
+frames 8
+panel more more-menu-cinema
+more off
+frames 4
 house 1
 frames 2
 sbs place-cinema-lit

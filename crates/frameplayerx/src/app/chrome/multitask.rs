@@ -167,6 +167,7 @@ impl App {
         self.apply(Action::ShowBrowser(true));
         self.ui.adjust_open = false;
         self.ui.tracks_open = false;
+        self.ui.more_open = false;
         self.ui_visible = true;
         self.last_activity = Instant::now();
     }
