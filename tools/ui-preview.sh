@@ -689,6 +689,11 @@ point main 0.6 0.6
 stick 0 -1 30
 frames 8
 panel main plex-home-rows
+# Home with a button per library of each server, then one tapped: its titles,
+# with Back returning to Home.
+screen home
+wait 3
+panel main home-libraries
 open-source plex
 wait 1
 catalog-search sunset
