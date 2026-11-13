@@ -318,9 +318,9 @@ fn fetch_and_place(
     };
     // Size and SHA-256 are checked here, against the entry the app was
     // built with: a longer or different body is refused, never kept.
-    let zip = download_file(agent, &target, staging, progress, cancel)?;
+    let zip = download_file(agent, &target, &staging.join("dl"), progress, cancel)?;
     inspect(&zip, &entry.id)?;
-    let unpacked = staging.join("unpacked");
+    let unpacked = staging.join("pack");
     extract_zip_capped(&zip, &unpacked, MAX_UNPACKED_BYTES)?;
     only_plain_files(&unpacked)?;
     validate(&unpacked).map_err(Error::InvalidPack)?;
@@ -348,7 +348,7 @@ mod tests {
     use crate::install::tests::{Item, make_zip};
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
-    use std::io::Cursor;
+
     use std::sync::{Arc, Mutex};
     use std::thread;
 
@@ -356,9 +356,6 @@ mod tests {
     #[derive(Clone)]
     enum Route {
         Bytes(Vec<u8>),
-        /// Promises the whole body and sends only the first `n` bytes, then
-        /// closes the connection.
-        Cut(Vec<u8>, usize),
         Redirect(String),
     }
 
@@ -388,17 +385,6 @@ mod tests {
                         }
                         Some(Route::Bytes(data)) => {
                             let _ = req.respond(Response::from_data(data));
-                        }
-                        Some(Route::Cut(data, n)) => {
-                            let len = data.len();
-                            let body = Cursor::new(data[..n].to_vec());
-                            let _ = req.respond(Response::new(
-                                StatusCode(200),
-                                vec![Header::from_bytes("Connection", "close").unwrap()],
-                                body,
-                                Some(len),
-                                None,
-                            ));
                         }
                         Some(Route::Redirect(to)) => {
                             let loc = Header::from_bytes("Location", to).unwrap();
@@ -652,15 +638,47 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let server = Server::start();
         let zip = good_zip(tmp.path(), "campsite");
-        server.route("/campsite.zip", Route::Cut(zip.clone(), zip.len() / 2));
-        let entry = entry_for(&server, "campsite", &zip);
+        // A server that promises the whole file, sends half and hangs up.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let half = zip[..zip.len() / 2].to_vec();
+        let len = zip.len();
+        let cutter = thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut s, _) = listener.accept().unwrap();
+            let mut head = [0u8; 2048];
+            let _ = s.read(&mut head);
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Length: {len}\r\n\r\n");
+            let _ = s.write_all(reply.as_bytes());
+            let _ = s.write_all(&half);
+            // Dropping the stream closes the connection mid-body.
+        });
+        let mut entry = entry_for(&server, "campsite", &zip);
+        entry.url = format!("http://127.0.0.1:{port}/campsite.zip");
         let places = tmp.path().join("places");
         assert!(run(&entry, &places, accept).is_err());
+        cutter.join().unwrap();
         assert_nothing_left(&places);
         // Then the connection comes back: the same pack installs.
+        let entry = entry_for(&server, "campsite", &zip);
         server.route("/campsite.zip", Route::Bytes(zip));
         run(&entry, &places, accept).unwrap();
         assert!(is_installed(&places, "campsite"));
+    }
+
+    #[test]
+    fn a_file_name_in_the_url_cannot_collide_with_the_work_folders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = Server::start();
+        let zip = good_zip(tmp.path(), "campsite");
+        for name in ["pack", "dl"] {
+            server.route(&format!("/{name}"), Route::Bytes(zip.clone()));
+            let mut entry = entry_for(&server, "campsite", &zip);
+            entry.url = server.url(&format!("/{name}"));
+            let places = tmp.path().join(format!("places-{name}"));
+            run(&entry, &places, accept).unwrap();
+            assert!(is_installed(&places, "campsite"), "{name}");
+        }
     }
 
     #[test]
