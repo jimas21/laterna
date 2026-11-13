@@ -38,7 +38,8 @@ struct Env {
     // strength, y sheen.
     palette: array<vec4<f32>, 16>,
     palette2: array<vec4<f32>, 16>,
-    // A baked place pack (env_baked.wgsl): x its basis gain.
+    // A baked place pack (env_baked.wgsl): x its basis gain, y the picture's
+    // light on, z the basis read anisotropically, w the colours read so.
     baked: vec4<f32>,
 };
 

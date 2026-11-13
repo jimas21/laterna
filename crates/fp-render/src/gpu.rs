@@ -75,6 +75,15 @@ pub(crate) fn graphics_queue(instance: &ash::Instance, pdev: vk::PhysicalDevice)
         .map(|i| i as u32)
 }
 
+/// What a device is asked to have beyond what the player needs. The default
+/// asks for nothing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GpuOptions {
+    /// Turn on `pipelineStatisticsQuery` where the device has it, for
+    /// [`crate::Renderer::count_place_fragments`] (tests and tools).
+    pub pipeline_statistics: bool,
+}
+
 pub struct Gpu {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
@@ -108,6 +117,8 @@ pub struct Gpu {
     /// `framebuffer_depth_sample_counts`): what multisampling the eye passes
     /// may ask for ([`pick_samples`]).
     pub framebuffer_samples: vk::SampleCountFlags,
+    /// Pipeline statistics queries are enabled (see [`GpuOptions`]).
+    pub pipeline_statistics: bool,
 }
 
 /// Device extensions [`crate::q10c`] needs.
@@ -181,6 +192,30 @@ pub(crate) fn pick_depth_format(supported: impl Fn(vk::Format) -> bool) -> vk::F
         .unwrap_or(vk::Format::D16_UNORM)
 }
 
+/// The depth format that has `bits` bits of depth: 16, 24 or 32 (a
+/// `FRAMEPLAYERX_DEPTH` value). Anything else is `None`.
+pub(crate) fn depth_format_of_bits(bits: u32) -> Option<vk::Format> {
+    match bits {
+        16 => Some(vk::Format::D16_UNORM),
+        24 => Some(vk::Format::X8_D24_UNORM_PACK32),
+        32 => Some(vk::Format::D32_SFLOAT),
+        _ => None,
+    }
+}
+
+/// The depth format asked for with `wanted` bits (see [`depth_format_of_bits`])
+/// when `supported` accepts it, else what [`pick_depth_format`] picks: a
+/// device that cannot do what a knob asks for still draws.
+pub(crate) fn pick_depth_format_wanted(
+    wanted: Option<u32>,
+    supported: impl Fn(vk::Format) -> bool,
+) -> vk::Format {
+    wanted
+        .and_then(depth_format_of_bits)
+        .filter(|&f| supported(f))
+        .unwrap_or_else(|| pick_depth_format(supported))
+}
+
 /// The anisotropy limit to use: the device's, when it has the feature and a
 /// limit above 1 (a limit of 1 filters nothing extra).
 fn anisotropy_limit(supported: bool, max: f32) -> Option<f32> {
@@ -239,6 +274,11 @@ pub fn sample_count(flags: vk::SampleCountFlags) -> u32 {
 
 impl Gpu {
     pub fn new(creator: &dyn Creator, app_name: &str) -> Result<Gpu> {
+        Gpu::with_options(creator, app_name, GpuOptions::default())
+    }
+
+    /// Like [`Gpu::new`], with `options` on top of what the player needs.
+    pub fn with_options(creator: &dyn Creator, app_name: &str, options: GpuOptions) -> Result<Gpu> {
         // SAFETY: loads the system Vulkan loader.
         let entry = unsafe { ash::Entry::load() }.map_err(|e| Error::Load(e.to_string()))?;
         let name = CString::new(app_name).unwrap_or_default();
@@ -315,13 +355,16 @@ impl Gpu {
                     .optimal_tiling_features
             },
         );
+        let pipeline_statistics =
+            options.pipeline_statistics && supported.pipeline_statistics_query == vk::TRUE;
         // Always passed: the video's anisotropic sampler needs
         // `samplerAnisotropy`, the Q10C converter the extended storage formats;
         // ASTC only where the device has it.
         let features = vk::PhysicalDeviceFeatures::default()
             .sampler_anisotropy(max_anisotropy.is_some())
             .shader_storage_image_extended_formats(q10c_features)
-            .texture_compression_astc_ldr(astc);
+            .texture_compression_astc_ldr(astc)
+            .pipeline_statistics_query(pipeline_statistics);
         let mut dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&qci)
             .enabled_features(&features)
@@ -381,6 +424,7 @@ impl Gpu {
             astc,
             framebuffer_samples: props.limits.framebuffer_color_sample_counts
                 & props.limits.framebuffer_depth_sample_counts,
+            pipeline_statistics,
         })
     }
 
@@ -389,11 +433,23 @@ impl Gpu {
         Gpu::new(&DirectCreator, "frameplayerx")
     }
 
+    /// Headless device with `options`.
+    pub fn headless_with(options: GpuOptions) -> Result<Gpu> {
+        Gpu::with_options(&DirectCreator, "frameplayerx", options)
+    }
+
     /// The format of the depth attachment the eye passes use: the first of
     /// 32-bit float, 24-bit and 16-bit that can be a depth attachment in
     /// optimal tiling.
     pub fn depth_format(&self) -> vk::Format {
-        let format = pick_depth_format(|f| {
+        self.depth_format_for(None)
+    }
+
+    /// Like [`Gpu::depth_format`], but with `wanted` bits of depth (16, 24 or
+    /// 32: `FRAMEPLAYERX_DEPTH`) when the device can attach that format; the
+    /// default pick otherwise.
+    pub fn depth_format_for(&self, wanted: Option<u32>) -> vk::Format {
+        let format = pick_depth_format_wanted(wanted, |f| {
             // SAFETY: valid physical device.
             let p = unsafe {
                 self.instance
@@ -402,7 +458,13 @@ impl Gpu {
             p.optimal_tiling_features
                 .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
         });
-        log::info!("GPU: eye passes use a {format:?} depth buffer");
+        let asked = wanted.and_then(depth_format_of_bits);
+        match asked {
+            Some(a) if a != format => log::warn!(
+                "GPU: asked for a {a:?} depth buffer, which this device cannot attach, so the eye passes use {format:?}"
+            ),
+            _ => log::info!("GPU: eye passes use a {format:?} depth buffer"),
+        }
         format
     }
 
@@ -497,6 +559,45 @@ mod tests {
         // None offered: 16-bit, which every device can attach.
         let none = pick_depth_format(|_| false);
         assert_eq!(none, vk::Format::D16_UNORM);
+    }
+
+    #[test]
+    fn a_depth_size_asked_for_is_used_when_the_device_has_it() {
+        for (bits, f) in [
+            (16, vk::Format::D16_UNORM),
+            (24, vk::Format::X8_D24_UNORM_PACK32),
+            (32, vk::Format::D32_SFLOAT),
+        ] {
+            assert_eq!(pick_depth_format_wanted(Some(bits), |_| true), f);
+        }
+        // Not asked for: the default.
+        assert_eq!(
+            pick_depth_format_wanted(None, |_| true),
+            vk::Format::D32_SFLOAT
+        );
+    }
+
+    #[test]
+    fn a_depth_size_the_device_lacks_falls_back_to_the_default_pick() {
+        let no_24 = |f: vk::Format| f != vk::Format::X8_D24_UNORM_PACK32;
+        assert_eq!(
+            pick_depth_format_wanted(Some(24), no_24),
+            vk::Format::D32_SFLOAT
+        );
+        let only_16 = |f: vk::Format| f == vk::Format::D16_UNORM;
+        assert_eq!(
+            pick_depth_format_wanted(Some(32), only_16),
+            vk::Format::D16_UNORM
+        );
+        // Not a depth size: the default.
+        assert_eq!(
+            pick_depth_format_wanted(Some(8), |_| true),
+            vk::Format::D32_SFLOAT
+        );
+        assert_eq!(
+            pick_depth_format_wanted(Some(16), |_| false),
+            vk::Format::D16_UNORM
+        );
     }
 
     #[test]

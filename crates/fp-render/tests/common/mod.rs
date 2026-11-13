@@ -6,9 +6,11 @@
 use fp_core::format::{Projection, StereoLayout, VideoFormat};
 use fp_core::view::ViewSettings;
 use fp_render::capture::OffscreenEyes;
+use fp_render::env::{EnvFrame, Place, SeatName};
+use fp_render::gpu::GpuOptions;
 use fp_render::math::{Fov, projection, view};
 use fp_render::{EyeView, Gpu, QuadDraw, Renderer, VideoParams};
-use glam::{Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use std::sync::Arc;
 
 /// Side of the eye targets `setup` makes.
@@ -33,6 +35,29 @@ pub fn setup_samples(size: u32, samples: u32) -> Option<(Renderer, OffscreenEyes
     let mut r =
         Renderer::with_samples(gpu, ash::vk::Format::R8G8B8A8_SRGB, samples).expect("renderer");
     // A frame that shows a place shows it: the tests draw one at a time.
+    r.set_inline_places(true);
+    let eyes = OffscreenEyes::new(&r, size, size).expect("eyes");
+    Some((r, eyes))
+}
+
+/// Like `setup_samples` (one sample), on a device that counts the place's
+/// fragment shader invocations (`Renderer::place_fragment_counts`), or `None`
+/// where there is no Vulkan device or it cannot count (the test then skips).
+pub fn setup_counting(size: u32) -> Option<(Renderer, OffscreenEyes)> {
+    let gpu = match Gpu::headless_with(GpuOptions {
+        pipeline_statistics: true,
+    }) {
+        Ok(g) => Arc::new(g),
+        Err(e) => {
+            eprintln!("skipping: no Vulkan device ({e})");
+            return None;
+        }
+    };
+    let mut r = Renderer::with_samples(gpu, ash::vk::Format::R8G8B8A8_SRGB, 1).expect("renderer");
+    if let Err(e) = r.count_place_fragments() {
+        eprintln!("skipping: {e}");
+        return None;
+    }
     r.set_inline_places(true);
     let eyes = OffscreenEyes::new(&r, size, size).expect("eyes");
     Some((r, eyes))
@@ -139,4 +164,35 @@ pub fn srgb(c: [f32; 3]) -> [u8; 3] {
 
 pub fn near(got: [u8; 3], want: [u8; 3], tol: u8) -> bool {
     got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= tol)
+}
+
+/// Where the viewer's eyes are in the world, metres up.
+pub const EYE_HEIGHT: f32 = 1.6;
+
+/// A place with `seat`'s eye at the viewer's eyes, and the house lights at
+/// `house`.
+pub fn place_frame(place: Place, seat: SeatName, house: f32) -> EnvFrame {
+    let layout = place.layout();
+    let index = layout.seat_index(seat).unwrap_or(layout.default_seat);
+    let anchor = Mat4::from_translation(Vec3::new(0.0, EYE_HEIGHT, 0.0));
+    EnvFrame {
+        place,
+        room_to_world: layout.seat(index).room_to_world(anchor),
+        house,
+        screen_light: 0.0,
+        time: 0.0,
+    }
+}
+
+/// The cinema's own screen holds the picture: the room's frame, the biggest
+/// picture that fits it.
+pub fn cinema_params(settings: ViewSettings, env: EnvFrame) -> VideoParams {
+    let layout = Place::Cinema.layout();
+    let screen = layout.screen.expect("the cinema has a screen");
+    let mut p = params(Projection::Flat, StereoLayout::Mono, settings);
+    p.screen_pose = env.room_to_world * Mat4::from_translation(screen.centre);
+    p.screen_fit = Some(screen.max);
+    p.background = [0.0, 0.0, 0.0, 1.0];
+    p.env = Some(env);
+    p
 }

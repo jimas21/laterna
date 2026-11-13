@@ -9,6 +9,7 @@
 use crate::env::light::{PATCHES, ScreenLight, screen_patches};
 use crate::env::{EnvFrame, Place, PlaceData, PlaceKind, sky_floor};
 use crate::env_pass::{EnvInput, EnvPass, LitScreen};
+use crate::fragment_count::FragmentCounter;
 use crate::glow::ScreenGlow;
 use crate::gpu::Gpu;
 use crate::hdr::PeakDetector;
@@ -354,6 +355,9 @@ pub struct Renderer {
     ab: Option<AbCycle>,
     /// A place was drawn in the last eye passes.
     env_shown: bool,
+    /// Counts the place's fragment shader invocations in each eye pass,
+    /// once a test or tool asks (see [`Renderer::count_place_fragments`]).
+    fragments: Option<FragmentCounter>,
     pool: vk::CommandPool,
     dpool: vk::DescriptorPool,
     sampler: vk::Sampler,
@@ -529,7 +533,8 @@ impl Renderer {
                 .create_sampler(&aniso_info, None)
                 .ctx("anisotropic sampler")?;
 
-            let depth_format = gpu.depth_format();
+            let knobs = Knobs::from_env();
+            let depth_format = gpu.depth_format_for(knobs.depth);
             // Bindings 20 and 21 are the video pyramid and its sampler
             // (planes.wgsl); the TP10 pipeline's layout has them too, in its
             // descriptor buffer (tp10_eyes.rs).
@@ -605,9 +610,10 @@ impl Renderer {
                 depth: None,
                 samples,
                 msaa: None,
-                knobs: Knobs::from_env(),
+                knobs,
                 ab: None,
                 env_shown: false,
+                fragments: None,
                 pool,
                 dpool,
                 sampler,
@@ -2030,6 +2036,9 @@ impl Renderer {
                 offset: vk::Offset2D::default(),
                 extent: t.extent,
             };
+            if let Some(counter) = self.fragments.as_mut() {
+                counter.reset(gpu, cmd, eye);
+            }
             // SAFETY: recording with valid pipelines, sets and buffers.
             unsafe {
                 d.cmd_begin_rendering(
@@ -2055,7 +2064,13 @@ impl Renderer {
                 d.cmd_set_scissor(cmd, 0, &[area]);
                 // The place first, with depth: the picture is drawn over it.
                 if let Some(env) = self.env.as_ref().filter(|_| env_on) {
+                    if let Some(counter) = self.fragments.as_mut() {
+                        counter.begin(gpu, cmd, eye);
+                    }
                     env.record(gpu, cmd, slot_idx, eye as u32);
+                    if let Some(counter) = self.fragments.as_mut() {
+                        counter.end(gpu, cmd, eye);
+                    }
                 }
                 let scene_pl = match self.tp10_eyes.as_ref().filter(|_| tp10) {
                     Some(t) => {
@@ -2515,19 +2530,46 @@ impl Renderer {
     /// a hitch, for a live comparison and not for every frame. On a failure
     /// the old count stays.
     pub fn set_samples(&mut self, wanted: u32) -> Result<u32> {
+        self.set_eye_passes(wanted, self.depth_format)
+            .map(|(samples, _)| samples)
+    }
+
+    /// The depth format of the eye passes' depth buffer.
+    pub fn depth_format(&self) -> vk::Format {
+        self.depth_format
+    }
+
+    /// Draws the eye passes with a depth buffer of `bits` bits (16, 24 or 32;
+    /// `None` is what the device picks by default) from now on, like
+    /// [`Renderer::set_samples`]: the format the device can attach that is
+    /// nearest the ask is returned, and a failure leaves the old one.
+    pub fn set_depth_bits(&mut self, bits: Option<u32>) -> Result<vk::Format> {
+        let format = self.gpu.depth_format_for(bits);
+        self.set_eye_passes(self.samples(), format)
+            .map(|(_, format)| format)
+    }
+
+    /// Both at once (one device idle, one set of pipelines): `wanted`
+    /// samples a pixel, as [`Renderer::set_samples`] picks them, and a depth
+    /// buffer of `depth_format`. Returns the count and the format in use.
+    fn set_eye_passes(
+        &mut self,
+        wanted: u32,
+        depth_format: vk::Format,
+    ) -> Result<(u32, vk::Format)> {
         let samples = crate::gpu::pick_samples(wanted, self.gpu.framebuffer_samples);
-        if samples == self.samples {
-            return Ok(self.samples());
+        if samples == self.samples && depth_format == self.depth_format {
+            return Ok((self.samples(), self.depth_format));
         }
-        let old = self.samples;
-        if let Err(e) = self.rebuild_for(samples) {
-            // Whatever was made for the new count goes back to the old.
-            if let Err(again) = self.rebuild_for(old) {
+        let old = (self.samples, self.depth_format);
+        if let Err(e) = self.rebuild_for(samples, depth_format) {
+            // Whatever was made for the new ones goes back to the old.
+            if let Err(again) = self.rebuild_for(old.0, old.1) {
                 log::error!("the eye passes' pipelines could not be restored: {again}");
             }
             return Err(e);
         }
-        Ok(self.samples())
+        Ok((self.samples(), self.depth_format))
     }
 
     /// Turns the place knobs (perf_ab.rs) on or off for what is drawn from
@@ -2545,6 +2587,50 @@ impl Renderer {
         }
     }
 
+    /// Reads a baked place's colour textures anisotropically (the default)
+    /// or trilinear from now on (`FRAMEPLAYERX_PLACE_ANISO=0` sets it when
+    /// the renderer is made; this is for tests).
+    #[doc(hidden)]
+    pub fn set_place_aniso(&mut self, on: bool) {
+        self.knobs.place_aniso = on;
+        if let Some(e) = self.env.as_mut() {
+            e.set_place_aniso(on);
+        }
+    }
+
+    /// The eye (room space) the loaded baked place's nearest-first order was
+    /// made for, once the sorter has answered: it changes when a seat change
+    /// has been answered. For tests.
+    #[doc(hidden)]
+    pub fn place_order_eye(&self) -> Option<Vec3> {
+        self.env.as_ref().and_then(EnvPass::sorted_eye)
+    }
+
+    /// Starts counting the fragment shader invocations of the place's draw
+    /// in each eye pass (a pipeline statistics query), for the frames drawn
+    /// from now on; [`Renderer::place_fragment_counts`] reads the last
+    /// frame's. Needs a device made with
+    /// [`GpuOptions::pipeline_statistics`](crate::gpu::GpuOptions): an error
+    /// where there is none. For tests and tools.
+    #[doc(hidden)]
+    pub fn count_place_fragments(&mut self) -> Result<()> {
+        if self.fragments.is_none() {
+            self.fragments = Some(FragmentCounter::new(&self.gpu)?);
+        }
+        Ok(())
+    }
+
+    /// The fragment shader invocations of the place's draw in each eye of
+    /// the last frame, waiting for the GPU; `None` for an eye with no place
+    /// (or when [`Renderer::count_place_fragments`] was not called).
+    #[doc(hidden)]
+    pub fn place_fragment_counts(&mut self) -> [Option<u64>; 2] {
+        self.gpu.wait_idle();
+        self.fragments
+            .as_ref()
+            .map_or([None; 2], |c| c.read(&self.gpu))
+    }
+
     /// Whether the loaded baked place has its nearest-first order, so the
     /// next frame is drawn from the sorted index buffer (when the sort is on).
     /// For tests, which wait for it instead of for a time.
@@ -2553,24 +2639,29 @@ impl Renderer {
         self.env.as_ref().is_some_and(EnvPass::has_sorted_order)
     }
 
-    /// Makes everything that names the eye passes' sample count for
-    /// `samples`, and drops the images drawn at the old count. Idempotent.
-    fn rebuild_for(&mut self, samples: vk::SampleCountFlags) -> Result<()> {
+    /// Makes everything that names the eye passes' sample count or depth
+    /// format for `samples` and `depth_format`, and drops the images drawn at
+    /// the old ones. Idempotent.
+    fn rebuild_for(
+        &mut self,
+        samples: vk::SampleCountFlags,
+        depth_format: vk::Format,
+    ) -> Result<()> {
         self.gpu.wait_idle();
         let gpu = self.gpu.clone();
         let (scene, quad) = eye_pipelines(
             &gpu,
             self.color_format,
-            self.depth_format,
+            depth_format,
             samples,
             (self.scene_pl, self.quad_pl),
         )?;
         let swapped = (|| -> Result<()> {
             if let Some(t) = self.tp10_eyes.as_mut() {
-                t.set_samples(&gpu, self.color_format, self.depth_format, samples)?;
+                t.set_samples(&gpu, self.color_format, depth_format, samples)?;
             }
             if let Some(e) = self.env.as_mut() {
-                e.set_samples(&gpu, samples)?;
+                e.set_target(&gpu, depth_format, samples)?;
             }
             Ok(())
         })();
@@ -2594,6 +2685,7 @@ impl Renderer {
             image.destroy(&gpu);
         }
         self.samples = samples;
+        self.depth_format = depth_format;
         Ok(())
     }
 
@@ -2616,13 +2708,20 @@ impl Renderer {
         ) else {
             return;
         };
-        match self.set_samples(variant.samples) {
-            Ok(n) => {
+        let depth = self
+            .gpu
+            .depth_format_for((variant.depth != 0).then_some(variant.depth));
+        match self.set_eye_passes(variant.samples, depth) {
+            Ok((n, format)) => {
                 if let Some(e) = self.env.as_mut() {
                     e.set_basis(variant.basis);
                     e.set_sort(variant.sort);
+                    e.set_place_aniso(variant.aniso);
                 }
-                log::info!("perf-ab: now {} (drawing at {n}x)", variant.label());
+                log::info!(
+                    "perf-ab: now {} (drawing at {n}x, {format:?} depth)",
+                    variant.label()
+                );
             }
             Err(e) => {
                 log::warn!("perf-ab stopped: {e}");
@@ -3094,6 +3193,9 @@ impl Drop for Renderer {
             }
             if let Some(mut e) = self.env.take() {
                 e.destroy(&gpu);
+            }
+            if let Some(mut f) = self.fragments.take() {
+                f.destroy(&gpu);
             }
             if let Some(mut g) = self.glow.take() {
                 g.destroy(&gpu);

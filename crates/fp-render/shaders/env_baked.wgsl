@@ -46,11 +46,32 @@ fn vs_main(v: VsIn) -> VsOut {
     return o;
 }
 
+// One layer of the colour textures: with the anisotropic sampler, or, when
+// env.baked.w is 0 (FRAMEPLAYERX_PLACE_ANISO=0), the trilinear one. The switch
+// is a uniform, so every fragment takes the same side.
+fn color_layer(uv: vec2<f32>, layer: i32) -> vec3<f32> {
+    if (env.baked.w > 0.5) {
+        return textureSample(colors, tex_sampler, uv, layer).rgb;
+    }
+    return textureSample(colors, basis_sampler, uv, layer).rgb;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let house = textureSample(colors, tex_sampler, in.uv, 0).rgb;
-    let dark = textureSample(colors, tex_sampler, in.uv, 1).rgb;
-    var col = mix(dark, house, clamp(env.ambient_up.w, 0.0, 1.0));
+    // Only the texture the house level uses is read at the two ends (lights
+    // all the way up, or all the way down, which is where a film plays): the
+    // mix would multiply the other one by zero. mix() at 0 and 1 gives its
+    // two inputs exactly, so the colour is the same bit for bit. The level is
+    // a uniform, so the whole draw takes the same side.
+    let level = clamp(env.ambient_up.w, 0.0, 1.0);
+    var col: vec3<f32>;
+    if (level >= 1.0) {
+        col = color_layer(in.uv, 0);
+    } else if (level <= 0.0) {
+        col = color_layer(in.uv, 1);
+    } else {
+        col = mix(color_layer(in.uv, 1), color_layer(in.uv, 0), level);
+    }
 
     // The picture's light: every patch's basis, squared back to linear, times
     // the patch's colour. screen_n.w is the Screen light slider's strength,
