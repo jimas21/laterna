@@ -23,12 +23,16 @@ pub mod framedrop;
 pub mod github;
 pub mod install;
 pub mod manifest;
+pub mod places;
 pub mod url;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-pub use client::{Updater, agent_with_proxy, default_agent, download_with, hash_file};
+pub use client::{
+    Target, Updater, agent_with_proxy, default_agent, download_file, download_with, hash_file,
+    https_only_agent,
+};
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use error::{Error, Result};
 pub use install::{

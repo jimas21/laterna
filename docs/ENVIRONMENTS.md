@@ -226,8 +226,9 @@ What shipped first, and where it differs from the sketch above.
 
 A place pack is a room made outside the app, in Blender, with its light baked
 into pictures. It replaces one of the built-in rooms. Official packs ship
-inside the release (see "Shipping a pack" below); other packs are copied by
-hand, and the app does not download any yet.
+inside the release (see "Shipping a pack" below); a place that is not in the
+release can be a download the person asks for (see "Optional places" below);
+other packs are copied by hand.
 
 - **Where.** One folder per pack in `~/.local/share/frameplayerx/places/`
   (or the folder named by `FRAMEPLAYERX_PLACES_DIR`). A pack whose id is
@@ -295,6 +296,48 @@ downloads each pinned pack, refuses a wrong sha256 or any file outside
 `<id>/`, and unpacks it; `tools/package.sh` then bundles the packs into
 `places/` in the install archive and prints which ones and how large. With no
 lines in the lock file nothing is bundled.
+
+### Optional places (downloads)
+
+Only the Cinema is bundled. Every other place is an optional download of about
+10 to 15 MB from the public `jimas21/laterna-places` releases, started from
+Settings > Places. The app downloads nothing else and nothing on its own.
+
+- **The catalog is compiled in.** `packaging/places-optional.lock` has one line
+  per pack: id, version, https url, sha256, size in bytes and the title shown.
+  It is built into the app (`include_str!`), so the signed app release vouches
+  for each pack's hash and size, and there is no index to fetch. It is empty
+  today, and Settings shows nothing new while it is. A pack is added by
+  publishing its zip (made as in "Shipping a pack") and adding its line; its
+  scene code (a place id for it) is a separate change.
+- **Asking.** The first Download asks once, in the row: the size in MB and the
+  host (`github.com`). The answer is kept (`places_download_ok`); later
+  downloads start at once. Each row then shows the size and Download; while it
+  runs a progress bar and Cancel; once installed, Remove (and Update when the
+  catalog's version differs from the installed pack's own `version`). Only one
+  download runs at a time. Failures say what happened in plain words and
+  offer Try again. A place installed or removed shows in the Place list the
+  next time the app starts (the folder is read once, at start).
+- **How it is fetched** (`fp_updater::places`, on a background thread). Https
+  only, redirects included, using the updater's download code. The zip goes to
+  `<places dir>/.<id>.part/`, and is refused if the catalog says more than
+  40 MB, if the server sends a different number of bytes, or if its SHA-256 is
+  not the catalog's. It is unpacked by the rules `tools/fetch-places.sh` uses:
+  every name inside `<id>/`, none absolute or with `..`, no links, regular
+  files only, at most 64 files and 64 MiB unpacked (counted as written), and a
+  `manifest.json`. The pack then goes through the same checks and limits as any
+  pack (`env::pack::validate_download`: it names itself with the catalog's id,
+  every file is the size its counts say, the whole pack reads). Only then is it
+  renamed to `<places dir>/<id>/`, an older copy being replaced in one rename.
+  A failure or a Cancel removes everything it made; nothing is resumed.
+  Remove deletes the pack's folder.
+- **Tests and preview.** `LATERNA_PLACES_CATALOG=<file>` replaces the built-in
+  catalog with a file of the same format and allows plain http to this machine,
+  so tests and the desktop preview can use a local fixture server. It is not
+  for use otherwise. `fp-updater`'s tests install and remove a pack against a
+  local server, and check a wrong hash, a body too long or too short, a size
+  over the cap, path traversal and links, a cut connection, a cancel and a pack
+  the checks refuse.
 
 The Studio is not in the picker for now. Its code and a stored choice of it
 still work.

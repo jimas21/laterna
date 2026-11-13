@@ -20,6 +20,7 @@ mod libraries;
 mod logger;
 mod perf;
 mod pin;
+mod place_downloads;
 mod playback;
 mod plex_profiles;
 mod preview;

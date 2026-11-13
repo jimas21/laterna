@@ -108,6 +108,10 @@ pub enum Error {
         /// Version found in the archive.
         found: String,
     },
+    /// A downloaded place pack is not acceptable (wrong content, or the
+    /// app's pack checks refuse it).
+    #[error("the place pack is not usable: {0}")]
+    InvalidPack(String),
     /// `rollback` was called but no previous version is kept.
     #[error("no previous version to roll back to ({0} does not exist)")]
     NoPreviousVersion(PathBuf),

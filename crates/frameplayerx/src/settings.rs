@@ -234,6 +234,10 @@ pub struct Settings {
     /// steps of 5 (`app::places::HEIGHT_CM`). Left out of the file when empty.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub place_height: std::collections::BTreeMap<String, i8>,
+    /// Whether the person has said yes to downloading optional places
+    /// (Settings > Places asks once, before the first download). False until
+    /// then.
+    pub places_download_ok: bool,
     /// How bright a place's house lights stay while a video plays, in
     /// [`HOUSE_PLAYING`].
     pub house_lights_playing: f32,
@@ -379,6 +383,7 @@ impl Default for Settings {
             environment: PLAIN_PLACE.to_string(),
             place_seats: Default::default(),
             place_height: Default::default(),
+            places_download_ok: false,
             house_lights_playing: HOUSE_PLAYING_START,
             screen_light_level: SCREEN_LIGHT_START,
             last_version: String::new(),
@@ -577,6 +582,7 @@ mod tests {
         assert_eq!(p.environment, PLAIN_PLACE);
         assert!(p.place_seats.is_empty());
         assert!(p.place_height.is_empty());
+        assert!(!p.places_download_ok);
         assert_eq!(p.house_lights_playing, HOUSE_PLAYING_START);
         assert_eq!(HOUSE_PLAYING_START, 0.04);
         assert_eq!(p.screen_light_level, SCREEN_LIGHT_START);
@@ -663,6 +669,7 @@ mod tests {
         };
         s.place_seats.insert("cinema".into(), 2);
         s.place_height.insert("cinema".into(), -15);
+        s.places_download_ok = true;
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         // A place this build lacks (from a newer one) loads with every other

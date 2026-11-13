@@ -842,6 +842,12 @@ pub struct UiState {
     pub settings_tab: SettingsTab,
     /// The Tragus install in Settings › Earbuds.
     pub tragus: crate::tragus::Tragus,
+    /// The optional places in Settings › Places: the download that may be
+    /// running and what is installed.
+    pub place_downloads: crate::place_downloads::PlaceDownloads,
+    /// The pack the person pressed Download on before they have said yes to
+    /// downloading places: its row asks first.
+    pub place_confirm: Option<String>,
     /// What Tragus last reported (the app owns the link).
     pub earbuds: fp_earbuds::EarbudsState,
     /// The controller input whose choices are open in Settings > Controller.
@@ -959,6 +965,8 @@ impl Default for UiState {
             screen: Screen::Home,
             settings_tab: SettingsTab::General,
             tragus: crate::tragus::Tragus::default(),
+            place_downloads: crate::place_downloads::PlaceDownloads::default(),
+            place_confirm: None,
             earbuds: fp_earbuds::EarbudsState::default(),
             remap_open: None,
             remap_grip: false,
