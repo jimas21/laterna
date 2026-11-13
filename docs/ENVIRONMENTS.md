@@ -316,13 +316,46 @@ about it is **not measured on a headset yet**, so treat the jitter as open:
   memory type"), so it is a no-op there: do not count it toward the budget. The
   log line "lazily allocated memory, type N" shows when it did engage.
 - To get the numbers in one session, start the app with
-  `FRAMEPLAYERX_PERF_AB=1`, sit in the Cinema and leave it for about 80
-  seconds. It steps through seven variants (MSAA 4, 2 and 1; the picture's light
-  on and off; sorted and in pack order), ten seconds each, and logs
+  `FRAMEPLAYERX_PERF_AB=1`, sit in the Cinema and leave it for about 100
+  seconds. It steps through ten variants, ten seconds each, and logs
   `perf-ab: ...` per variant and a `perf-ab table:` at the end with the median
-  and worst GPU time of each. Single knobs: `FRAMEPLAYERX_MSAA=1|2`,
+  and worst GPU time of each. The first is the default, so read every other
+  line against it. In order: the default (4x MSAA, the light on, sorted, the
+  device's own depth format, anisotropic colours); pack order instead of
+  sorted (what beta.10 did); the picture's light off; a 16-bit depth buffer; a
+  24-bit one; the colours read trilinear; 2x MSAA; 2x with the light off; 1x;
+  1x with the light off. The `now ...` line of each variant also says the
+  depth format the device really gave. Single knobs: `FRAMEPLAYERX_MSAA=1|2`,
   `FRAMEPLAYERX_PLACE_SORT=0`, `FRAMEPLAYERX_PLACE_BASIS=0`,
-  `FRAMEPLAYERX_BASIS_ANISO=1`.
+  `FRAMEPLAYERX_BASIS_ANISO=1`, `FRAMEPLAYERX_PLACE_ANISO=0` (the house and
+  dark textures are read trilinear, not with up to 8 anisotropic taps),
+  `FRAMEPLAYERX_DEPTH=16|24|32` (D16, X8_D24 or D32 for the eye passes' depth
+  buffer; a format the device cannot attach falls back to the default, and
+  the log says so). A smaller depth buffer might let a tiling GPU use bigger
+  tiles; it is not known that Turnip does.
+- A baked place's fragment reads one colour texture where the house lights
+  are all the way up or all the way down (a film playing is the second), two in
+  between, and the eight basis textures while the picture lights the room: nine
+  reads a fragment while a film plays, ten before this was changed. The output
+  is identical.
+- Cheaper reads, **not built** (each changes the picture or the pack, or needs
+  a new pass, so each waits for a headset number): read the basis textures at
+  a mip bias of 1 to 2 (the light is smooth; about a half to three quarters of
+  the basis bytes a fragment fetches), skip a patch whose light is below a
+  quarter of a code value (dark scenes only), or, the largest, blend the eight
+  basis textures into one small texture whenever the picture's light changes
+  and read that (one read instead of eight a fragment, for a pass over a
+  1024-texel square of eight reads that is a fifth of the fragments').
+- `cargo test -p fp-render --test overdraw -- --nocapture` with
+  `FRAMEPLAYERX_PLACES_DIR` pointing at a folder with `cinema-v2/` in it counts
+  the fragment shader invocations of the place's draw from each seat with a
+  pipeline statistics query on lavapipe (it skips without the pack). Measured
+  on the 2026.11.10-2 Cinema at 512x512: about 1.8, 2.0 and 2.3 shader runs a
+  pixel from the front, middle and back seats in the pack's order, and 1.15,
+  1.3 and 1.4 nearest first. That is a software rasteriser that bins and tests
+  depth before shading, so it says how much work the order saves; it says
+  nothing of what a read costs on Adreno (cache, bandwidth, ASTC, LRZ) or of any
+  time. The headset's A/B is still the measurement.
 
 ## Milestones
 
