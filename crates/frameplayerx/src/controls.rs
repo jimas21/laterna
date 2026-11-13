@@ -141,6 +141,20 @@ pub(crate) fn pushed_distance(start: f32, hand_moved: f32, range: RangeInclusive
     (start + DEPTH_GAIN * hand_moved).clamp(*range.start(), *range.end())
 }
 
+/// How strongly the hand's reach moves a screen in or out: each metre the
+/// hand goes further from the head multiplies its distance by e to this
+/// power. A whole arm's reach (about 0.4 m) is about five times as far or as
+/// near; 10 cm about one and a half.
+pub(crate) const REACH_DEPTH: f32 = 4.0;
+
+/// Where a screen `start` metres away goes when the hand moves `hand_moved`
+/// metres further from the head (negative: nearer): by a share of its
+/// distance, so the same reach crosses the room near or far, kept within
+/// `range` metres.
+pub(crate) fn reached_distance(start: f32, hand_moved: f32, range: RangeInclusive<f32>) -> f32 {
+    (start * (REACH_DEPTH * hand_moved).exp()).clamp(*range.start(), *range.end())
+}
+
 /// Values that follow a target critically damped (no overshoot, the quickest
 /// way there without it). Each step solves the motion exactly for the time
 /// that passed, so it feels the same at 72 Hz as at 120 Hz.
@@ -824,6 +838,19 @@ mod tests {
                 assert!((distance - before).abs() < 1e-4, "{distance} vs {before}");
             }
         }
+    }
+
+    #[test]
+    fn a_whole_reach_takes_a_screen_across_the_room_near_or_far() {
+        let reached = |start: f32, moved: f32| reached_distance(start, moved, 1.0..=20.0);
+        assert_eq!(reached(4.0, 0.0), 4.0);
+        // 0.4 m out: about five times as far; back in: as near again.
+        assert!((reached(2.0, 0.4) / 2.0 - 1.6f32.exp()).abs() < 1e-3);
+        assert!((reached(10.0, -0.4) * 1.6f32.exp() - 10.0).abs() < 1e-3);
+        // The same reach is the same share at any distance.
+        assert!((reached(8.0, 0.1) / reached(2.0, 0.1) - 4.0).abs() < 1e-3);
+        assert_eq!(reached(4.0, 2.0), 20.0);
+        assert_eq!(reached(4.0, -2.0), 1.0);
     }
 
     #[test]

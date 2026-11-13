@@ -1,7 +1,7 @@
 //! Controller commands that are not pointing at a panel.
 
 use super::*;
-use crate::controls::{Cmd, Context, pushed_distance};
+use crate::controls::{Cmd, Context, reached_distance};
 use fp_core::view::SCREEN_DISTANCE;
 
 impl App {
@@ -218,7 +218,7 @@ impl App {
                     let distance = if in_room {
                         p.settings.screen_distance
                     } else {
-                        pushed_distance(d0, distance, SCREEN_DISTANCE)
+                        reached_distance(d0, distance, SCREEN_DISTANCE)
                     };
                     drag_view(p, y0 + yaw, p0 + pitch, distance);
                 }

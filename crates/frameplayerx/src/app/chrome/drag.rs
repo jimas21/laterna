@@ -5,12 +5,13 @@
 //! are carried: its middle is held where it was in front of the hand, so
 //! turning the hand swings it as the laser turns and moving the hand moves
 //! it too, while it keeps facing you. The hand coming nearer or going
-//! further brings the screen in or sends it away (twice as far, as the
-//! panels do), whether the trigger or the grip holds it, and the thumbstick
+//! further brings the screen in or sends it away, by a share of how far it
+//! is (so a full reach covers most of the room, near or far), whether the
+//! trigger or the grip holds it, and the thumbstick
 //! pushes it away or pulls it near. Resizing keeps the screen's middle and
 //! shape and scales it so its corner follows the laser.
 
-use crate::controls::{DRAG_TAU, Damped, pushed_distance, reach, wrap};
+use crate::controls::{DRAG_TAU, Damped, reach, reached_distance, wrap};
 use crate::world::GrabBy;
 use fp_core::view::SCREEN_DISTANCE;
 use fp_render::ScreenShape;
@@ -285,7 +286,7 @@ impl ScreenDrag {
         let target = [wrap(yaw - self.start.0), pitch - self.start.1, moved];
         let [dy, dp, dz] = self.follow.step(target, DRAG_TAU, f.dt);
         let (near, far) = self.limits.distance;
-        let base = pushed_distance(self.from.distance, dz, near..=far);
+        let base = reached_distance(self.from.distance, dz, near..=far);
         self.now = ScreenView {
             yaw: wrap(self.from.yaw + dy),
             pitch: (self.from.pitch + dp).clamp(-90.0, 90.0),
@@ -428,10 +429,14 @@ mod tests {
     fn trigger_moves_take_the_hand_coming_closer_too() {
         let ahead = (Vec3::new(0.0, 0.0, -0.4), Quat::IDENTITY);
         let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Trigger, ahead, flat()));
-        // 0.1 m further: the screen 0.2 m, straight ahead still.
+        // 0.1 m further: the screen e^0.4 times as far, straight ahead still.
         let further = (Vec3::new(0.0, 0.0, -0.5), Quat::IDENTITY);
         let step = hold(&mut d, further, 0.0, 1.0);
-        assert!(near(step.view.distance, 4.2, 0.01), "{:?}", step.view);
+        assert!(
+            near(step.view.distance, 4.0 * 0.4f32.exp(), 0.01),
+            "{:?}",
+            step.view
+        );
         assert!(near(step.view.yaw, 0.0, 1e-3), "{:?}", step.view);
         assert!(near(step.view.pitch, 0.0, 1e-3), "{:?}", step.view);
     }
@@ -484,14 +489,30 @@ mod tests {
         // come in far enough to meet the nearest the screen may be.
         let ahead = (Vec3::new(0.0, 0.0, -1.6), Quat::IDENTITY);
         let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Grip, ahead, flat()));
-        // The hand goes 0.1 m further from the head: the screen 0.2 m.
+        // The hand goes 0.1 m further from the head: the screen e^0.4 times.
         let further = (Vec3::new(0.0, 0.0, -1.7), Quat::IDENTITY);
         let step = hold(&mut d, further, 0.0, 1.0);
-        assert!(near(step.view.distance, 4.2, 0.01), "{:?}", step.view);
+        assert!(
+            near(step.view.distance, 4.0 * 0.4f32.exp(), 0.01),
+            "{:?}",
+            step.view
+        );
         // Nearer comes in...
         let nearer = (Vec3::new(0.0, 0.0, -1.3), Quat::IDENTITY);
         let step = hold(&mut d, nearer, 0.0, 1.0);
-        assert!(near(step.view.distance, 3.4, 0.01), "{:?}", step.view);
+        assert!(
+            near(step.view.distance, 4.0 * (-1.2f32).exp(), 0.01),
+            "{:?}",
+            step.view
+        );
+        // A whole arm's reach out from there is far across the room.
+        let out = (Vec3::new(0.0, 0.0, -1.9), Quat::IDENTITY);
+        let step = hold(&mut d, out, 0.0, 1.0);
+        assert!(
+            step.view.distance > 4.0 * 1.1f32.exp() * 0.99,
+            "{:?}",
+            step.view
+        );
         // ...and not past the nearest.
         let at_head = (Vec3::ZERO, Quat::IDENTITY);
         let step = hold(&mut d, at_head, 0.0, 1.0);
