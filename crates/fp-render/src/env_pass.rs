@@ -311,12 +311,7 @@ impl EnvPass {
         Ok(p)
     }
 
-    fn create(
-        &mut self,
-        gpu: &Gpu,
-        samples: vk::SampleCountFlags,
-        slots: usize,
-    ) -> Result<()> {
+    fn create(&mut self, gpu: &Gpu, samples: vk::SampleCountFlags, slots: usize) -> Result<()> {
         let d = &gpu.device;
         self.set_layout = pipeline::set_layout(gpu, &[(0, vk::DescriptorType::UNIFORM_BUFFER)])?;
         self.layout = pipeline::layout(gpu, self.set_layout, 4)?;

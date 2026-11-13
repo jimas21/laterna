@@ -201,6 +201,7 @@ jobs:
             bash -n "$s"
           done
           shellcheck packaging/*.sh tools/*.sh
+          tools/test-fetch-places.sh
       # A new zig or meson builds it again.
       - name: Restore FFmpeg builds
         id: ffmpeg-cache

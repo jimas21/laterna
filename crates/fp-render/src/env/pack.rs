@@ -1845,7 +1845,10 @@ mod tests {
                 );
             }
             let msg = refused_with(&dir, keep);
-            assert!(msg.contains("house.ktx2") && msg.contains("sRGB wanted"), "{msg}");
+            assert!(
+                msg.contains("house.ktx2") && msg.contains("sRGB wanted"),
+                "{msg}"
+            );
             let dir = case("rgba-srgb");
             for i in 0..8 {
                 write(
@@ -1855,7 +1858,10 @@ mod tests {
                 );
             }
             let msg = refused_with(&dir, keep);
-            assert!(msg.contains("basis0.ktx2") && msg.contains("UNORM wanted"), "{msg}");
+            assert!(
+                msg.contains("basis0.ktx2") && msg.contains("UNORM wanted"),
+                "{msg}"
+            );
             // A texture of the other size, or not a texture at all.
             let dir = case("size");
             write(&dir, "basis2.ktx2", solid(COLOR_SIZE, light, 0, BLACK));
