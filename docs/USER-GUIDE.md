@@ -873,9 +873,11 @@ moves the same way, with grip, and stays where you leave it.
 
 While the controls are up, a flat screen has a bar under it and a handle at
 its bottom right corner, like the Steam Frame's own windows. Point at the
-bar, hold the trigger and move your hand: the screen turns about you as your
-hand does, and the thumbstick of that hand pushes it away or pulls it near
-(a grip on the bar works too, and also takes your hand moving in or out).
+bar, hold the trigger (or the grip) and move your hand: the screen goes with
+your hand as if you held it, turning as your hand turns and moving as your
+hand moves, and it keeps facing you. Bring your hand in to bring the screen
+nearer, push it out to send the screen further (twice as far as your hand
+goes), and the thumbstick of that hand pushes it away or pulls it near too.
 Point at the handle, hold the trigger and move your hand away from the
 screen's middle to make it bigger, or towards it to make it smaller: the
 screen keeps its middle and its shape, between half a metre and thirty metres

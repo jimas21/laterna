@@ -1,13 +1,16 @@
 //! Moving and resizing the screen by its window controls, apart from the
 //! app: pure maths, stepped once a frame.
 //!
-//! Moving turns the screen about you as the laser turns (the same maths as
-//! dragging the picture), and the thumbstick pushes it away or pulls it
-//! near. A grip also takes the hand's coming nearer or going further, as the
-//! panels do; a trigger ignores that. Resizing keeps the screen's middle and
+//! Moving carries the screen with the hand, as the Steam Frame's own windows
+//! are carried: its middle is held where it was in front of the hand, so
+//! turning the hand swings it as the laser turns and moving the hand moves
+//! it too, while it keeps facing you. The hand coming nearer or going
+//! further brings the screen in or sends it away (twice as far, as the
+//! panels do), whether the trigger or the grip holds it, and the thumbstick
+//! pushes it away or pulls it near. Resizing keeps the screen's middle and
 //! shape and scales it so its corner follows the laser.
 
-use crate::controls::{DRAG_TAU, Damped, angles, pushed_distance, reach, wrap};
+use crate::controls::{DRAG_TAU, Damped, pushed_distance, reach, wrap};
 use crate::world::GrabBy;
 use fp_core::view::SCREEN_DISTANCE;
 use fp_render::ScreenShape;
@@ -135,9 +138,13 @@ pub struct ScreenDrag {
     limits: Limits,
     /// The thumbstick's push on the distance, as a factor.
     gain: f32,
-    /// Moving: the hand's yaw and pitch when it took hold, how far it was
+    /// Moving: where the screen's middle was in the hand's own frame when it
+    /// took hold, the point the screen turns about (the picture's origin),
+    /// the yaw and pitch of the carried middle then, how far the hand was
     /// from the head, and the yaw, pitch and reach it has moved by since,
     /// following the hand smoothly.
+    carry: Vec3,
+    origin: Vec3,
     start: (f32, f32),
     reach: Option<f32>,
     follow: Damped<3>,
@@ -158,6 +165,17 @@ pub struct ScreenDrag {
 /// frame, as the distance right and up from its origin.
 fn on_plane(picture: Mat4, aim: (Vec3, Quat), z: f32) -> Option<Vec2> {
     on_plane_ray(picture, aim.0, aim.1 * Vec3::NEG_Z, z)
+}
+
+/// The yaw and pitch, degrees in the room's frame, from `origin` to the
+/// point `carry` holds in front of the hand at `aim`.
+fn carried(aim: (Vec3, Quat), carry: Vec3, origin: Vec3, room: Quat) -> (f32, f32) {
+    let point = aim.0 + aim.1 * carry;
+    let d = (room.inverse() * (point - origin)).normalize_or_zero();
+    (
+        (-d.x).atan2(-d.z).to_degrees(),
+        d.y.clamp(-1.0, 1.0).asin().to_degrees(),
+    )
 }
 
 /// [`on_plane`] for a ray given as where it starts and which way it points.
@@ -205,6 +223,10 @@ impl ScreenDrag {
             Some(g) => g.dot(chord),
             None => 0.0,
         };
+        // The screen's middle, held in the hand's frame from now on.
+        let origin = picture.transform_point3(Vec3::ZERO);
+        let middle = picture.transform_point3(Vec3::new(0.0, 0.0, -view.distance));
+        let carry = aim.1.inverse() * (middle - aim.0);
         ScreenDrag {
             part,
             hand,
@@ -213,7 +235,9 @@ impl ScreenDrag {
             now: view,
             limits,
             gain: 1.0,
-            start: angles(aim.1, room),
+            carry,
+            origin,
+            start: carried(aim, carry, origin, room),
             reach: head.map(|head| reach(head, aim.0)),
             follow: Damped::at([0.0; 3]),
             curve,
@@ -251,14 +275,12 @@ impl ScreenDrag {
     }
 
     fn moving(&mut self, f: &Frame) {
-        let Some((pos, rot)) = f.aim else { return };
-        let (yaw, pitch) = angles(rot, f.room);
-        let moved = match (self.by, f.head, self.reach) {
-            (GrabBy::Grip, Some(head), Some(r)) => reach(head, pos) - r,
+        let Some(aim) = f.aim else { return };
+        let (yaw, pitch) = carried(aim, self.carry, self.origin, f.room);
+        let moved = match (f.head, self.reach) {
+            (Some(head), Some(r)) => reach(head, aim.0) - r,
             // Without the head (then or now) the depth holds where it is.
-            (GrabBy::Grip, ..) => self.follow.value()[2],
-            // A trigger ignores the hand coming nearer or going further.
-            (GrabBy::Trigger, ..) => 0.0,
+            _ => self.follow.value()[2],
         };
         let target = [wrap(yaw - self.start.0), pitch - self.start.1, moved];
         let [dy, dp, dz] = self.follow.step(target, DRAG_TAU, f.dt);
@@ -403,12 +425,57 @@ mod tests {
     }
 
     #[test]
-    fn trigger_moves_ignore_the_hand_coming_closer() {
+    fn trigger_moves_take_the_hand_coming_closer_too() {
         let ahead = (Vec3::new(0.0, 0.0, -0.4), Quat::IDENTITY);
         let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Trigger, ahead, flat()));
-        let further = (Vec3::new(0.0, 0.0, -0.9), Quat::IDENTITY);
+        // 0.1 m further: the screen 0.2 m, straight ahead still.
+        let further = (Vec3::new(0.0, 0.0, -0.5), Quat::IDENTITY);
         let step = hold(&mut d, further, 0.0, 1.0);
-        assert_eq!(step.view.distance, 4.0);
+        assert!(near(step.view.distance, 4.2, 0.01), "{:?}", step.view);
+        assert!(near(step.view.yaw, 0.0, 1e-3), "{:?}", step.view);
+        assert!(near(step.view.pitch, 0.0, 1e-3), "{:?}", step.view);
+    }
+
+    #[test]
+    fn moving_the_hand_without_turning_it_carries_the_screen() {
+        for by in [GrabBy::Trigger, GrabBy::Grip] {
+            let ahead = (Vec3::new(0.0, 0.0, -0.4), Quat::IDENTITY);
+            let mut d = ScreenDrag::begin(start(Part::Move, by, ahead, flat()));
+            // The hand goes 0.4 m right and 0.4 m up, pointing the same way:
+            // the screen's middle, 3.6 m in front of it, goes with it.
+            let moved = (Vec3::new(0.4, 0.4, -0.4), Quat::IDENTITY);
+            let step = hold(&mut d, moved, 0.0, 1.0);
+            let yaw = (-0.4f32).atan2(4.0).to_degrees();
+            assert!(near(step.view.yaw, yaw, 0.1), "{by:?} {:?}", step.view);
+            let pitch = (0.4f32 / (0.4f32 * 0.4 + 16.0f32 + 0.16).sqrt()).asin();
+            assert!(
+                near(step.view.pitch, pitch.to_degrees(), 0.1),
+                "{by:?} {:?}",
+                step.view
+            );
+        }
+    }
+
+    #[test]
+    fn a_hand_away_from_the_eye_swings_the_screen_about_itself() {
+        // Held 0.5 m to the right of the eye, pointing at the screen's
+        // middle; turned 10 degrees left about the hand, the middle swings
+        // round the hand, not round the eye.
+        let hand = Vec3::new(0.5, 0.0, 0.0);
+        let rot =
+            Quat::from_rotation_arc(Vec3::NEG_Z, (Vec3::new(0.0, 0.0, -4.0) - hand).normalize());
+        let mut d = ScreenDrag::begin(start(Part::Move, GrabBy::Trigger, (hand, rot), flat()));
+        let turned = Quat::from_rotation_y(10f32.to_radians()) * rot;
+        let step = hold(&mut d, (hand, turned), 0.0, 1.0);
+        let reach = (Vec3::new(0.0, 0.0, -4.0) - hand).length();
+        let middle = hand + turned * Vec3::NEG_Z * reach;
+        let yaw = (-middle.x).atan2(-middle.z).to_degrees();
+        assert!(near(step.view.yaw, yaw, 0.1), "{:?}", step.view);
+        assert!(
+            step.view.yaw > 8.0 && step.view.yaw < 12.0,
+            "{:?}",
+            step.view
+        );
     }
 
     #[test]

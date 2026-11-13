@@ -150,7 +150,7 @@ fn a_home_profile_stays_itself_when_the_account_renews() {
         access_token: "kid-server-old".into(),
         auth: Some(auth),
         allow_relay: true,
-        profile: Some(Box::new(crate::plex::auth::PlexProfile {
+        profile: Some(Box::new(PlexProfile {
             id: 7,
             uuid: "kid-uuid".into(),
             title: "Kid".into(),
