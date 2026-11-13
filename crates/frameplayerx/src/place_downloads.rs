@@ -187,11 +187,6 @@ impl PlaceDownloads {
         lock(&self.shared).changed
     }
 
-    /// Forgets a failure so the row offers the download again.
-    pub fn dismiss(&self, id: &str) {
-        lock(&self.shared).failed.remove(id);
-    }
-
     /// Stops the running download; nothing is kept.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -274,7 +269,7 @@ fn run(
     };
     let mut percent = u64::MAX;
     let progress = |done: u64, total: u64| {
-        let now = if total == 0 { 0 } else { done * 100 / total };
+        let now = (done * 100).checked_div(total).unwrap_or(0);
         let mut s = lock(shared);
         if let Some(b) = s.busy.as_mut() {
             // The bytes are in; the pack is unpacked and checked next.
@@ -374,7 +369,7 @@ mod tests {
             .failed
             .insert("campsite".into(), Failure::Network);
         assert_eq!(d.row(&entry), Row::Failed(Failure::Network));
-        d.dismiss("campsite");
+        lock(&d.shared).failed.remove("campsite");
         assert_eq!(d.row(&entry), Row::Available);
         lock(&d.shared).busy = Some(("campsite".into(), 40, 100));
         assert_eq!(
