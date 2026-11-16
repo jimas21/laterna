@@ -1326,3 +1326,142 @@ fn the_pictures_light_can_be_left_out_of_a_baked_place() {
     assert!(near(again, lit, 4), "on again: {again:?}, first {lit:?}");
     e.destroy(&r);
 }
+
+/// A picture with one lit cell, the top left one, of colour `c`.
+fn cell_picture(c: [u8; 3]) -> Arc<VideoFrame> {
+    frame(
+        160,
+        90,
+        move |u, v| {
+            if u < 0.25 && v < 0.5 { c } else { [0, 0, 0] }
+        },
+    )
+}
+
+/// The wall under `picture`'s light at `strength`, with the house lights
+/// down, the light read either way.
+fn lit_wall(
+    r: &mut Renderer,
+    e: &mut OffscreenEyes,
+    collapse: bool,
+    picture: &Arc<VideoFrame>,
+    strength: f32,
+) -> [u8; 3] {
+    r.set_place_collapse(collapse);
+    wall_colour(&baked_wall(r, e, 0.0, strength, Some(picture)))
+}
+
+#[test]
+fn the_collapsed_light_gives_the_eight_reads_colours() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    load_wall(&mut r, "collapse-same", [180, 90, 30], [10, 10, 10]);
+    for (name, picture) in [
+        ("red", cell_picture([230, 20, 20])),
+        ("blue", cell_picture([20, 20, 230])),
+        ("white", cell_picture([255, 255, 255])),
+    ] {
+        for strength in [0.25, 1.0] {
+            let collapsed = lit_wall(&mut r, &mut e, true, &picture, strength);
+            let eight = lit_wall(&mut r, &mut e, false, &picture, strength);
+            assert!(
+                near(collapsed, eight, 1),
+                "{name} at {strength}: collapsed {collapsed:?}, eight reads {eight:?}"
+            );
+            assert!(eight[0] > 12 || eight[2] > 12, "{name}: no light at all");
+        }
+    }
+    e.destroy(&r);
+}
+
+#[test]
+fn the_collapsed_light_follows_the_pictures_colour_and_the_slider() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let dark = [10, 10, 10];
+    load_wall(&mut r, "collapse-follows", [180, 90, 30], dark);
+    r.set_place_collapse(true);
+    let (red, blue) = (cell_picture([230, 20, 20]), cell_picture([20, 20, 230]));
+    let in_red = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(in_red[0] > 180 && in_red[1] < 90, "red: {in_red:?}");
+    let in_blue = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&blue)));
+    assert!(in_blue[2] > 180 && in_blue[0] < 90, "blue: {in_blue:?}");
+    // The light off: the dark texture alone.
+    let off = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.0, Some(&red)));
+    assert!(near(off, dark, 4), "light off: {off:?}");
+    // And on again it is drawn afresh, at the slider's strength.
+    let weak = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 0.25, Some(&red)));
+    let strong = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(weak[0] + 20 < strong[0], "weak {weak:?}, strong {strong:?}");
+    // The house lights add to it.
+    let both = wall_colour(&baked_wall(&mut r, &mut e, 1.0, 1.0, Some(&red)));
+    assert!(both[1] > strong[1] + 30, "house on: {both:?}");
+    // Left out like the eight reads are.
+    r.set_place_knobs(false, true);
+    let none = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(near(none, dark, 4), "basis knob off: {none:?}");
+    r.set_place_knobs(true, true);
+    let again = wall_colour(&baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red)));
+    assert!(near(again, strong, 2), "on again: {again:?}, {strong:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn the_collapse_is_drawn_when_the_light_moves_and_not_while_it_holds_still() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    load_wall(&mut r, "collapse-runs", [180, 90, 30], [10, 10, 10]);
+    r.set_place_collapse(true);
+    assert_eq!(r.place_collapse_runs(), 0);
+    // Without the picture's light there is nothing to draw.
+    let red = cell_picture([230, 20, 20]);
+    let _ = baked_wall(&mut r, &mut e, 0.0, 0.0, Some(&red));
+    assert_eq!(r.place_collapse_runs(), 0, "light off");
+    // A picture lights the room: drawn, and kept up with while the eased
+    // colours settle.
+    let _ = baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red));
+    assert!(r.place_collapse_runs() >= 1, "never drawn");
+    // Settled (a second a frame eases it to within a thousandth at once):
+    // the same picture for many frames draws nothing more.
+    for _ in 0..3 {
+        let _ = baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red));
+    }
+    let settled = r.place_collapse_runs();
+    for _ in 0..3 {
+        let _ = baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red));
+    }
+    assert_eq!(
+        r.place_collapse_runs(),
+        settled,
+        "drawn with nothing moving"
+    );
+    // A new colour moves it again; the house lights alone do not.
+    let blue = cell_picture([20, 20, 230]);
+    let _ = baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&blue));
+    let moved = r.place_collapse_runs();
+    assert!(moved > settled, "the new colour was not drawn");
+    for _ in 0..3 {
+        let _ = baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&blue));
+    }
+    let blue_settled = r.place_collapse_runs();
+    let _ = baked_wall(&mut r, &mut e, 0.5, 1.0, Some(&blue));
+    let _ = baked_wall(&mut r, &mut e, 0.2, 1.0, Some(&blue));
+    assert_eq!(
+        r.place_collapse_runs(),
+        blue_settled,
+        "the house lights redrew it"
+    );
+    // The old path draws none.
+    r.set_place_collapse(false);
+    let before = r.place_collapse_runs();
+    let _ = baked_wall(&mut r, &mut e, 0.0, 1.0, Some(&red));
+    assert_eq!(
+        r.place_collapse_runs(),
+        before,
+        "collapse off still draws it"
+    );
+    e.destroy(&r);
+}

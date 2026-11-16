@@ -1958,6 +1958,12 @@ impl Renderer {
         }
         if env_on {
             self.record_glow(slot_idx, tp10);
+            // The picture's light on a baked place, drawn into its one
+            // texture when the colours have moved.
+            let cmd = self.slots[slot_idx].cmd;
+            if let Some(env) = self.env.as_mut() {
+                env.record_collapse(&self.gpu, cmd, slot_idx);
+            }
         }
         let slot = &self.slots[slot_idx];
         let (gpu, cmd) = (&self.gpu, slot.cmd);
@@ -2591,6 +2597,36 @@ impl Renderer {
         }
     }
 
+    /// Reads a baked place's picture light from one collapsed texture (the
+    /// default) or from its eight basis textures from now on
+    /// (`FRAMEPLAYERX_PLACE_COLLAPSE=0` sets it when the renderer is made;
+    /// this is for tests).
+    #[doc(hidden)]
+    pub fn set_place_collapse(&mut self, on: bool) {
+        self.knobs.collapse = on;
+        if let Some(e) = self.env.as_mut() {
+            e.set_collapse(on);
+        }
+    }
+
+    /// The collapsed light of the baked places loaded from now on starts
+    /// `shift` levels down their basis textures' chain
+    /// (`FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT`; for tests).
+    #[doc(hidden)]
+    pub fn set_place_collapse_shift(&mut self, shift: u32) {
+        self.knobs.collapse_shift = Some(shift);
+        if let Some(e) = self.env.as_mut() {
+            e.set_collapse_shift(shift);
+        }
+    }
+
+    /// How many times the loaded baked place's collapsed light has been
+    /// drawn since the place was loaded: for tests.
+    #[doc(hidden)]
+    pub fn place_collapse_runs(&self) -> u64 {
+        self.env.as_ref().map_or(0, EnvPass::collapse_runs)
+    }
+
     /// Reads a baked place's colour textures anisotropically (the default)
     /// or trilinear from now on (`FRAMEPLAYERX_PLACE_ANISO=0` sets it when
     /// the renderer is made; this is for tests).
@@ -2720,6 +2756,7 @@ impl Renderer {
                 if let Some(e) = self.env.as_mut() {
                     e.set_basis(variant.basis);
                     e.set_sort(variant.sort);
+                    e.set_collapse(variant.collapse);
                     e.set_place_aniso(variant.aniso);
                 }
                 log::info!(

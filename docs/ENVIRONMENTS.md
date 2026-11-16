@@ -395,18 +395,21 @@ about it is **not measured on a headset yet**, so treat the jitter as open:
   memory type"), so it is a no-op there: do not count it toward the budget. The
   log line "lazily allocated memory, type N" shows when it did engage.
 - To get the numbers in one session, start the app with
-  `FRAMEPLAYERX_PERF_AB=1`, sit in the Cinema and leave it for about 100
-  seconds. It steps through ten variants, ten seconds each, and logs
+  `FRAMEPLAYERX_PERF_AB=1`, sit in the Cinema and leave it for about 110
+  seconds. It steps through eleven variants, ten seconds each, and logs
   `perf-ab: ...` per variant and a `perf-ab table:` at the end with the median
   and worst GPU time of each. The first is the default, so read every other
   line against it. In order: the default (4x MSAA, the light on, sorted, the
-  device's own depth format, anisotropic colours); pack order instead of
-  sorted (what beta.10 did); the picture's light off; a 16-bit depth buffer; a
+  device's own depth format, anisotropic colours, the picture's light read
+  from one collapsed texture); the light read from eight textures; pack order
+  instead of sorted (what beta.10 did); the picture's light off; a 16-bit depth buffer; a
   24-bit one; the colours read trilinear; 2x MSAA; 2x with the light off; 1x;
   1x with the light off. The `now ...` line of each variant also says the
   depth format the device really gave. Single knobs: `FRAMEPLAYERX_MSAA=1|2`,
   `FRAMEPLAYERX_PLACE_SORT=0`, `FRAMEPLAYERX_PLACE_BASIS=0`,
-  `FRAMEPLAYERX_BASIS_ANISO=1`, `FRAMEPLAYERX_PLACE_ANISO=0` (the house and
+  `FRAMEPLAYERX_PLACE_COLLAPSE=0` (the old path: the light from eight
+  textures a fragment), `FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT=0|1|2|3` (the size
+  of the collapsed texture, below), `FRAMEPLAYERX_BASIS_ANISO=1`, `FRAMEPLAYERX_PLACE_ANISO=0` (the house and
   dark textures are read trilinear, not with up to 8 anisotropic taps),
   `FRAMEPLAYERX_DEPTH=16|24|32` (D16, X8_D24 or D32 for the eye passes' depth
   buffer; a format the device cannot attach falls back to the default, and
@@ -414,17 +417,52 @@ about it is **not measured on a headset yet**, so treat the jitter as open:
   tiles; it is not known that Turnip does.
 - A baked place's fragment reads one colour texture where the house lights
   are all the way up or all the way down (a film playing is the second), two in
-  between, and the eight basis textures while the picture lights the room: nine
-  reads a fragment while a film plays, ten before this was changed. The output
-  is identical.
-- Cheaper reads, **not built** (each changes the picture or the pack, or needs
-  a new pass, so each waits for a headset number): read the basis textures at
-  a mip bias of 1 to 2 (the light is smooth; about a half to three quarters of
-  the basis bytes a fragment fetches), skip a patch whose light is below a
-  quarter of a code value (dark scenes only), or, the largest, blend the eight
-  basis textures into one small texture whenever the picture's light changes
-  and read that (one read instead of eight a fragment, for a pass over a
-  1024-texel square of eight reads that is a fifth of the fragments').
+  between, and the picture's light: one read of the collapsed texture (below),
+  or eight of the basis textures with `FRAMEPLAYERX_PLACE_COLLAPSE=0`. Two reads
+  a fragment while a film plays with the collapse, nine without it, ten before
+  the colours were read one at a time.
+- **The collapsed light** (built, on by default, `FRAMEPLAYERX_PLACE_COLLAPSE=0`
+  turns it off). The picture's light on a baked place is
+  `strength * sum_N basis_N^2 * patch_rgb_N`: linear in the squared basis
+  values, so the eight textures can be summed once into one and a fragment reads
+  that (`env_collapse.wgsl` draws it, `fs_lit` in `env_baked.wgsl` reads it).
+  What it costs and when:
+  - It is drawn into an R11G11B10 float texture (4 bytes a texel) of the
+    loaded seat's set only (a seat change loads the new set and its own), one
+    small fullscreen draw for each level of its mip chain down to 16 texels,
+    each fetching the basis texture's level of the same size (`textureLoad`,
+    eight fetches a texel). The pack's mip levels hold the mean of the linear
+    light, so each level is the exact box average of the full size sum.
+  - It is as big as the basis textures (2048 for the Cinema), not smaller,
+    because the light is not smooth enough to halve: measured on lavapipe
+    against the eight reads on the real Cinema's three seats, four pictures
+    and two house levels at 1024x1024 an eye (`tests/collapse.rs`, which
+    prints the table), the two pictures are at least 54.4 dB PSNR apart at
+    full size (worst case a white picture from the back seat), 41.8 dB with
+    the texture one level down (a quarter of the texels) and 35.6 dB two down.
+    At 384x384 an eye one level down still reaches 47.8 dB, so the smaller
+    size only passes where the room is drawn small.
+    `FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT=1` or `2` draws the smaller texture
+    (one fetch of eight for four or sixteen times fewer texels) to try on the
+    headset. Half floats (RGBA16F) were 0.6 dB better and twice the bytes.
+  - It is drawn only when a weight (the eased patch colour times the Screen
+    light strength) has moved by more than 0.4% of itself (or 1/8192 in
+    linear light, for a weight near zero) since the last drawing, so a still
+    picture, a paused film and the house lights alone draw nothing, and the
+    error left is under half a code value of the light. The comparison is
+    against the weights last drawn, not last frame, so slow drift is caught
+    when it adds up. It is drawn afresh when the light comes back on, a pack is
+    loaded or the knob is turned on.
+  - A fragment's reads while a film plays go from nine (dark, eight basis) to
+    two (dark, light); the draw (about 5.6 million texel fetches of eight at
+    full size, with its mips) is made only on frames that need it.
+    `tests/overdraw.rs` prints both counts. The draw's time on the headset is
+    **not measured**: the PERF_AB cycle's second variant is the old path, so
+    the table says what it saved there. The draw falls in the frame's total,
+    not in the eye passes' time (it is recorded before them).
+- Cheaper reads, **not built** (each changes the picture or the pack, so each
+  waits for a headset number): read the colour textures at a mip bias, and skip
+  a patch whose light is below a quarter of a code value (dark scenes only).
 - `cargo test -p fp-render --test overdraw -- --nocapture` with
   `FRAMEPLAYERX_PLACES_DIR` pointing at a folder with `cinema-v2/` in it counts
   the fragment shader invocations of the place's draw from each seat with a
