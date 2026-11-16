@@ -942,7 +942,7 @@ mod tests {
         }
         let worst = out
             .iter()
-            .skip(0)
+            .step_by(2)
             .zip(out.iter().skip(2).step_by(2))
             .map(|(a, b)| (b - a).abs())
             .fold(0.0f32, f32::max);
