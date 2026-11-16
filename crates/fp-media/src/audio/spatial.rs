@@ -92,8 +92,7 @@ impl Acoustics {
     fn wet_max(self) -> f32 {
         match self {
             Acoustics::Dry => 0.0,
-            Acoustics::Room => 0.4,
-            Acoustics::Hall => 0.4,
+            Acoustics::Room | Acoustics::Hall => 0.4,
         }
     }
     /// Seconds between the sound and its first echo.
@@ -369,11 +368,11 @@ impl Reverb {
             self.pre_pos = (self.pre_pos + 1) % PRE_MAX;
             // What comes out of the lines, darkened.
             let mut v = [0.0f32; 8];
-            for i in 0..8 {
+            for (i, vi) in v.iter_mut().enumerate() {
                 let y = self.lines[i][self.heads[i]];
                 let d = (1.0 - self.damp_coef) * y + self.damp_coef * self.damp[i];
                 self.damp[i] = if d.abs() < TINY { 0.0 } else { d };
-                v[i] = self.damp[i] * self.gains[i];
+                *vi = self.damp[i] * self.gains[i];
             }
             // Where it is heard from: alternate lines to each ear.
             let (mut l, mut r) = (0.0, 0.0);
@@ -395,8 +394,8 @@ impl Reverb {
                 }
                 h *= 2;
             }
-            for i in 0..8 {
-                let s = v[i] * norm + input;
+            for (i, &vi) in v.iter().enumerate() {
+                let s = vi * norm + input;
                 self.lines[i][self.heads[i]] = if s.abs() < TINY { 0.0 } else { s };
                 self.heads[i] += 1;
                 if self.heads[i] == self.lines[i].len() {
@@ -944,7 +943,6 @@ mod tests {
         let worst = out
             .iter()
             .skip(0)
-            .step_by(2)
             .zip(out.iter().skip(2).step_by(2))
             .map(|(a, b)| (b - a).abs())
             .fold(0.0f32, f32::max);
