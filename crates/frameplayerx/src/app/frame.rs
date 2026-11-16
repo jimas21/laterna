@@ -1315,8 +1315,8 @@ mod tests {
     #[test]
     fn a_places_acoustics_reach_the_sound_renderer() {
         use fp_media::audio::spatial::Acoustics as S;
-        assert_eq!(sound_of(fp_render::env::Place::Cinema.acoustics()), S::Hall);
-        assert_eq!(sound_of(fp_render::env::Place::Studio.acoustics()), S::Dry);
+        assert_eq!(sound_of(Place::Cinema.acoustics()), S::Hall);
+        assert_eq!(sound_of(Place::Studio.acoustics()), S::Dry);
     }
 
     use super::*;
