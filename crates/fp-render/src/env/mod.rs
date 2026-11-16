@@ -76,6 +76,15 @@ impl Place {
         }
     }
 
+    /// How the place sounds: its pack's say, else a cinema is a large hall
+    /// and a sky has no walls to echo from.
+    pub fn acoustics(self) -> Acoustics {
+        self.layout().acoustics.unwrap_or(match self {
+            Place::Cinema => Acoustics::Hall,
+            Place::Studio => Acoustics::Dry,
+        })
+    }
+
     /// The seats and screen frame. Cheap: no meshes are built.
     ///
     /// A place with an installed pack (see [`pack`]) has the pack's seats and
@@ -182,6 +191,30 @@ pub struct ScreenFrame {
     pub curvature: f32,
 }
 
+/// How a place sounds: how much of the room the sound carries back to the
+/// viewer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Acoustics {
+    /// No echo.
+    Dry,
+    /// A small room.
+    Room,
+    /// A large hall.
+    Hall,
+}
+
+impl Acoustics {
+    /// The id a pack's manifest names it by.
+    pub fn from_id(id: &str) -> Option<Acoustics> {
+        match id {
+            "dry" => Some(Acoustics::Dry),
+            "room" => Some(Acoustics::Room),
+            "hall" => Some(Acoustics::Hall),
+            _ => None,
+        }
+    }
+}
+
 /// A place's seats and screen. Cheap to make.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
@@ -196,6 +229,9 @@ pub struct Layout {
     /// Height of the floor, metres. A Room: the stage floor in room space
     /// (0). A Sky: below the eye, in anchor space.
     pub floor_y: f32,
+    /// How the place sounds, when a pack says; the place's own otherwise
+    /// (see [`Place::acoustics`]).
+    pub acoustics: Option<Acoustics>,
 }
 
 impl Layout {

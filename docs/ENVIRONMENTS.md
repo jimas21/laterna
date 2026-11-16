@@ -235,6 +235,10 @@ other packs are copied by hand.
   `cinema` or `cinema-v2` (any number) replaces the Cinema; the highest number
   wins. Without a pack nothing changes. The app reads the folder once, at
   start.
+- **How it sounds.** An optional `"acoustics"` in the manifest, `"dry"`,
+  `"room"` or `"hall"`, sets the echo that the video's sound carries in this
+  place (see Sound from the screen in the user guide). Left out, the place's
+  own: the Cinema is a hall, a sky has none. Anything else is refused.
 - **What is in it.** A manifest (`manifest.json`: the id, the screen, the
   seats), a mesh (`mesh.bin`), and PNG textures that are all the same size:
   the room with the house lights up, the room with them off, and eight

@@ -11,7 +11,12 @@
 //! The renderer drives presentation by calling [`Player::current_frame`] once
 //! per display frame; that call also resolves buffering and end of stream.
 
-use crate::audio::{self, ambisonic, output, resample::Resampler, stretch::Stretch};
+use crate::audio::{
+    self, ambisonic, output,
+    resample::Resampler,
+    spatial::{Layout as SoundLayout, SpatialParams, Spatializer},
+    stretch::Stretch,
+};
 use crate::clock::Clock;
 use crate::decode::{Decoder, Frame, HwDecode, Packet};
 use crate::frame::{FrameConverter, VideoFrame};
@@ -255,6 +260,9 @@ struct Shared {
     cues: Mutex<Vec<Cue>>,
     external_cues: Mutex<Vec<Cue>>,
     head: Mutex<ambisonic::Quat>,
+    /// Where the screen is and how the room sounds, when the sound is to
+    /// come from the screen; none keeps it in the head (stereo as mixed).
+    screen_sound: Mutex<Option<SpatialParams>>,
     volume: Mutex<f32>,
     /// The audio delay in milliseconds.
     audio_delay_ms: AtomicI32,
@@ -363,6 +371,7 @@ impl Player {
             cues: Mutex::new(Vec::new()),
             external_cues: Mutex::new(Vec::new()),
             head: Mutex::new(ambisonic::IDENTITY),
+            screen_sound: Mutex::new(None),
             volume: Mutex::new(config.volume),
             audio_delay_ms: AtomicI32::new(audio_sync::clamp_delay_ms(config.audio_delay_ms)),
             speed: Mutex::new(1.0),
@@ -438,9 +447,13 @@ impl Player {
                 .filter(|s| s.ambisonic && s.channels == 4)
                 .map(|s| s.index)
                 .collect();
+            let channels: Vec<(usize, u32)> = info
+                .audio_streams()
+                .map(|s| (s.index, s.channels))
+                .collect();
             let backend = config.audio.clone();
             threads.push(spawn("fp-audio", move || {
-                audio_thread(sh, audio_decoders, ambi, backend);
+                audio_thread(sh, audio_decoders, ambi, channels, backend);
             }));
         } else {
             shared.has_audio.store(false, Ordering::Release);
@@ -645,6 +658,12 @@ impl Player {
     /// Head orientation for ambisonic audio (OpenXR quaternion x, y, z, w).
     pub fn set_head_orientation(&self, q: [f32; 4]) {
         *lock(&self.shared.head) = q;
+    }
+
+    /// Puts the sound where the screen is (`Some`), so it stays there as the
+    /// head turns, or back in the head (`None`). Flat video only.
+    pub fn set_screen_sound(&self, params: Option<SpatialParams>) {
+        *lock(&self.shared.screen_sound) = params;
     }
 
     pub fn stats(&self) -> Stats {
@@ -1193,14 +1212,32 @@ fn audio_thread(
     sh: Arc<Shared>,
     mut decoders: Vec<(usize, Decoder)>,
     ambisonic_streams: Vec<usize>,
+    stream_channels: Vec<(usize, u32)>,
     backend: output::Backend,
 ) {
     let mut sink = output::open(&backend, 2);
     sh.stats().audio_sink = sink.name();
     let mut serial = 0u64;
     let mut current = sh.ctl().audio_stream;
-    let mut resampler =
-        Resampler::new(current.filter(|i| ambisonic_streams.contains(i)).map(|_| 4));
+    let channels_of = |i: Option<usize>, spatial: bool| -> u32 {
+        let Some(i) = i else { return 2 };
+        if ambisonic_streams.contains(&i) {
+            return 4;
+        }
+        let n = stream_channels
+            .iter()
+            .find(|(s, _)| *s == i)
+            .map_or(2, |(_, n)| *n);
+        // A layout that is placed in the room is kept as it is; the rest
+        // (and everything when the sound is in the head) is mixed to stereo.
+        if spatial && SoundLayout::of(n as usize).is_some() {
+            n
+        } else {
+            2
+        }
+    };
+    let mut resampler = Resampler::new(Some(channels_of(current, false)));
+    let mut spatializer = Spatializer::new();
     let mut stretch = Stretch::new(2, audio::RATE);
     let mut frame = Frame::new();
     let mut buf: Vec<f32> = Vec::new();
@@ -1216,12 +1253,19 @@ fn audio_thread(
             if c.audio_changed {
                 c.audio_changed = false;
                 current = c.audio_stream;
-                resampler =
-                    Resampler::new(current.filter(|i| ambisonic_streams.contains(i)).map(|_| 4));
+                resampler = Resampler::new(Some(channels_of(current, false)));
                 if let Some((_, d)) = decoders.iter().find(|(i, _)| Some(*i) == current) {
                     sh.stats().audio_decoder = d.name.clone();
                 }
             }
+        }
+        // The sound in the head, or on the screen: the source's channels are
+        // kept for the room, or mixed down, as it changes.
+        let screen_sound = *lock(&sh.screen_sound);
+        let want = channels_of(current, screen_sound.is_some());
+        if want != resampler.out_channels {
+            resampler = Resampler::new(Some(want));
+            spatializer.reset();
         }
         let paused = sh.ctl().paused;
         if paused || sh.buffering.load(Ordering::Acquire) {
@@ -1264,6 +1308,7 @@ fn audio_thread(
             serial = pkt_serial;
             dec.flush();
             resampler.reset();
+            spatializer.reset();
             stretch.reset();
             sink.flush();
             // The queue is empty again, so the delay has to be made again.
@@ -1291,6 +1336,19 @@ fn audio_thread(
             let mut out = if resampler.out_channels == 4 {
                 let head = *lock(&sh.head);
                 ambisonic::render_stereo(&buf, head)
+            } else if let Some(params) =
+                screen_sound.filter(|_| SoundLayout::of(resampler.out_channels as usize).is_some())
+            {
+                let head = *lock(&sh.head);
+                let mut out = Vec::with_capacity(buf.len() / resampler.out_channels as usize * 2);
+                spatializer.process(
+                    &buf,
+                    resampler.out_channels as usize,
+                    head,
+                    &params,
+                    &mut out,
+                );
+                out
             } else {
                 std::mem::take(&mut buf)
             };

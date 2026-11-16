@@ -35,6 +35,7 @@ pub fn layout() -> Layout {
         default_seat: 0,
         screen: None,
         floor_y: FLOOR_Y,
+        acoustics: None,
     }
 }
 

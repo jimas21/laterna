@@ -8,7 +8,7 @@ pub type Quat = [f32; 4];
 pub const IDENTITY: Quat = [0.0, 0.0, 0.0, 1.0];
 
 /// Rotates vector `v` by the inverse of unit quaternion `q`.
-fn rotate_inverse(q: Quat, v: [f32; 3]) -> [f32; 3] {
+pub(crate) fn rotate_inverse(q: Quat, v: [f32; 3]) -> [f32; 3] {
     let (qx, qy, qz, qw) = (-q[0], -q[1], -q[2], q[3]);
     // v' = v + 2w(q×v) + 2 q×(q×v)
     let t = [

@@ -3,6 +3,7 @@
 pub mod ambisonic;
 pub mod output;
 pub mod resample;
+pub mod spatial;
 pub mod stretch;
 
 /// Output sample rate for every device.

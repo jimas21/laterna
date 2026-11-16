@@ -870,6 +870,31 @@ impl App {
                 let rel = anchor_rot.inverse() * rot;
                 p.player.set_head_orientation(rel.to_array());
             }
+            // The sound comes from where the screen is: in a room its
+            // screen, else the picture's own, whatever the mode.
+            let sound = (self.settings.sound_from_screen
+                && p.format.projection == Projection::Flat)
+                .then(|| {
+                    let shape = ScreenShape::of(&video, self.last_frame_size);
+                    let to_anchor = anchor.inverse() * video.screen_pose;
+                    let at = |u: f32| shape.point(u, 0.0);
+                    let at = |u: f32| to_anchor.transform_point3(at(u)).to_array();
+                    let acoustics = match in_place.filter(|_| !passthrough) {
+                        Some(place) => sound_of(place.acoustics()),
+                        None => fp_media::audio::spatial::Acoustics::Dry,
+                    };
+                    fp_media::audio::spatial::SpatialParams {
+                        screen: fp_media::audio::spatial::ScreenAudio {
+                            left: at(-1.0),
+                            centre: at(0.0),
+                            right: at(1.0),
+                        },
+                        acoustics,
+                        echo: self.settings.room_echo,
+                        widen: STEREO_WIDEN,
+                    }
+                });
+            p.player.set_screen_sound(sound);
             // In a room the subtitles hang on the screen, not at the distance
             // set for a screen of your own.
             self.subtitles(
@@ -1270,8 +1295,30 @@ fn perf_video(
     })
 }
 
+/// How much wider than mixed a stereo soundtrack is set between the screen's
+/// edges: a gentle widening of the front only.
+const STEREO_WIDEN: f32 = 1.2;
+
+/// A place's acoustics as the sound renderer has them.
+fn sound_of(a: fp_render::env::Acoustics) -> fp_media::audio::spatial::Acoustics {
+    use fp_media::audio::spatial::Acoustics as S;
+    use fp_render::env::Acoustics as E;
+    match a {
+        E::Dry => S::Dry,
+        E::Room => S::Room,
+        E::Hall => S::Hall,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_places_acoustics_reach_the_sound_renderer() {
+        use fp_media::audio::spatial::Acoustics as S;
+        assert_eq!(sound_of(fp_render::env::Place::Cinema.acoustics()), S::Hall);
+        assert_eq!(sound_of(fp_render::env::Place::Studio.acoustics()), S::Dry);
+    }
+
     use super::*;
 
     #[test]

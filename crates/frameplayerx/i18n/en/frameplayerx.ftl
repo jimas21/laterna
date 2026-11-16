@@ -155,6 +155,10 @@ settings-sound-heading = Sound
 settings-volume = Volume
 settings-audio-delay = Audio delay
 settings-audio-delay-desc = Plays the sound later (+) or earlier (-) than the picture. Use it when wireless earbuds lag behind.
+settings-sound-screen = Sound from the screen
+settings-sound-screen-desc = The sound of a flat video comes from where the screen is and stays there as you turn your head. Stereo is placed at the screen's edges, and 5.1 and 7.1 surround speakers beside and behind you. Turn it off to keep the sound in your head, as the file mixed it.
+settings-room-echo = Room echo
+settings-room-echo-desc = How much of a place's own sound, like a cinema's large hall, comes back to you. Plain video and passthrough have none.
 settings-audio-device = Audio device
 # "default" is the device's name: keep it as it is.
 settings-audio-device-desc = "default" follows the system output.

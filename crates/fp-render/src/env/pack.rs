@@ -27,7 +27,9 @@
 //! (any number) replaces the Cinema. Without a pack nothing changes.
 
 use super::ktx2::{self, Encoding};
-use super::{Layout, Lighting, Place, PlaceData, PlaceKind, ScreenFrame, Seat, SeatName, Sky};
+use super::{
+    Acoustics, Layout, Lighting, Place, PlaceData, PlaceKind, ScreenFrame, Seat, SeatName, Sky,
+};
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -166,6 +168,10 @@ pub struct Manifest {
     /// Reserved: a sky behind the room. Only none is understood.
     #[serde(default)]
     pub sky: Option<serde_json::Value>,
+    /// How the place sounds: "dry", "room" or "hall". Left out, the place's
+    /// own (a cinema is a hall).
+    #[serde(default)]
+    pub acoustics: Option<String>,
 }
 
 /// A file name that stays inside the pack folder.
@@ -274,6 +280,11 @@ impl Manifest {
                 ));
             }
         }
+        if let Some(a) = &self.acoustics
+            && Acoustics::from_id(a).is_none()
+        {
+            return bad(format!("acoustics {a:?} is not dry, room or hall"));
+        }
         let seat_gains = self.seat_sets.values().filter_map(|s| s.basis_gain);
         for gain in std::iter::once(self.basis_gain).chain(seat_gains) {
             if !(gain.is_finite() && (0.0..=1000.0).contains(&gain)) {
@@ -304,6 +315,7 @@ impl Manifest {
                 curvature: 0.0,
             }),
             floor_y: 0.0,
+            acoustics: self.acoustics.as_deref().and_then(Acoustics::from_id),
         }
     }
 
@@ -2380,6 +2392,22 @@ mod tests {
         let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         edit(&mut json);
         Manifest::parse(&serde_json::to_vec(&json).unwrap())
+    }
+
+    #[test]
+    fn a_pack_names_how_it_sounds_or_leaves_it_to_the_place() {
+        let dir = fixture3("f3sound");
+        let none = edited3(&dir, |_| {}).unwrap();
+        assert_eq!(none.layout().acoustics, None);
+        for (id, want) in [
+            ("dry", Acoustics::Dry),
+            ("room", Acoustics::Room),
+            ("hall", Acoustics::Hall),
+        ] {
+            let m = edited3(&dir, |j| j["acoustics"] = id.into()).unwrap();
+            assert_eq!(m.layout().acoustics, Some(want));
+        }
+        assert!(edited3(&dir, |j| j["acoustics"] = "cathedral".into()).is_err());
     }
 
     #[test]

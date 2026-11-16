@@ -648,6 +648,24 @@ point at it and push the thumbstick left or right.
 Each push is one step, and holding repeats. **Save for this video** keeps
 the settings for that file.
 
+### Sound from the screen
+
+In a flat video the sound comes from where the screen is, and stays there
+when you turn your head, in the plain view, in passthrough and in a place.
+Stereo is placed at the screen's left and right edges (a curved screen
+included), a centre channel in the middle of it, and the 5.1 and 7.1
+surround speakers beside and behind you at the standard angles from the
+screen's direction. The bass channel has no direction. Stereo is widened a
+little between the screen's edges; surround sound is never made up from it.
+Mono comes from the middle of the screen.
+
+A place also has its own echo: the Cinema sounds like a large hall, at a low
+level. Plain video and passthrough have none. **Settings > Sound** has
+**Sound from the screen** (on by default; turn it off to keep the sound in
+your head, as the file mixed it) and **Room echo** (half by default; 0 turns
+the echo off). Spatial (ambisonic) audio and 180/360 degree videos are not
+changed.
+
 ### Audio delay
 
 If the sound runs behind the picture (wireless earbuds often do), or ahead

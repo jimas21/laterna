@@ -746,6 +746,23 @@ fn sound(ui: &mut egui::Ui, v: &mut View) {
             0,
         );
         s.audio_delay_ms = fp_core::audio_sync::clamp_delay_ms(delay.round() as i32);
+        r.switch(
+            tr!("settings-sound-screen"),
+            Some(tr!("settings-sound-screen-desc")),
+            &mut s.sound_from_screen,
+        );
+        let mut echo = s.room_echo * 100.0;
+        if r.slider(
+            tr!("settings-room-echo"),
+            Some(tr!("settings-room-echo-desc")),
+            &mut echo,
+            0.0..=100.0,
+            crate::settings::ROOM_ECHO_START * 100.0,
+            " %",
+            0,
+        ) {
+            s.room_echo = (echo / 100.0).clamp(0.0, 1.0);
+        }
         r.row(
             tr!("settings-audio-device"),
             Some(tr!("settings-audio-device-desc")),

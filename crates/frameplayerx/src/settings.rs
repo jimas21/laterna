@@ -113,6 +113,9 @@ pub const HOUSE_PLAYING_START: f32 = 0.04;
 /// [`SCREEN_LIGHT_TOP`] times that.
 pub const SCREEN_LIGHT_START: f32 = 0.5;
 
+/// How much room echo a place's sound has until it is changed.
+pub const ROOM_ECHO_START: f32 = 0.5;
+
 /// What the top of the Screen light slider asks of the renderer, as a
 /// multiple of the places' own strength: two stops of headroom, for a viewer
 /// who wants the room to follow the picture more than a real cinema's does.
@@ -260,6 +263,12 @@ pub struct Settings {
     /// [`screen_light_gain`]. A file from when this was a switch has it off
     /// as 0 (see [`Settings::load`]).
     pub screen_light_level: f32,
+    /// Flat video's sound comes from the screen and stays there as the head
+    /// turns (on), or stays in the head (off).
+    pub sound_from_screen: bool,
+    /// How much echo a place's walls give the sound, 0 to 1; a place without
+    /// walls (and plain video, and passthrough) has none whatever this is.
+    pub room_echo: f32,
     /// The version that ran last, so an update can show what is new once.
     /// Empty on a first run; [`EARLIER_VERSION`] for a file saved before
     /// this was kept (see [`Settings::load`]).
@@ -401,6 +410,8 @@ impl Default for Settings {
             places_download_ok: false,
             house_lights_playing: HOUSE_PLAYING_START,
             screen_light_level: SCREEN_LIGHT_START,
+            sound_from_screen: true,
+            room_echo: ROOM_ECHO_START,
             last_version: String::new(),
         }
     }
@@ -483,6 +494,11 @@ impl Settings {
                     {
                         s.last_version = EARLIER_VERSION.to_string();
                     }
+                    s.room_echo = if s.room_echo.is_finite() {
+                        s.room_echo.clamp(0.0, 1.0)
+                    } else {
+                        ROOM_ECHO_START
+                    };
                     s.screen_light_level = if s.screen_light_level.is_finite() {
                         s.screen_light_level.clamp(0.0, 1.0)
                     } else {
@@ -695,6 +711,27 @@ mod tests {
         assert_eq!(p.environment, "moon");
         let shown = crate::app::places::active_place(&p.environment, false, true, true);
         assert_eq!(shown, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_sound_settings_start_on_and_modest_and_are_kept_in_range() {
+        let s = Settings::default();
+        assert!(s.sound_from_screen);
+        assert_eq!(s.room_echo, ROOM_ECHO_START);
+        let name = format!("fp-sound-{}", std::process::id());
+        let dir = std::env::temp_dir().join(name);
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file from before has them at the defaults.
+        std::fs::write(&path, r#"{"volume": 0.5}"#).unwrap();
+        let p = Settings::load(&path);
+        assert!(p.sound_from_screen);
+        assert_eq!(p.room_echo, ROOM_ECHO_START);
+        std::fs::write(&path, r#"{"sound_from_screen": false, "room_echo": 7.0}"#).unwrap();
+        let p = Settings::load(&path);
+        assert!(!p.sound_from_screen);
+        assert_eq!(p.room_echo, 1.0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

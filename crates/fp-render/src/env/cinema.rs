@@ -143,6 +143,7 @@ pub fn layout() -> Layout {
             curvature: 0.0,
         }),
         floor_y: 0.0,
+        acoustics: None,
     }
 }
 
