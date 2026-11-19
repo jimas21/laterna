@@ -270,6 +270,9 @@ pub(crate) struct EnvPass {
     /// The weights the collapsed light holds, once it does, and whether the
     /// next frame has to draw it again.
     collapsed: Option<Weights>,
+    /// The weights the next collapse draw is for; they become `collapsed`
+    /// only once that draw was recorded.
+    collapse_pending: Option<Weights>,
     collapse_due: bool,
     /// Collapses recorded since the pack was loaded.
     collapse_runs: u64,
@@ -357,6 +360,7 @@ impl EnvPass {
             collapse: true,
             collapse_shift: env_baked::DEFAULT_COLLAPSE_SHIFT,
             collapsed: None,
+            collapse_pending: None,
             collapse_due: false,
             collapse_runs: 0,
             basis: true,
@@ -655,6 +659,7 @@ impl EnvPass {
         else {
             // Not read: it will be drawn afresh when it is.
             self.collapsed = None;
+            self.collapse_pending = None;
             self.collapse_due = false;
             return;
         };
@@ -663,7 +668,7 @@ impl EnvPass {
             .as_ref()
             .is_none_or(|old| weights_moved(old, &new))
         {
-            self.collapsed = Some(new);
+            self.collapse_pending = Some(new);
             self.collapse_due = true;
         }
     }
@@ -682,6 +687,13 @@ impl EnvPass {
             .is_some_and(|b| {
                 b.record_collapse(gpu, cmd, slot, self.collapse_pipe, self.baked_layout)
             });
+        if drawn {
+            // Only a draw that was recorded makes these the light on show.
+            self.collapsed = self.collapse_pending.take();
+        } else {
+            // Not drawn: it is still owed, so ask again next frame.
+            self.collapse_due = self.collapse_pending.is_some();
+        }
         self.collapse_runs += u64::from(drawn);
         drawn
     }
@@ -868,6 +880,7 @@ impl EnvPass {
         self.ordered_for = None;
         // The new pack's light texture is black until it is drawn.
         self.collapsed = None;
+        self.collapse_pending = None;
         self.collapse_due = false;
         self.collapse_runs = 0;
         if let Some(pack) = pack.filter(|_| self.sort_work) {

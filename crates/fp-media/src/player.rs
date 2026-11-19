@@ -1219,7 +1219,7 @@ fn audio_thread(
     sh.stats().audio_sink = sink.name();
     let mut serial = 0u64;
     let mut current = sh.ctl().audio_stream;
-    let channels_of = |i: Option<usize>, spatial: bool| -> u32 {
+    let channels_of = |i: Option<usize>| -> u32 {
         let Some(i) = i else { return 2 };
         if ambisonic_streams.contains(&i) {
             return 4;
@@ -1228,20 +1228,22 @@ fn audio_thread(
             .iter()
             .find(|(s, _)| *s == i)
             .map_or(2, |(_, n)| *n);
-        // A layout that is placed in the room is kept as it is; the rest
-        // (and everything when the sound is in the head) is mixed to stereo.
-        if spatial && SoundLayout::of(n as usize).is_some() {
+        // A layout that is placed in the room is kept as it is, whether the
+        // sound is on the screen or in the head (so changing that never
+        // rebuilds the resampler); the rest is mixed to stereo.
+        if SoundLayout::of(n as usize).is_some() {
             n
         } else {
             2
         }
     };
-    let mut resampler = Resampler::new(Some(channels_of(current, false)));
+    let mut resampler = Resampler::new(Some(channels_of(current)));
     let mut spatializer = Spatializer::new();
     let mut stretch = Stretch::new(2, audio::RATE);
     let mut frame = Frame::new();
     let mut buf: Vec<f32> = Vec::new();
     let mut was_paused = false;
+    let mut was_screen_sound = false;
     let mut delay = DelayState::default();
     if let Some((_, d)) = decoders.iter().find(|(i, _)| Some(*i) == current) {
         sh.stats().audio_decoder = d.name.clone();
@@ -1253,7 +1255,7 @@ fn audio_thread(
             if c.audio_changed {
                 c.audio_changed = false;
                 current = c.audio_stream;
-                resampler = Resampler::new(Some(channels_of(current, false)));
+                resampler = Resampler::new(Some(channels_of(current)));
                 if let Some((_, d)) = decoders.iter().find(|(i, _)| Some(*i) == current) {
                     sh.stats().audio_decoder = d.name.clone();
                 }
@@ -1262,9 +1264,8 @@ fn audio_thread(
         // The sound in the head, or on the screen: the source's channels are
         // kept for the room, or mixed down, as it changes.
         let screen_sound = *lock(&sh.screen_sound);
-        let want = channels_of(current, screen_sound.is_some());
-        if want != resampler.out_channels {
-            resampler = Resampler::new(Some(want));
+        if screen_sound.is_some() != was_screen_sound {
+            was_screen_sound = screen_sound.is_some();
             spatializer.reset();
         }
         let paused = sh.ctl().paused;
@@ -1348,6 +1349,13 @@ fn audio_thread(
                     &params,
                     &mut out,
                 );
+                out
+            } else if let Some(layout) = SoundLayout::of(resampler.out_channels as usize)
+                .filter(|l| *l != SoundLayout::Stereo)
+            {
+                // Kept for the room but heard in the head: mixed down here.
+                let mut out = Vec::with_capacity(buf.len() / layout.channels() * 2);
+                audio::spatial::downmix_stereo(&buf, layout, &mut out);
                 out
             } else {
                 std::mem::take(&mut buf)

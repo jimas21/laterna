@@ -871,7 +871,7 @@ picture. Play/pause and seeking are under either thumb.
 
 To get to SteamVR's dashboard without quitting, press **Dashboard** (four
 squares) at the top right of the browse panel, beside Quit (or beside Back to
-video, when a video is open). FramePlayerX keeps running and the video keeps
+video, when a video is open). Laterna keeps running and the video keeps
 playing under the dashboard; close the dashboard and you are back. The button
 only shows in SteamVR, and pressing it again within two seconds does nothing.
 
@@ -1120,7 +1120,7 @@ seek bar shows the script's intensity.
 
 ## Earbuds
 
-**Settings › Sound** has an **Earbuds** group with one button, **Install Tragus**. Tragus shows earbud battery and noise control in Steam's menu, for AirPods and other earbuds. FramePlayerX downloads a pinned installer, checks it against a built-in checksum and runs it; the installer checks the signed packages it fetches. When it says Tragus is installed, restart the headset once to see it in Steam's menu. Tragus updates itself from then on. **Reinstall Tragus** repeats the install.
+**Settings › Sound** has an **Earbuds** group with one button, **Install Tragus**. Tragus shows earbud battery and noise control in Steam's menu, for AirPods and other earbuds. Laterna downloads a pinned installer, checks it against a built-in checksum and runs it; the installer checks the signed packages it fetches. When it says Tragus is installed, restart the headset once to see it in Steam's menu. Tragus updates itself from then on. **Reinstall Tragus** repeats the install.
 
 ## Remote control
 

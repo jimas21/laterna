@@ -290,8 +290,8 @@ impl Voice {
     }
 }
 
-/// A feedback delay network: eight lines mixed through a Hadamard matrix.
-struct Reverb {
+/// The delay lines of one echo, with their own state.
+struct Net {
     lines: Vec<Vec<f32>>,
     heads: [usize; 8],
     gains: [f32; 8],
@@ -300,6 +300,16 @@ struct Reverb {
     pre: Vec<f32>,
     pre_pos: usize,
     pre_len: usize,
+}
+
+/// A feedback delay network: eight lines mixed through a Hadamard matrix.
+/// When the acoustics change the old lines are not cut off: they keep
+/// sounding, fading out, while the new ones start from silence.
+struct Reverb {
+    net: Net,
+    /// The echo that is fading out, its gain when it began and the samples
+    /// of fade left.
+    tail: Option<(Net, f32, usize)>,
     kind: Acoustics,
     wet: f32,
 }
@@ -307,10 +317,12 @@ struct Reverb {
 /// Delay line lengths for a hall at 48 kHz: mutually prime, 21 to 64 ms.
 const LINES: [usize; 8] = [1031, 1327, 1523, 1801, 2111, 2437, 2713, 3079];
 const PRE_MAX: usize = 2048;
+/// How long an echo that is left behind takes to fade out: about 150 ms.
+const TAIL_FADE: usize = (0.15 * FS) as usize;
 
-impl Reverb {
-    fn new() -> Reverb {
-        Reverb {
+impl Net {
+    fn new() -> Net {
+        Net {
             lines: Vec::new(),
             heads: [0; 8],
             gains: [0.0; 8],
@@ -319,48 +331,38 @@ impl Reverb {
             pre: vec![0.0; PRE_MAX],
             pre_pos: 0,
             pre_len: 0,
-            kind: Acoustics::Dry,
-            wet: 0.0,
         }
     }
 
-    /// Sets up for `kind`, starting from silence when it changes.
-    fn configure(&mut self, kind: Acoustics) {
-        if kind == self.kind {
-            return;
-        }
-        self.kind = kind;
-        self.heads = [0; 8];
-        self.damp = [0.0; 8];
-        self.pre.iter_mut().for_each(|s| *s = 0.0);
-        self.pre_len = ((kind.predelay() * FS) as usize).min(PRE_MAX - 1);
+    fn of(kind: Acoustics) -> Net {
+        let mut n = Net::new();
+        n.pre_len = ((kind.predelay() * FS) as usize).min(PRE_MAX - 1);
         if kind == Acoustics::Dry {
-            self.lines.clear();
-            return;
+            return n;
         }
-        self.lines = LINES
+        n.lines = LINES
             .iter()
             .map(|&n| vec![0.0; ((n as f32 * kind.size()) as usize | 1).max(31)])
             .collect();
-        for (i, l) in self.lines.iter().enumerate() {
+        for (i, l) in n.lines.iter().enumerate() {
             // 60 dB down after rt60 seconds.
-            self.gains[i] = 10f32.powf(-3.0 * l.len() as f32 / (FS * kind.rt60()));
+            n.gains[i] = 10f32.powf(-3.0 * l.len() as f32 / (FS * kind.rt60()));
         }
         // High frequencies die faster, as in a room full of seats.
-        self.damp_coef = (-std::f32::consts::TAU * 4_500.0 / FS).exp();
+        n.damp_coef = (-std::f32::consts::TAU * 4_500.0 / FS).exp();
+        n
     }
 
-    /// Adds the echo of `send` (one value per frame) to `out` (stereo).
-    fn process(&mut self, send: &[f32], wet: f32, out: &mut [f32]) {
+    /// Adds the echo of `send` (one value per frame, none for silence) to
+    /// `out` (stereo), its gain going from `w` by `step` a frame.
+    fn run(&mut self, send: Option<&[f32]>, frames: usize, mut w: f32, step: f32, out: &mut [f32]) {
         if self.lines.is_empty() {
             return;
         }
-        let from = self.wet;
-        let step = (wet - from) / send.len().max(1) as f32;
-        let mut w = from;
         let norm = 1.0 / 8f32.sqrt();
-        for (n, &x) in send.iter().enumerate() {
+        for n in 0..frames {
             w += step;
+            let x = send.map_or(0.0, |s| s[n]);
             // Pre-delay.
             self.pre[self.pre_pos] = x;
             let read = (self.pre_pos + PRE_MAX - self.pre_len) % PRE_MAX;
@@ -403,6 +405,59 @@ impl Reverb {
                 }
             }
         }
+    }
+}
+
+impl Reverb {
+    fn new() -> Reverb {
+        Reverb {
+            net: Net::new(),
+            tail: None,
+            kind: Acoustics::Dry,
+            wet: 0.0,
+        }
+    }
+
+    /// Whether anything is left to run: an echo on, or one fading out.
+    fn active(&self) -> bool {
+        self.wet > 0.0 || self.tail.is_some()
+    }
+
+    /// Sets up for `kind`. When it changes the old echo fades out over
+    /// about 150 ms, and the new one starts from silence and from no gain.
+    fn configure(&mut self, kind: Acoustics) {
+        if kind == self.kind {
+            return;
+        }
+        let old = std::mem::replace(&mut self.net, Net::of(kind));
+        if !old.lines.is_empty() && self.wet > 0.0 {
+            self.tail = Some((old, self.wet, TAIL_FADE));
+        }
+        self.kind = kind;
+        // Dry has no echo to be left at some gain, and a new echo comes up
+        // from nothing.
+        self.wet = 0.0;
+    }
+
+    /// Adds the echo of `send` (one value per frame) to `out` (stereo).
+    fn process(&mut self, send: &[f32], wet: f32, out: &mut [f32]) {
+        let frames = out.len() / 2;
+        if let Some((net, w0, left)) = self.tail.as_mut() {
+            let n = frames.min(*left);
+            let step = -*w0 / TAIL_FADE as f32;
+            let start = *w0 * *left as f32 / TAIL_FADE as f32;
+            net.run(None, n, start, step, out);
+            *left -= n;
+            if *left == 0 {
+                self.tail = None;
+            }
+        }
+        if self.net.lines.is_empty() {
+            self.wet = 0.0;
+            return;
+        }
+        let step = (wet - self.wet) / send.len().max(1) as f32;
+        self.net.run(Some(send), send.len(), self.wet, step, out);
         self.wet = wet;
     }
 }
@@ -480,7 +535,7 @@ impl Spatializer {
         let places = places(layout, &params.screen);
         let wet = params.acoustics.wet_max() * params.echo.clamp(0.0, 1.0);
         self.reverb.configure(params.acoustics);
-        let reverb_on = wet > 0.0 || self.reverb.wet > 0.0;
+        let reverb_on = wet > 0.0 || self.reverb.active();
         self.send.clear();
         if reverb_on {
             self.send.resize(frames, 0.0);
@@ -548,6 +603,49 @@ impl Spatializer {
                 *s = 0.0;
             }
         }
+    }
+}
+
+/// Mixes `input` (interleaved, `layout`'s channels) down to interleaved
+/// stereo appended to `out`, for the sound in the head: the centre and the
+/// surrounds at -3 dB, the bass channel left out, and the whole scaled so the
+/// loudest side cannot clip (what the resampler's own mix-down does).
+pub fn downmix_stereo(input: &[f32], layout: Layout, out: &mut Vec<f32>) {
+    const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let n = layout.channels();
+    // (left, right) weight of each channel.
+    let w: Vec<(f32, f32)> = match layout {
+        Layout::Mono => vec![(1.0, 1.0)],
+        Layout::Stereo => vec![(1.0, 0.0), (0.0, 1.0)],
+        Layout::Surround51 => vec![
+            (1.0, 0.0),
+            (0.0, 1.0),
+            (H, H),
+            (0.0, 0.0),
+            (H, 0.0),
+            (0.0, H),
+        ],
+        Layout::Surround71 => vec![
+            (1.0, 0.0),
+            (0.0, 1.0),
+            (H, H),
+            (0.0, 0.0),
+            (H, 0.0),
+            (0.0, H),
+            (H, 0.0),
+            (0.0, H),
+        ],
+    };
+    let sum = w.iter().map(|c| c.0).sum::<f32>().max(1.0);
+    for frame in input.chunks_exact(n) {
+        let (mut l, mut r) = (0.0, 0.0);
+        for (x, c) in frame.iter().zip(&w) {
+            let x = clean(*x);
+            l += x * c.0;
+            r += x * c.1;
+        }
+        out.push(l / sum);
+        out.push(r / sum);
     }
 }
 
@@ -919,6 +1017,7 @@ mod tests {
         );
         assert!(
             s.reverb
+                .net
                 .lines
                 .iter()
                 .all(|l| l.iter().all(|z| !z.is_subnormal()))
@@ -969,5 +1068,87 @@ mod tests {
         let used = start.elapsed().as_secs_f64();
         let limit = if cfg!(debug_assertions) { 0.5 } else { 0.05 };
         assert!(used < limit, "{used} s for a second of 7.1");
+    }
+
+    fn hall() -> SpatialParams {
+        SpatialParams {
+            acoustics: Acoustics::Hall,
+            echo: 1.0,
+            ..params()
+        }
+    }
+
+    #[test]
+    fn going_dry_resets_the_echo_and_stops_the_work() {
+        let mut s = Spatializer::new();
+        let mut out = Vec::new();
+        let mut n = Noise(7);
+        let burst: Vec<f32> = (0..2048).map(|_| n.next() * 0.5).collect();
+        s.process(&burst, 2, IDENTITY, &hall(), &mut out);
+        assert!(s.reverb.wet > 0.0);
+        out.clear();
+        s.process(&burst, 2, IDENTITY, &params(), &mut out);
+        assert_eq!(s.reverb.wet, 0.0);
+        // The old echo fades out in 150 ms and then nothing is left to run.
+        for _ in 0..20 {
+            out.clear();
+            s.process(&vec![0.0; 2 * 1024], 2, IDENTITY, &params(), &mut out);
+        }
+        assert!(!s.reverb.active());
+        // A hall after that comes up from nothing, not from the old gain.
+        out.clear();
+        s.process(&burst, 2, IDENTITY, &hall(), &mut out);
+        assert!(s.reverb.wet > 0.0);
+    }
+
+    #[test]
+    fn leaving_a_hall_fades_its_echo_out_and_does_not_cut_it() {
+        let mut s = Spatializer::new();
+        let mut out = Vec::new();
+        let mut n = Noise(3);
+        let burst: Vec<f32> = (0..8192).map(|_| n.next() * 0.5).collect();
+        s.process(&burst, 2, IDENTITY, &hall(), &mut out);
+        out.clear();
+        let silence = vec![0.0; 2 * 512];
+        s.process(&silence, 2, IDENTITY, &hall(), &mut out);
+        let before = out.iter().map(|v| v.abs()).fold(0.0, f32::max);
+        assert!(before > 0.0, "the hall has an echo to lose");
+        out.clear();
+        s.process(&silence, 2, IDENTITY, &params(), &mut out);
+        let first = out[..64].iter().map(|v| v.abs()).fold(0.0, f32::max);
+        let last = out[out.len() - 64..]
+            .iter()
+            .map(|v| v.abs())
+            .fold(0.0, f32::max);
+        assert!(first > 0.0, "the echo goes on into the new place");
+        assert!(last < first, "and fades while it does");
+        // No jump bigger than the echo itself moves.
+        let jump = out
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(jump < before, "{jump} against {before}");
+    }
+
+    #[test]
+    fn five_one_in_the_head_is_mixed_down_without_clipping() {
+        let mut out = Vec::new();
+        // Every channel at full scale but the bass.
+        let frame = [1.0, 1.0, 1.0, 0.0, 1.0, 1.0];
+        downmix_stereo(&frame, Layout::Surround51, &mut out);
+        assert_eq!(out.len(), 2);
+        assert!(out[0] <= 1.0 + 1e-6 && out[0] > 0.9);
+        assert!((out[0] - out[1]).abs() < 1e-6);
+        // A bass-only frame is left out; a mono frame is on both sides.
+        out.clear();
+        downmix_stereo(
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            Layout::Surround51,
+            &mut out,
+        );
+        assert_eq!(out, [0.0, 0.0]);
+        out.clear();
+        downmix_stereo(&[0.5], Layout::Mono, &mut out);
+        assert_eq!(out, [0.5, 0.5]);
     }
 }
