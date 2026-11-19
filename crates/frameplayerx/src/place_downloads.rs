@@ -258,11 +258,6 @@ fn scan_user(dir: &Path) -> HashMap<String, Option<String>> {
 }
 
 impl PlaceDownloads {
-    /// What the row for `entry` of the app's own catalog shows now.
-    pub fn row(&self, entry: &CatalogEntry) -> Row {
-        self.row_for(entry, false)
-    }
-
     /// What the row for `entry` shows now; `user` for a pack one of the
     /// person's own sources offers.
     pub fn row_for(&self, entry: &CatalogEntry, user: bool) -> Row {
@@ -638,36 +633,36 @@ mod tests {
             bytes: 100,
             title: "Campsite".into(),
         };
-        assert_eq!(d.row(&entry), Row::Available);
+        assert_eq!(d.row_for(&entry, false), Row::Available);
         lock(&d.shared)
             .failed
             .insert("campsite".into(), Failure::Network);
-        assert_eq!(d.row(&entry), Row::Failed(Failure::Network));
+        assert_eq!(d.row_for(&entry, false), Row::Failed(Failure::Network));
         lock(&d.shared).failed.remove("campsite");
-        assert_eq!(d.row(&entry), Row::Available);
+        assert_eq!(d.row_for(&entry, false), Row::Available);
         lock(&d.shared).busy = Some(("campsite".into(), 40, 100));
         assert_eq!(
-            d.row(&entry),
+            d.row_for(&entry, false),
             Row::Downloading {
                 done: 40,
                 total: 100
             }
         );
         lock(&d.shared).busy = Some(("campsite".into(), 100, 0));
-        assert_eq!(d.row(&entry), Row::Checking);
+        assert_eq!(d.row_for(&entry, false), Row::Checking);
         lock(&d.shared).busy = None;
         lock(&d.shared)
             .installed
             .as_mut()
             .unwrap()
             .insert("campsite".into(), Some("0".into()));
-        assert_eq!(d.row(&entry), Row::Installed { update: true });
+        assert_eq!(d.row_for(&entry, false), Row::Installed { update: true });
         lock(&d.shared)
             .installed
             .as_mut()
             .unwrap()
             .insert("campsite".into(), Some("1".into()));
-        assert_eq!(d.row(&entry), Row::Installed { update: false });
+        assert_eq!(d.row_for(&entry, false), Row::Installed { update: false });
     }
 
     #[test]
