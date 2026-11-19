@@ -195,10 +195,8 @@ pub fn paint(ctx: &egui::Context, body: Rect, a: &mut Afterglow) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn it_is_short() {
-        assert!(DURATION <= 2.5);
-    }
+    /// Short enough to be an opening, not a wait.
+    const _: () = assert!(DURATION <= 2.5);
 
     #[test]
     fn it_ends_by_itself_and_can_be_skipped() {
