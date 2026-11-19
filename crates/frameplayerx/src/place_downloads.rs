@@ -730,7 +730,7 @@ mod tests {
         assert!(!offers.contains_key(&a));
         assert!(offers.contains_key(&b));
         // Put a back: it is fetched again, and starts empty.
-        assert_eq!(reconcile(&mut offers, &both), [a.clone()]);
+        assert_eq!(reconcile(&mut offers, &both), [a.as_str()]);
         assert_eq!(offers.get(&a), Some(&Offers::Loading));
         // No sources: nothing at all.
         assert!(reconcile(&mut offers, &[]).is_empty());
