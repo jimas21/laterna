@@ -285,16 +285,18 @@ fn a_glossy_floor_reflects_the_picture_where_the_head_says() {
     );
     e.destroy(&r);
 
-    // A rougher and a fainter material: the same floor gives less, and a
+    // A rougher and a fainter material: the same floor gives less (the
+    // peaks are codes of the sRGB picture, so a quarter of the light is
+    // about half the code), and a
     // pack with no material at all gives the weak default (no more than
     // that, and no more than the glossy one). The pack is read again by
     // each new renderer.
     let gloss_peak = peak;
     for (label, material, at_most) in [
         ("rough", Some([230u8, 255]), 0.5),
-        ("faint mask", Some([77, 60]), 0.35),
+        ("faint mask", Some([77, 60]), 0.55),
         ("matte", Some([77, 0]), 0.0),
-        ("no material", None, 0.4),
+        ("no material", None, 0.6),
     ] {
         write_pack(&root, material);
         let Some((mut r, mut e)) = setup() else {
