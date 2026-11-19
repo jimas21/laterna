@@ -179,13 +179,22 @@ fn white() -> Arc<VideoFrame> {
 }
 
 fn save_png(dir: &Path, name: &str, rgba: &[u8]) {
+    // Three times the size, each texel repeated, to be looked at.
+    const K: u32 = 3;
+    let mut big = Vec::with_capacity(rgba.len() * (K * K) as usize);
+    for y in 0..SIZE * K {
+        for x in 0..SIZE * K {
+            let i = (((y / K) * SIZE + x / K) * 4) as usize;
+            big.extend_from_slice(&rgba[i..i + 4]);
+        }
+    }
     std::fs::create_dir_all(dir).expect("preview dir");
     let file = std::fs::File::create(dir.join(name)).expect("png file");
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), SIZE, SIZE);
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), SIZE * K, SIZE * K);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header()
-        .and_then(|mut w| w.write_image_data(rgba))
+        .and_then(|mut w| w.write_image_data(&big))
         .expect("png");
 }
 
