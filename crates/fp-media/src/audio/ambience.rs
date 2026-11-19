@@ -598,6 +598,7 @@ mod tests {
             let out = render_secs(s, 6.0);
             let r = rms(&out);
             let peak = out.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            eprintln!("LEVEL {s:?} rms {r} peak {peak}");
             assert!(out.iter().all(|v| v.is_finite()), "{s:?}");
             assert!(r > 0.003, "{s:?} is silent: rms {r}");
             assert!(r < 0.12, "{s:?} is loud: rms {r}");
