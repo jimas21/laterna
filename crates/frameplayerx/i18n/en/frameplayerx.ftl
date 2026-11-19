@@ -1565,6 +1565,33 @@ place-more-failed-network = The download did not finish. Check the connection an
 place-more-failed-mismatch = What arrived was not the file expected, so it was thrown away. Try again later.
 place-more-failed-unusable = The download could not be used, so it was thrown away.
 place-more-failed-disk = It could not be saved. Check there is room on this device.
+# Settings > Places: the person's own places and pack sources.
+place-yours = Yours
+place-yours-heading = Your places
+place-yours-desc = Put a 360 picture (a JPEG or PNG twice as wide as high) or a place folder in { $folder } and it appears in the Place list under Yours, named after the file. New files show up the next time Laterna starts.
+place-yours-none = Nothing in that folder yet.
+place-yours-picture = 360 picture
+place-yours-pack = Place folder
+place-sources-heading = Pack sources
+place-sources-notice = Not from Laterna. Packs from these addresses are made by other people, and nobody has checked them. Only add an address you trust.
+place-sources-not-laterna = Not from Laterna. Made by whoever runs this address.
+place-sources-from = From { $source }
+place-sources-add = Add an address
+place-sources-remove = Remove
+place-sources-loading = Looking for packs
+place-sources-failed = Could not read this address.
+place-sources-offers = { $count ->
+    [one] 1 pack on offer
+   *[other] { $count } packs on offer
+}
+place-sources-skipped = { $count ->
+    [one] 1 line was not usable
+   *[other] { $count } lines were not usable
+}
+place-sources-invalid = That is not a usable address. It has to start with https:// and be on the internet.
+place-sources-duplicate = That address is already in the list.
+place-sources-too-many = That is as many addresses as can be added. Remove one first.
+place-source-confirm = Download { $title } from { $host }? It is { $size }. This pack is not from Laterna: it is checked to be a safe place, but not vouched for.
 # A tooltip: opens the place picker.
 player-place = Place
 # A tooltip: puts the library beside the playing video, so you can pick another

@@ -7,6 +7,14 @@
 //! packs; `fp_updater::places` does the work and `fp_render::env::pack`
 //! decides whether a downloaded pack is acceptable.
 //!
+//! The person's own pack sources work the same way with three differences:
+//! the index is fetched from the address they added (so nothing vouches for
+//! it but them: Settings says "Not from Laterna"), every download is
+//! https-only and asks first, and a pack installs into their `environments`
+//! folder (see `fp_render::env::user`) under its own name, so it appears as
+//! one of their places and can never replace a built-in one. Removing a
+//! source forgets what it offered, not what was installed from it.
+//!
 //! `LATERNA_PLACES_CATALOG=<file>` replaces the built-in list with a file of
 //! the same format, and allows plain http to this machine, but only when
 //! every entry in the file is on this machine (otherwise every download is
@@ -73,6 +81,7 @@ pub fn startup() {
 
 fn startup_in(dir: &Path) {
     places::clean_up(dir);
+    places::clean_up(&fp_render::env::user::dir());
 }
 
 /// Why an install failed, in the terms the person is told.
@@ -122,15 +131,90 @@ pub enum Row {
     Failed(Failure),
 }
 
+/// What a source of the person's own offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Offers {
+    /// Being fetched.
+    Loading,
+    Ready {
+        entries: Vec<CatalogEntry>,
+        /// Lines of the index that were not usable and were left out.
+        skipped: usize,
+    },
+    /// The index could not be fetched or read.
+    Failed,
+}
+
+/// The most sources a person can add.
+pub const MAX_SOURCES: usize = 8;
+
+/// Why an address was not added as a source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddError {
+    /// Not an https address on the public internet.
+    Invalid,
+    Duplicate,
+    TooMany,
+}
+
+/// Adds the address `input` to `sources` (tidied: see
+/// [`places::check_source_url`]).
+pub fn add_source(sources: &mut Vec<String>, input: &str) -> Result<(), AddError> {
+    let url = places::check_source_url(input).map_err(|_| AddError::Invalid)?;
+    if sources.contains(&url) {
+        return Err(AddError::Duplicate);
+    }
+    if sources.len() >= MAX_SOURCES {
+        return Err(AddError::TooMany);
+    }
+    sources.push(url);
+    Ok(())
+}
+
+/// Takes `url` out of `sources`; whether it was there.
+pub fn remove_source(sources: &mut Vec<String>, url: &str) -> bool {
+    let before = sources.len();
+    sources.retain(|s| s != url);
+    sources.len() != before
+}
+
+/// Makes `offers` hold exactly `urls`: what a removed source offered goes,
+/// a new one starts [`Offers::Loading`]. The addresses to fetch.
+fn reconcile(offers: &mut HashMap<String, Offers>, urls: &[String]) -> Vec<String> {
+    offers.retain(|k, _| urls.contains(k));
+    let mut fetch = Vec::new();
+    for url in urls {
+        if !offers.contains_key(url) {
+            offers.insert(url.clone(), Offers::Loading);
+            fetch.push(url.clone());
+        }
+    }
+    fetch
+}
+
+/// The key a download goes by: the pack's id, and for a person's own
+/// source `user:` first, so two packs of one name cannot be mistaken.
+fn key(id: &str, user: bool) -> String {
+    if user {
+        format!("user:{id}")
+    } else {
+        id.to_string()
+    }
+}
+
 #[derive(Default)]
 struct Shared {
-    /// The id being installed and its progress (done, total); total 0 while
+    /// The key being installed and its progress (done, total); total 0 while
     /// the pack is being unpacked and checked.
     busy: Option<(String, u64, u64)>,
     failed: HashMap<String, Failure>,
     /// Installed catalog packs and the version each names; `None` until
     /// first looked up.
     installed: Option<HashMap<String, Option<String>>>,
+    /// The same for the packs in the person's own folder, by folder name.
+    user_installed: Option<HashMap<String, Option<String>>>,
+    /// What each of the person's sources offers, by address.
+    sources: HashMap<String, Offers>,
     /// Something was installed or removed this run: the Place list only
     /// reads the folder at start.
     changed: bool,
@@ -154,12 +238,38 @@ fn scan(dir: &Path) -> HashMap<String, Option<String>> {
         .collect()
 }
 
+/// The packs in the person's folder (those with a manifest) and the version
+/// each names.
+fn scan_user(dir: &Path) -> HashMap<String, Option<String>> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return HashMap::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            places::is_installed(dir, &name).then(|| {
+                let version = fp_render::env::pack::installed_version(&e.path());
+                (name, version)
+            })
+        })
+        .collect()
+}
+
 impl PlaceDownloads {
-    /// What the row for `entry` shows now.
+    /// What the row for `entry` of the app's own catalog shows now.
     pub fn row(&self, entry: &CatalogEntry) -> Row {
+        self.row_for(entry, false)
+    }
+
+    /// What the row for `entry` shows now; `user` for a pack one of the
+    /// person's own sources offers.
+    pub fn row_for(&self, entry: &CatalogEntry, user: bool) -> Row {
+        let k = key(&entry.id, user);
         let mut s = lock(&self.shared);
         if let Some((id, done, total)) = &s.busy
-            && *id == entry.id
+            && *id == k
         {
             return if *total == 0 {
                 Row::Checking
@@ -170,12 +280,16 @@ impl PlaceDownloads {
                 }
             };
         }
-        if let Some(f) = s.failed.get(&entry.id) {
+        if let Some(f) = s.failed.get(&k) {
             return Row::Failed(*f);
         }
-        let installed = s
-            .installed
-            .get_or_insert_with(|| scan(&fp_render::env::pack::places_dir()));
+        let installed = if user {
+            s.user_installed
+                .get_or_insert_with(|| scan_user(&fp_render::env::user::dir()))
+        } else {
+            s.installed
+                .get_or_insert_with(|| scan(&fp_render::env::pack::places_dir()))
+        };
         match installed.get(&entry.id) {
             Some(version) => Row::Installed {
                 update: version.as_deref() != Some(entry.version.as_str()),
@@ -202,13 +316,30 @@ impl PlaceDownloads {
     /// Starts downloading `entry` into `dir` on a worker thread, unless one
     /// is running already. Whether it started.
     pub fn start(&self, ctx: &egui::Context, entry: &CatalogEntry, dir: PathBuf) -> bool {
+        self.start_in(ctx, entry, dir, false)
+    }
+
+    /// [`PlaceDownloads::start`] for a pack one of the person's own sources
+    /// offers: into their `environments` folder, https only.
+    pub fn start_user(&self, ctx: &egui::Context, entry: &CatalogEntry) -> bool {
+        self.start_in(ctx, entry, fp_render::env::user::dir(), true)
+    }
+
+    fn start_in(
+        &self,
+        ctx: &egui::Context,
+        entry: &CatalogEntry,
+        dir: PathBuf,
+        user: bool,
+    ) -> bool {
+        let k = key(&entry.id, user);
         {
             let mut s = lock(&self.shared);
             if s.busy.is_some() {
                 return false;
             }
-            s.failed.remove(&entry.id);
-            s.busy = Some((entry.id.clone(), 0, entry.bytes));
+            s.failed.remove(&k);
+            s.busy = Some((k.clone(), 0, entry.bytes));
         }
         self.cancel.store(false, Ordering::Relaxed);
         let (shared, cancel) = (self.shared.clone(), self.cancel.clone());
@@ -219,18 +350,23 @@ impl PlaceDownloads {
                 let shared = shared.clone();
                 let ctx = ctx.clone();
                 let entry = entry.clone();
+                let k = k.clone();
                 move || {
-                    let result = run(&shared, &ctx, &entry, &dir, &cancel);
+                    let result = run(&shared, &ctx, &entry, &dir, &cancel, user);
                     let mut s = lock(&shared);
                     s.busy = None;
                     match result {
                         Ok(()) => {
                             s.changed = true;
-                            s.installed = Some(scan(&dir));
+                            if user {
+                                s.user_installed = Some(scan_user(&dir));
+                            } else {
+                                s.installed = Some(scan(&dir));
+                            }
                         }
                         Err(None) => {}
                         Err(Some(f)) => {
-                            s.failed.insert(entry.id.clone(), f);
+                            s.failed.insert(k, f);
                         }
                     }
                     drop(s);
@@ -241,13 +377,22 @@ impl PlaceDownloads {
             log::warn!("cannot start the place download: {e}");
             let mut s = lock(&shared);
             s.busy = None;
-            s.failed.insert(entry.id, Failure::Disk);
+            s.failed.insert(k, Failure::Disk);
         }
         true
     }
 
     /// Deletes the installed pack `id` from `dir`.
     pub fn remove(&self, id: &str, dir: &Path) {
+        self.remove_in(id, dir, false);
+    }
+
+    /// Deletes a pack installed from one of the person's own sources.
+    pub fn remove_user(&self, id: &str) {
+        self.remove_in(id, &fp_render::env::user::dir(), true);
+    }
+
+    fn remove_in(&self, id: &str, dir: &Path, user: bool) {
         if self.busy() {
             return;
         }
@@ -256,8 +401,89 @@ impl PlaceDownloads {
             Err(e) => log::warn!("cannot remove place pack {id}: {e}"),
         }
         let mut s = lock(&self.shared);
-        s.installed = Some(scan(dir));
+        if user {
+            s.user_installed = Some(scan_user(dir));
+        } else {
+            s.installed = Some(scan(dir));
+        }
         s.changed = true;
+    }
+
+    /// Makes what is fetched match the person's sources: a new address is
+    /// fetched in the background, a removed one's offers are forgotten (what
+    /// was installed from it stays). Cheap enough to call every frame.
+    pub fn sync_sources(&self, ctx: &egui::Context, urls: &[String]) {
+        let fetch = reconcile(&mut lock(&self.shared).sources, urls);
+        for url in fetch {
+            self.fetch_source(ctx, url);
+        }
+    }
+
+    /// Fetches a source's index again (after a failure).
+    pub fn retry_source(&self, ctx: &egui::Context, url: &str) {
+        let mut s = lock(&self.shared);
+        let Some(slot) = s.sources.get_mut(url) else {
+            return;
+        };
+        *slot = Offers::Loading;
+        drop(s);
+        self.fetch_source(ctx, url.to_string());
+    }
+
+    /// What a source offers now.
+    pub fn offers(&self, url: &str) -> Offers {
+        lock(&self.shared)
+            .sources
+            .get(url)
+            .cloned()
+            .unwrap_or(Offers::Loading)
+    }
+
+    fn fetch_source(&self, ctx: &egui::Context, url: String) {
+        let (shared, ctx) = (self.shared.clone(), ctx.clone());
+        let spawned = std::thread::Builder::new()
+            .name("place-source".into())
+            .spawn({
+                let (shared, ctx, url) = (shared.clone(), ctx.clone(), url.clone());
+                move || {
+                    let result = places::check_source_url(&url)
+                        .map_err(|e| e.to_string())
+                        .and_then(|u| {
+                            places::fetch_index(&fp_updater::https_only_agent(), &u)
+                                .map_err(|e| e.to_string())
+                        });
+                    let offers = match result {
+                        Ok(ix) => {
+                            log::info!(
+                                "place source {url}: {} pack(s), {} line(s) skipped",
+                                ix.entries.len(),
+                                ix.skipped
+                            );
+                            Offers::Ready {
+                                entries: ix.entries,
+                                skipped: ix.skipped,
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("place source {url} is not usable: {e}");
+                            Offers::Failed
+                        }
+                    };
+                    let mut s = lock(&shared);
+                    // A source removed while it was fetched stays removed.
+                    if let Some(slot) = s.sources.get_mut(&url) {
+                        *slot = offers;
+                    }
+                    drop(s);
+                    ctx.request_repaint();
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("cannot start fetching a place source: {e}");
+            if let Some(slot) = lock(&shared).sources.get_mut(&url) {
+                *slot = Offers::Failed;
+            }
+        }
     }
 }
 
@@ -268,10 +494,12 @@ fn run(
     entry: &CatalogEntry,
     dir: &Path,
     cancel: &AtomicBool,
+    user: bool,
 ) -> Result<(), Option<Failure>> {
     places::clean_up(dir);
-    // https only, unless the catalog file names this machine and nothing else.
-    let agent = if places::needs_https_only(catalog()) {
+    // https only, unless the catalog file names this machine and nothing
+    // else; a person's own source is always https only.
+    let agent = if user || places::needs_https_only(catalog()) {
         fp_updater::https_only_agent()
     } else {
         fp_updater::default_agent()
@@ -440,5 +668,117 @@ mod tests {
             .unwrap()
             .insert("campsite".into(), Some("1".into()));
         assert_eq!(d.row(&entry), Row::Installed { update: false });
+    }
+
+    #[test]
+    fn sources_are_added_tidied_and_removed() {
+        let mut list = Vec::new();
+        assert_eq!(
+            add_source(&mut list, "  https://example.com/a.lock "),
+            Ok(())
+        );
+        assert_eq!(list, ["https://example.com/a.lock"]);
+        assert_eq!(
+            add_source(&mut list, "https://example.com/a.lock"),
+            Err(AddError::Duplicate)
+        );
+        for bad in [
+            "",
+            "http://example.com/a",
+            "https://192.168.1.2/a",
+            "nonsense",
+        ] {
+            assert_eq!(
+                add_source(&mut list, bad),
+                Err(AddError::Invalid),
+                "{bad:?}"
+            );
+        }
+        for n in 1..MAX_SOURCES {
+            add_source(&mut list, &format!("https://example.com/{n}.lock")).unwrap();
+        }
+        assert_eq!(
+            add_source(&mut list, "https://example.com/more.lock"),
+            Err(AddError::TooMany)
+        );
+        assert!(remove_source(&mut list, "https://example.com/a.lock"));
+        assert!(!remove_source(&mut list, "https://example.com/a.lock"));
+        assert_eq!(list.len(), MAX_SOURCES - 1);
+    }
+
+    #[test]
+    fn removing_a_source_removes_its_offers_and_adding_one_asks_for_them() {
+        let mut offers: HashMap<String, Offers> = HashMap::new();
+        let (a, b) = (
+            "https://a.example/x".to_string(),
+            "https://b.example/x".to_string(),
+        );
+        let both = [a.clone(), b.clone()];
+        assert_eq!(reconcile(&mut offers, &both), both);
+        assert_eq!(offers.get(&a), Some(&Offers::Loading));
+        // Offers arrive for a; nothing is asked again for a source we have.
+        offers.insert(
+            a.clone(),
+            Offers::Ready {
+                entries: vec![entry("campsite")],
+                skipped: 0,
+            },
+        );
+        assert!(reconcile(&mut offers, &both).is_empty());
+        // Remove a: its offers go; b stays.
+        assert!(reconcile(&mut offers, std::slice::from_ref(&b)).is_empty());
+        assert!(!offers.contains_key(&a));
+        assert!(offers.contains_key(&b));
+        // Put a back: it is fetched again, and starts empty.
+        assert_eq!(reconcile(&mut offers, &both), [a.clone()]);
+        assert_eq!(offers.get(&a), Some(&Offers::Loading));
+        // No sources: nothing at all.
+        assert!(reconcile(&mut offers, &[]).is_empty());
+        assert!(offers.is_empty());
+    }
+
+    #[test]
+    fn a_source_removed_while_it_loads_stays_removed_and_installed_packs_stay() {
+        let d = PlaceDownloads::default();
+        let url = "https://a.example/x".to_string();
+        let fetch = reconcile(&mut lock(&d.shared).sources, std::slice::from_ref(&url));
+        assert_eq!(fetch.len(), 1);
+        assert_eq!(d.offers(&url), Offers::Loading);
+        reconcile(&mut lock(&d.shared).sources, &[]);
+        // What a pack installed from it left in the folder is not a source's.
+        let tmp = std::env::temp_dir().join(format!("laterna-user-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("campsite")).unwrap();
+        std::fs::write(tmp.join("campsite/manifest.json"), b"{}").unwrap();
+        assert!(scan_user(&tmp).contains_key("campsite"));
+        std::fs::create_dir_all(tmp.join(".half.part")).unwrap();
+        std::fs::write(tmp.join(".half.part/manifest.json"), b"{}").unwrap();
+        assert_eq!(scan_user(&tmp).len(), 1);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_users_download_is_told_apart_from_the_catalogs_of_the_same_name() {
+        let d = PlaceDownloads::default();
+        lock(&d.shared).installed = Some(HashMap::new());
+        lock(&d.shared).user_installed = Some(HashMap::new());
+        let e = entry("campsite");
+        lock(&d.shared).busy = Some(("user:campsite".into(), 5, 10));
+        assert_eq!(d.row_for(&e, false), Row::Available);
+        assert_eq!(d.row_for(&e, true), Row::Downloading { done: 5, total: 10 });
+        lock(&d.shared).busy = None;
+        lock(&d.shared)
+            .failed
+            .insert("user:campsite".into(), Failure::Mismatch);
+        assert_eq!(d.row_for(&e, false), Row::Available);
+        assert_eq!(d.row_for(&e, true), Row::Failed(Failure::Mismatch));
+        lock(&d.shared).failed.clear();
+        lock(&d.shared)
+            .user_installed
+            .as_mut()
+            .unwrap()
+            .insert("campsite".into(), Some("1".into()));
+        assert_eq!(d.row_for(&e, true), Row::Installed { update: false });
+        assert_eq!(d.row_for(&e, false), Row::Available);
     }
 }

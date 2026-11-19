@@ -353,6 +353,84 @@ fn fetch_and_place(
     Ok(dest)
 }
 
+/// The most a person's own pack index may be, and so the most the app reads.
+pub const MAX_INDEX_BYTES: u64 = 64 << 10;
+/// The most packs one index may offer; the rest are ignored.
+pub const MAX_INDEX_ENTRIES: usize = 50;
+
+/// A pack index a person added, as read: what it offers and how many of its
+/// lines were left out because they were not usable.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Index {
+    pub entries: Vec<CatalogEntry>,
+    pub skipped: usize,
+}
+
+/// Checks and tidies the address of a person's pack index: https, no
+/// credentials, a host on the public internet, one line.
+pub fn check_source_url(url: &str) -> std::result::Result<String, String> {
+    let url = url.trim();
+    if url.is_empty() || url.len() > 300 || url.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err("not an address".into());
+    }
+    crate::url::check_public_https_url(url)?;
+    Ok(url.to_string())
+}
+
+/// Reads the text of a pack index in the catalog format. Unlike the built-in
+/// catalog (a mistake there is a bug to find), a person's index comes from
+/// somebody else: a line that is not usable is left out and counted, never
+/// the whole index. Every pack's address must be https on the public
+/// internet, so an index cannot point the app at this machine or the
+/// person's network.
+pub fn parse_index(text: &str) -> Index {
+    let mut out = Index::default();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let entry = parse_catalog(line, false)
+            .ok()
+            .and_then(|mut v| v.pop())
+            .filter(|e| crate::url::check_public_https_url(&e.url).is_ok())
+            .filter(|e| !out.entries.iter().any(|o| o.id == e.id));
+        match entry {
+            Some(e) if out.entries.len() < MAX_INDEX_ENTRIES => out.entries.push(e),
+            _ => out.skipped += 1,
+        }
+    }
+    out
+}
+
+/// Fetches and reads the pack index at `url` (already through
+/// [`check_source_url`]), through `agent` (the app's is https-only). At most
+/// [`MAX_INDEX_BYTES`] are read.
+pub fn fetch_index(agent: &ureq::Agent, url: &str) -> Result<Index> {
+    let http = |e: ureq::Error| Error::Http {
+        url: url.to_string(),
+        source: Box::new(e),
+    };
+    let resp = agent.get(url).call().map_err(http)?;
+    let status = resp.status().as_u16();
+    if status != 200 {
+        return Err(Error::HttpStatus {
+            url: url.to_string(),
+            status,
+        });
+    }
+    let bytes = resp
+        .into_body()
+        .into_with_config()
+        .limit(MAX_INDEX_BYTES)
+        .read_to_vec()
+        .map_err(http)?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| Error::InvalidPack("the index is not text".to_string()))?;
+    Ok(parse_index(&text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,5 +973,74 @@ mod tests {
         names.sort();
         assert_eq!(names, ["b", "c", "d"]);
         assert!(places.join("b/manifest.json").is_file());
+    }
+
+    #[test]
+    fn a_source_address_must_be_a_public_https_one() {
+        assert_eq!(
+            check_source_url("  https://example.com/places.lock \n").unwrap(),
+            "https://example.com/places.lock"
+        );
+        for bad in [
+            "",
+            "http://example.com/a",
+            "https://user:pw@example.com/a",
+            "https://localhost/a",
+            "https://10.0.0.5/a",
+            "https://nas.local/a",
+            "https://example.com/a b",
+            "file:///etc/passwd",
+            "example.com",
+        ] {
+            assert!(check_source_url(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_index_keeps_its_good_lines_and_counts_the_rest() {
+        let good = |id: &str| format!("{id} 1 https://example.com/{id}.zip {SHA} 1000 Pack {id}\n");
+        let text = format!(
+            "# mine\n{}two 1 http://example.com/two.zip {SHA} 1000 Plain http\nbad line\n{}three 1 https://127.0.0.1/t.zip {SHA} 1000 Loopback\n{}",
+            good("one"),
+            good("one"),
+            good("four"),
+        );
+        let ix = parse_index(&text);
+        let ids: Vec<&str> = ix.entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["one", "four"]);
+        // http, bad line, duplicate, loopback.
+        assert_eq!(ix.skipped, 4);
+        assert_eq!(parse_index("# nothing\n"), Index::default());
+    }
+
+    #[test]
+    fn an_index_offers_at_most_fifty_packs() {
+        let text: String = (0..60)
+            .map(|n| format!("p{n} 1 https://example.com/p{n}.zip {SHA} 1000 P{n}\n"))
+            .collect();
+        let ix = parse_index(&text);
+        assert_eq!(ix.entries.len(), MAX_INDEX_ENTRIES);
+        assert_eq!(ix.skipped, 10);
+    }
+
+    #[test]
+    fn an_index_is_fetched_with_a_size_cap() {
+        let server = Server::start();
+        let line = format!("one 1 https://example.com/one.zip {SHA} 1000 One\n");
+        server.route("/index", Route::Bytes(line.into_bytes()));
+        server.route(
+            "/huge",
+            Route::Bytes(vec![b'#'; MAX_INDEX_BYTES as usize + 10]),
+        );
+        let agent = crate::default_agent();
+        let ix = fetch_index(&agent, &server.url("/index")).unwrap();
+        assert_eq!(ix.entries.len(), 1);
+        assert!(fetch_index(&agent, &server.url("/huge")).is_err());
+        assert!(matches!(
+            fetch_index(&agent, &server.url("/none")),
+            Err(Error::HttpStatus { status: 404, .. })
+        ));
+        // The app's agent never fetches plain http.
+        assert!(fetch_index(&crate::https_only_agent(), &server.url("/index")).is_err());
     }
 }

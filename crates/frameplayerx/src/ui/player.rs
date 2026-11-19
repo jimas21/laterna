@@ -1949,6 +1949,10 @@ fn place_label(choice: PlaceChoice) -> (&'static str, &'static str) {
         PlaceChoice::YourRoom => (icons::ARMCHAIR, tr!("place-your-room")),
         PlaceChoice::Place(Place::Cinema) => (icons::FILM_STRIP, tr!("place-cinema")),
         PlaceChoice::Place(Place::Studio) => (icons::SUN, tr!("place-studio")),
+        PlaceChoice::Place(place @ Place::User(_)) => (
+            icons::IMAGE_SQUARE,
+            place.your_name().unwrap_or_else(|| tr!("place-yours")),
+        ),
     }
 }
 
@@ -1993,6 +1997,12 @@ pub(super) fn place_controls(
     if places_enabled {
         choices.extend(Place::PICKER.iter().map(|&p| PlaceChoice::Place(p)));
     }
+    // The person's own places, after the others and under their own label.
+    let yours: Vec<PlaceChoice> = if places_enabled {
+        Place::yours().into_iter().map(PlaceChoice::Place).collect()
+    } else {
+        Vec::new()
+    };
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
         for choice in choices {
@@ -2002,6 +2012,19 @@ pub(super) fn place_controls(
             }
         }
     });
+    if !yours.is_empty() {
+        ui.add_space(4.0);
+        widgets::section_label(ui, tr!("place-yours"));
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+            for choice in yours {
+                let (icon, label) = place_label(choice);
+                if widgets::chip_icon(ui, Some(icon), label, choice == current).clicked() {
+                    choose_place(settings, choice);
+                }
+            }
+        });
+    }
     if !places_enabled {
         ui.label(RichText::new(tr!("place-switched-off")).color(theme::TEXT_3));
     }

@@ -543,12 +543,16 @@ fn places(ui: &mut egui::Ui, v: &mut View) {
         false,
     );
     more_places(ui, v);
+    your_places(ui, v);
+    if v.state.place_downloads.changed() {
+        note(ui, tr!("place-more-restart"));
+    }
 }
 
 /// The places that are not in the app: each a download, listed only when the
 /// app's catalog has any. The first download asks once, inside its row.
 fn more_places(ui: &mut egui::Ui, v: &mut View) {
-    use crate::place_downloads::{Failure, Row, catalog};
+    use crate::place_downloads::catalog;
     let catalog = catalog();
     if catalog.is_empty() {
         return;
@@ -556,14 +560,36 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
     heading(ui, tr!("place-more-heading"));
     note(ui, tr!("place-more-desc"));
     ui.add_space(6.0);
-    let dir = fp_render::env::pack::places_dir();
+    catalog_rows(ui, v, catalog, false);
+}
+
+/// A card of downloadable packs: the app's own catalog, or (`user`) what one
+/// of the person's own sources offers, which installs into their own folder
+/// and always asks first.
+fn catalog_rows(
+    ui: &mut egui::Ui,
+    v: &mut View,
+    entries: &[fp_updater::places::CatalogEntry],
+    user: bool,
+) {
+    use crate::place_downloads::{Failure, Row};
+    let dir = if user {
+        fp_render::env::user::dir()
+    } else {
+        fp_render::env::pack::places_dir()
+    };
     let busy = v.state.place_downloads.busy();
     let ctx = ui.ctx().clone();
     widgets::rows(ui, |r| {
-        for entry in catalog {
+        for entry in entries {
             let size = super::fmt_size(entry.bytes);
-            let row = v.state.place_downloads.row(entry);
-            let asking = v.state.place_confirm.as_deref() == Some(entry.id.as_str());
+            let row = v.state.place_downloads.row_for(entry, user);
+            let confirm_key = if user {
+                format!("user:{}", entry.id)
+            } else {
+                entry.id.clone()
+            };
+            let asking = v.state.place_confirm.as_deref() == Some(confirm_key.as_str());
             // Pressed Download: starts now, or asks first the one time.
             let mut start = false;
             let mut ask = false;
@@ -611,7 +637,11 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
                             )
                             .clicked()
                             {
-                                v.state.place_downloads.remove(&entry.id, &dir);
+                                if user {
+                                    v.state.place_downloads.remove_user(&entry.id);
+                                } else {
+                                    v.state.place_downloads.remove(&entry.id, &dir);
+                                }
                             }
                             if update
                                 && widgets::button(
@@ -651,12 +681,21 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
                 }
                 Row::Available if asking => {
                     let host = entry.host();
-                    let text = tr!(
-                        "place-more-confirm",
-                        title = entry.title.as_str(),
-                        size = size.as_str(),
-                        host = host.as_str()
-                    );
+                    let text = if user {
+                        tr!(
+                            "place-source-confirm",
+                            title = entry.title.as_str(),
+                            size = size.as_str(),
+                            host = host.as_str()
+                        )
+                    } else {
+                        tr!(
+                            "place-more-confirm",
+                            title = entry.title.as_str(),
+                            size = size.as_str(),
+                            host = host.as_str()
+                        )
+                    };
                     r.row(&entry.title, Some(text.as_str()), |ui| {
                         // Consent is stored only once start() takes it.
                         let go = ui
@@ -692,7 +731,9 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
                             )
                             .clicked()
                             {
-                                if v.settings.places_download_ok {
+                                // A person's own source always asks: the one yes
+                                // is for the app's own catalog.
+                                if v.settings.places_download_ok && !user {
                                     start = true;
                                 } else {
                                     ask = true;
@@ -703,21 +744,163 @@ fn more_places(ui: &mut egui::Ui, v: &mut View) {
                 }
             }
             if ask {
-                v.state.place_confirm = Some(entry.id.clone());
+                v.state.place_confirm = Some(confirm_key.clone());
             }
             if start {
                 // The card goes only once the download has really begun.
-                if v.state.place_downloads.start(&ctx, entry, dir.clone()) {
+                let started = if user {
+                    v.state.place_downloads.start_user(&ctx, entry)
+                } else {
+                    v.state.place_downloads.start(&ctx, entry, dir.clone())
+                };
+                if started {
                     v.state.place_confirm = None;
-                    if consent {
+                    if consent && !user {
                         v.settings.places_download_ok = true;
                     }
                 }
             }
         }
     });
-    if v.state.place_downloads.changed() {
-        note(ui, tr!("place-more-restart"));
+}
+
+/// The person's own places: what is in the `environments` folder, and the
+/// pack sources they added. Everything here that comes from a source says it
+/// is not from Laterna.
+fn your_places(ui: &mut egui::Ui, v: &mut View) {
+    use crate::place_downloads::{AddError, MAX_SOURCES, Offers, add_source, remove_source};
+    heading(ui, tr!("place-yours-heading"));
+    let folder = fp_render::env::user::dir();
+    let folder = folder.display().to_string();
+    note(ui, &tr!("place-yours-desc", folder = folder.as_str()));
+    let mine = fp_render::env::user::registry();
+    ui.add_space(6.0);
+    if mine.is_empty() {
+        note(ui, tr!("place-yours-none"));
+    } else {
+        widgets::rows(ui, |r| {
+            for p in mine {
+                let what = match p.kind() {
+                    fp_render::env::PlaceKind::Sky => tr!("place-yours-picture"),
+                    fp_render::env::PlaceKind::Room => tr!("place-yours-pack"),
+                };
+                r.row(&p.name, Some(what), |_| {});
+            }
+        });
+    }
+
+    heading(ui, tr!("place-sources-heading"));
+    note(ui, tr!("place-sources-notice"));
+    ui.add_space(6.0);
+    let ctx = ui.ctx().clone();
+    v.state
+        .place_downloads
+        .sync_sources(&ctx, &v.settings.place_sources);
+    let mut remove = None;
+    let mut retry = None;
+    widgets::rows(ui, |r| {
+        for url in &v.settings.place_sources {
+            let status = match v.state.place_downloads.offers(url) {
+                Offers::Loading => tr!("place-sources-loading").to_string(),
+                Offers::Failed => tr!("place-sources-failed").to_string(),
+                Offers::Ready { entries, skipped } => {
+                    let base = tr!("place-sources-offers", count = entries.len());
+                    if skipped > 0 {
+                        format!("{base}. {}", tr!("place-sources-skipped", count = skipped))
+                    } else {
+                        base
+                    }
+                }
+            };
+            let failed = matches!(v.state.place_downloads.offers(url), Offers::Failed);
+            r.row(url, Some(status.as_str()), |ui| {
+                if widgets::button(
+                    ui,
+                    Some(icons::TRASH),
+                    tr!("place-sources-remove"),
+                    Kind::Secondary,
+                )
+                .clicked()
+                {
+                    remove = Some(url.clone());
+                }
+                if failed
+                    && widgets::button(
+                        ui,
+                        Some(icons::ARROWS_CLOCKWISE),
+                        tr!("place-more-retry"),
+                        Kind::Ghost,
+                    )
+                    .clicked()
+                {
+                    retry = Some(url.clone());
+                }
+            });
+        }
+        if v.settings.place_sources.len() < MAX_SOURCES {
+            r.row(tr!("place-sources-add"), None, |ui| {
+                let text = v.state.place_source_input.trim().to_string();
+                if ui
+                    .add_enabled_ui(!text.is_empty(), |ui| {
+                        widgets::button(
+                            ui,
+                            Some(icons::PLUS),
+                            tr!("settings-add-device"),
+                            Kind::Secondary,
+                        )
+                        .clicked()
+                    })
+                    .inner
+                {
+                    match add_source(&mut v.settings.place_sources, &text) {
+                        Ok(()) => {
+                            v.state.place_source_input.clear();
+                            v.state.place_source_error = None;
+                        }
+                        Err(e) => v.state.place_source_error = Some(e),
+                    }
+                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut v.state.place_source_input)
+                        .margin(egui::Margin::symmetric(12, 9))
+                        .hint_text("https://")
+                        .font(theme::font(Weight::Regular, 17.0))
+                        .desired_width(ui.available_width()),
+                );
+            });
+        }
+    });
+    if let Some(url) = remove {
+        remove_source(&mut v.settings.place_sources, &url);
+        v.state
+            .place_downloads
+            .sync_sources(&ctx, &v.settings.place_sources);
+    }
+    if let Some(url) = retry {
+        v.state.place_downloads.retry_source(&ctx, &url);
+    }
+    if let Some(e) = v.state.place_source_error {
+        let text = match e {
+            AddError::Invalid => tr!("place-sources-invalid"),
+            AddError::Duplicate => tr!("place-sources-duplicate"),
+            AddError::TooMany => tr!("place-sources-too-many"),
+        };
+        ui.label(RichText::new(text).color(theme::TEXT_2));
+    }
+
+    // What the sources offer, each under its address with the same notice.
+    let sources = v.settings.place_sources.clone();
+    for url in &sources {
+        let Offers::Ready { entries, .. } = v.state.place_downloads.offers(url) else {
+            continue;
+        };
+        if entries.is_empty() {
+            continue;
+        }
+        heading(ui, &tr!("place-sources-from", source = url.as_str()));
+        note(ui, tr!("place-sources-not-laterna"));
+        ui.add_space(6.0);
+        catalog_rows(ui, v, &entries, true);
     }
 }
 
