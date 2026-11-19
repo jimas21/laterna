@@ -103,7 +103,7 @@ fn write_pack(root: &Path, material: Option<[u8; 2]>) {
 /// Both eyes `x` metres to the right of the seat's, looking down at the
 /// floor where the picture's reflection is (about 52 degrees).
 fn eyes_at(x: f32, up: f32, back: f32) -> [EyeView; 2] {
-    let look = Quat::from_rotation_x(-0.9);
+    let look = Quat::from_rotation_x(-1.1);
     let ev = |dx: f32| EyeView {
         view: view(Vec3::new(x + dx, common::EYE_HEIGHT + up, back), look),
         proj: projection(Fov::symmetric(90.0), 0.05, 100.0),
