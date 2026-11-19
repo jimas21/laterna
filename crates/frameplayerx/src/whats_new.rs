@@ -11,17 +11,29 @@ pub struct Entry {
 }
 
 /// Newest first.
-pub const ENTRIES: &[Entry] = &[Entry {
-    version: "0.18.0-beta.8",
-    bullets: &[
-        "Smoother edges everywhere (4x edge smoothing is now on).",
-        "The cinema is rebuilt like a real theater: the front row is no longer at the screen, and nothing covers the picture.",
-        "Screen size has simple choices: Home theater, Cinema, Giant. Change it while watching with the Size button.",
-        "The room takes the film's colour as it plays, with a Screen light slider in Settings > Places.",
-        "Recenter while lying back and the whole room tilts to face you.",
-        "Plex: switch between people in your Plex Home, playlists and a richer Home page.",
-    ],
-}];
+pub const ENTRIES: &[Entry] = &[
+    Entry {
+        version: "0.18.0-beta.17",
+        bullets: &[
+            "Sound now comes from the screen: each speaker stays put as you turn your head, and every place has its own room echo.",
+            "Places light up from the film with less work for the headset.",
+            "Move the screen anywhere and push it near or far by reaching with your arm.",
+            "Point at the screen to bring up just the move bar and resize corner; the player's extra controls live in a More list.",
+            "Plex: choose who is watching, and jump to any library from Home.",
+        ],
+    },
+    Entry {
+        version: "0.18.0-beta.8",
+        bullets: &[
+            "Smoother edges everywhere (4x edge smoothing is now on).",
+            "The cinema is rebuilt like a real theater: the front row is no longer at the screen, and nothing covers the picture.",
+            "Screen size has simple choices: Home theater, Cinema, Giant. Change it while watching with the Size button.",
+            "The room takes the film's colour as it plays, with a Screen light slider in Settings > Places.",
+            "Recenter while lying back and the whole room tilts to face you.",
+            "Plex: switch between people in your Plex Home, playlists and a richer Home page.",
+        ],
+    },
+];
 
 /// The notes written for exactly `version`.
 pub fn entry(version: &str) -> Option<&'static Entry> {
