@@ -1114,14 +1114,12 @@ mod tests {
         let before = out.iter().map(|v| v.abs()).fold(0.0, f32::max);
         assert!(before > 0.0, "the hall has an echo to lose");
         out.clear();
-        s.process(&silence, 2, IDENTITY, &params(), &mut out);
-        let first = out[..64].iter().map(|v| v.abs()).fold(0.0, f32::max);
-        let last = out[out.len() - 64..]
-            .iter()
-            .map(|v| v.abs())
-            .fold(0.0, f32::max);
+        s.process(&vec![0.0; 2 * 7200], 2, IDENTITY, &params(), &mut out);
+        let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+        let first = rms(&out[..2 * 1800]);
+        let last = rms(&out[out.len() - 2 * 1800..]);
         assert!(first > 0.0, "the echo goes on into the new place");
-        assert!(last < first, "and fades while it does");
+        assert!(last < first * 0.5, "and fades while it does");
         // No jump bigger than the echo itself moves.
         let jump = out
             .windows(2)
