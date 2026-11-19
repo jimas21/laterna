@@ -1,7 +1,9 @@
 //! Just enough of the H.264 and HEVC bitstreams to find pictures no other
 //! picture is decoded from, which a precise seek can leave out on its way
-//! to the target.
+//! to the target, and how many pictures a stream's decoder keeps at once
+//! ([`Dpb`]), which sizes the hardware decoder's buffers.
 
+use crate::mvc::Bad;
 use crate::mvc::bits::{Reader, unescape};
 use fp_core::format::StereoLayout;
 use fp_ffmpeg_sys as ff;
@@ -38,43 +40,15 @@ impl NalReader {
             length_size: 0,
             top_layer: None,
         };
-        match extradata {
-            // hvcC (FFmpeg's test: Annex B starts 00 00 01 or 00 00 00 01).
-            [a, b, c, ..] if hevc && extradata.len() >= 23 && (*a != 0 || *b != 0 || *c > 1) => {
-                r.length_size = (extradata[21] & 3) as usize + 1;
-                r.read_hvcc_arrays(&extradata[22..]);
-            }
-            [1, _, _, _, size, ..] if !hevc => r.length_size = (size & 3) as usize + 1,
-            _ => {
-                for nal in units(extradata, 0) {
-                    r.note_sps(nal);
-                }
-            }
+        r.length_size = match Record::of(hevc, extradata) {
+            Record::Hvcc => (extradata[21] & 3) as usize + 1,
+            Record::Avcc => (extradata[4] & 3) as usize + 1,
+            Record::AnnexB => 0,
+        };
+        for nal in parameter_sets(hevc, extradata) {
+            r.note_sps(nal);
         }
         Some(r)
-    }
-
-    fn read_hvcc_arrays(&mut self, data: &[u8]) {
-        let Some((&arrays, mut rest)) = data.split_first() else {
-            return;
-        };
-        for _ in 0..arrays {
-            let [_, hi, lo, tail @ ..] = rest else {
-                return;
-            };
-            rest = tail;
-            for _ in 0..u16::from_be_bytes([*hi, *lo]) {
-                let [hi, lo, tail @ ..] = rest else {
-                    return;
-                };
-                let len = u16::from_be_bytes([*hi, *lo]) as usize;
-                let Some(nal) = tail.get(..len) else {
-                    return;
-                };
-                self.note_sps(nal);
-                rest = &tail[len..];
-            }
-        }
     }
 
     fn note_sps(&mut self, nal: &[u8]) {
@@ -236,6 +210,246 @@ pub(crate) fn units(data: &[u8], length_size: usize) -> impl Iterator<Item = &[u
 
 pub(crate) fn start_code(data: &[u8]) -> Option<usize> {
     data.windows(3).position(|w| w == [0, 0, 1])
+}
+
+/// How a stream's extradata holds its parameter sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Record {
+    /// An HEVC decoder configuration record (MP4, Matroska).
+    Hvcc,
+    /// An H.264 one.
+    Avcc,
+    /// Annex B units (MPEG-TS), or nothing.
+    AnnexB,
+}
+
+impl Record {
+    fn of(hevc: bool, extradata: &[u8]) -> Record {
+        match *extradata {
+            // FFmpeg's test: Annex B starts 00 00 01 or 00 00 00 01.
+            [a, b, c, ..] if hevc && extradata.len() >= 23 && (a != 0 || b != 0 || c > 1) => {
+                Record::Hvcc
+            }
+            [1, _, _, _, _, ..] if !hevc => Record::Avcc,
+            _ => Record::AnnexB,
+        }
+    }
+}
+
+/// The parameter sets in a stream's extradata, each a whole NAL unit; of an
+/// avcC record, the SPSs alone.
+fn parameter_sets(hevc: bool, extradata: &[u8]) -> Vec<&[u8]> {
+    // Each unit in a record is its 16-bit length, then the unit.
+    fn take<'a>(rest: &mut &'a [u8], into: &mut Vec<&'a [u8]>) -> Option<()> {
+        let [hi, lo, tail @ ..] = *rest else {
+            return None;
+        };
+        let len = u16::from_be_bytes([*hi, *lo]) as usize;
+        into.push(tail.get(..len)?);
+        *rest = &tail[len..];
+        Some(())
+    }
+    let mut out = Vec::new();
+    match Record::of(hevc, extradata) {
+        // Arrays of units after 22 bytes of header: each its type, a count,
+        // then the units.
+        Record::Hvcc => {
+            let Some((&arrays, mut rest)) = extradata[22..].split_first() else {
+                return out;
+            };
+            for _ in 0..arrays {
+                let [_, hi, lo, tail @ ..] = rest else {
+                    break;
+                };
+                rest = tail;
+                for _ in 0..u16::from_be_bytes([*hi, *lo]) {
+                    if take(&mut rest, &mut out).is_none() {
+                        return out;
+                    }
+                }
+            }
+        }
+        // The SPS count in the low 5 bits of the sixth byte, then the SPSs.
+        Record::Avcc => {
+            let Some((&count, mut rest)) = extradata.get(5..).and_then(<[u8]>::split_first) else {
+                return out;
+            };
+            for _ in 0..count & 0x1f {
+                if take(&mut rest, &mut out).is_none() {
+                    break;
+                }
+            }
+        }
+        Record::AnnexB => out.extend(units(extradata, 0)),
+    }
+    out
+}
+
+/// How many pictures a stream's decoder keeps at once (its decoded picture
+/// buffer), as its sequence parameter set declares. Of several, the largest
+/// has the most pictures, then the most reordered: one SPS's own figures,
+/// never one's pictures with another's reorder count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Dpb {
+    /// Pictures kept at once, the one being decoded included: HEVC's
+    /// `sps_max_dec_pic_buffering_minus1 + 1`, which counts it (H.265
+    /// C.5.2.2 brings the DPB down to one less than that before a picture
+    /// is decoded), and
+    /// H.264's `max_dec_frame_buffering + 1`, whose DPB takes the current
+    /// picture in only once it is decoded (H.264 C.4.5).
+    pub pictures: u32,
+    /// Of those, the most waiting for their turn in output order
+    /// (`sps_max_num_reorder_pics`, `max_num_reorder_frames`).
+    pub reorder: u32,
+}
+
+/// The most pictures either standard lets a DPB hold (H.265 A.4.2's
+/// MaxDpbSize, H.264 A.3.1's MaxDpbFrames). An SPS declaring more is
+/// misread or broken, and isn't believed.
+const MAX_DPB: u32 = 16;
+
+/// The DPB a sequence parameter set declares, `nal` being the whole NAL
+/// unit. `None` for any other unit, an HEVC SPS of a layer above the base
+/// (which the hardware decoder doesn't decode), and an SPS this can't read.
+pub(crate) fn sps_dpb(hevc: bool, nal: &[u8]) -> Option<Dpb> {
+    let dpb = match *nal {
+        [h0, h1, ..] if hevc && (h0 >> 1) & 0x3f == 33 && h0 & 1 == 0 && h1 >> 3 == 0 => {
+            hevc_sps_dpb(&unescape(nal)).ok()?
+        }
+        [h0, ..] if !hevc && h0 & 0x1f == 7 => {
+            let sps = crate::mvc::syntax::parse_sps(&unescape(nal)).ok()?;
+            let frames = sps.dec_frame_buffering();
+            Dpb {
+                pictures: frames.saturating_add(1),
+                reorder: sps.reorder_frames().min(frames),
+            }
+        }
+        _ => return None,
+    };
+    let current = u32::from(!hevc);
+    (dpb.pictures <= MAX_DPB + current).then_some(dpb)
+}
+
+/// An HEVC SPS of the base layer (7.3.2.2) up to its sub-layer ordering
+/// information, from its RBSP with the 2-byte NAL unit header. The decoder
+/// decodes every temporal sub-layer, so the highest one's figures count;
+/// they are also the largest (7.4.3.2.1), which is what is taken, so a
+/// stream that breaks that rule still gets room.
+fn hevc_sps_dpb(rbsp: &[u8]) -> Result<Dpb, Bad> {
+    fn skip(r: &mut Reader, bits: u32) -> Result<(), Bad> {
+        (0..bits.div_ceil(32)).try_for_each(|i| r.u((bits - 32 * i).min(32)).map(drop))
+    }
+    let mut r = Reader::new(rbsp, 16);
+    r.u(4)?; // sps_video_parameter_set_id
+    let sub_layers = r.u(3)? as usize; // sps_max_sub_layers_minus1
+    if sub_layers > 6 {
+        return Err(Bad::Broken("sps_max_sub_layers_minus1"));
+    }
+    r.u(1)?; // sps_temporal_id_nesting_flag
+    // profile_tier_level(1, sps_max_sub_layers_minus1), 7.3.3: the general
+    // profile (88 bits) and level, then each sub-layer's, when present.
+    skip(&mut r, 88)?;
+    r.u(8)?; // general_level_idc
+    let mut present = [(false, false); 6];
+    for p in &mut present[..sub_layers] {
+        *p = (r.flag()?, r.flag()?);
+    }
+    if sub_layers > 0 {
+        skip(&mut r, 2 * (8 - sub_layers as u32))?; // reserved_zero_2bits
+    }
+    for &(profile, level) in &present[..sub_layers] {
+        if profile {
+            skip(&mut r, 88)?;
+        }
+        if level {
+            r.u(8)?;
+        }
+    }
+    r.ue()?; // sps_seq_parameter_set_id
+    if r.ue()? == 3 {
+        r.u(1)?; // separate_colour_plane_flag
+    }
+    r.ue()?; // pic_width_in_luma_samples
+    r.ue()?; // pic_height_in_luma_samples
+    if r.flag()? {
+        for _ in 0..4 {
+            r.ue()?; // conf_win_*_offset
+        }
+    }
+    r.ue()?; // bit_depth_luma_minus8
+    r.ue()?; // bit_depth_chroma_minus8
+    r.ue()?; // log2_max_pic_order_cnt_lsb_minus4
+    // Without sps_sub_layer_ordering_info_present_flag, only the highest
+    // sub-layer's figures are sent, and hold for those below.
+    let first = if r.flag()? { 0 } else { sub_layers };
+    let mut dpb = Dpb {
+        pictures: 0,
+        reorder: 0,
+    };
+    for _ in first..=sub_layers {
+        dpb.pictures = dpb.pictures.max(r.ue()?.saturating_add(1));
+        dpb.reorder = dpb.reorder.max(r.ue()?);
+        r.ue()?; // sps_max_latency_increase_plus1
+    }
+    Ok(dpb)
+}
+
+/// The largest DPB the SPSs in a stream's extradata declare.
+pub(crate) fn extradata_dpb(hevc: bool, extradata: &[u8]) -> Option<Dpb> {
+    parameter_sets(hevc, extradata)
+        .into_iter()
+        .filter_map(|nal| sps_dpb(hevc, nal))
+        .max()
+}
+
+/// The largest DPB the SPSs ahead of the first picture of an Annex B packet
+/// declare, where an access unit has its parameter sets. Only the units
+/// before the picture are read through, not the picture itself.
+pub(crate) fn packet_dpb(hevc: bool, data: &[u8]) -> Option<Dpb> {
+    let (mut found, mut at) = (None, 0);
+    while let Some(code) = data.get(at..).and_then(start_code) {
+        let begin = at + code + 3;
+        let Some(&h0) = data.get(begin) else {
+            break;
+        };
+        let picture = if hevc {
+            (h0 >> 1) & 0x3f < 32
+        } else {
+            matches!(h0 & 0x1f, 1..=5)
+        };
+        if picture {
+            break;
+        }
+        let end = start_code(&data[begin..]).map_or(data.len(), |n| begin + n);
+        found = found.max(sps_dpb(hevc, &data[begin..end]));
+        at = end;
+    }
+    found
+}
+
+/// The largest DPB an HEVC stream of pictures `width` x `height` may
+/// declare at level 6.2, the highest level with limits (H.265 A.4.2, with
+/// Table A.8's MaxLumaPs and the Main profiles' maxDpbPicBuf of 6): what a
+/// decoder must be ready for when it can't read the stream's SPS. 6
+/// pictures at 8K, 16 at 4K and below.
+pub(crate) fn hevc_most_dpb(width: u32, height: u32) -> Dpb {
+    const MAX_LUMA_PS: u64 = 35_651_584;
+    const MAX_DPB_PIC_BUF: u32 = 6;
+    let size = width as u64 * height as u64;
+    let pictures = if size <= MAX_LUMA_PS >> 2 {
+        4 * MAX_DPB_PIC_BUF
+    } else if size <= MAX_LUMA_PS >> 1 {
+        2 * MAX_DPB_PIC_BUF
+    } else if size <= (3 * MAX_LUMA_PS) >> 2 {
+        4 * MAX_DPB_PIC_BUF / 3
+    } else {
+        MAX_DPB_PIC_BUF
+    }
+    .min(MAX_DPB);
+    Dpb {
+        pictures,
+        reorder: pictures - 1,
+    }
 }
 
 #[cfg(test)]
@@ -409,6 +623,250 @@ mod tests {
             assert!(!r.disposable(&pack(&key)));
             assert!(r.disposable(&pack(&[trail_n])));
         }
+    }
+
+    /// The video stream's extradata of a fixture.
+    fn extradata(name: &str) -> Vec<u8> {
+        let input = crate::info::tests::open(name);
+        let i = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).expect("video");
+        // SAFETY: the stream and its parameters live while input is open;
+        // extradata holds extradata_size bytes.
+        unsafe {
+            let par = &*(*input.streams()[i]).codecpar;
+            std::slice::from_raw_parts(par.extradata, par.extradata_size as usize).to_vec()
+        }
+    }
+
+    // hevc10_bframes.mp4: `ffmpeg -f lavfi -i testsrc2=size=256x128:rate=30
+    // -frames:v 30 -c:v libx265 -pix_fmt yuv420p10le -x265-params
+    // bframes=3:keyint=10:crf=45:info=0 -tag:v hvc1 -map_metadata -1
+    // -fflags +bitexact -flags:v +bitexact`. Its SPS, as `-bsf:v
+    // trace_headers` shows it: one sub-layer, sps_max_dec_pic_buffering_minus1
+    // 4, sps_max_num_reorder_pics 2.
+    const HEVC10_DPB: Dpb = Dpb {
+        pictures: 5,
+        reorder: 2,
+    };
+
+    #[test]
+    fn an_hevc_stream_declares_its_dpb_in_its_sps() {
+        let hvcc = extradata("hevc10_bframes.mp4");
+        assert_eq!(Record::of(true, &hvcc), Record::Hvcc);
+        assert_eq!(extradata_dpb(true, &hvcc), Some(HEVC10_DPB));
+        // The same parameter sets in band, as the decoder is sent them:
+        // Annex B, ahead of the picture.
+        let sets = parameter_sets(true, &hvcc);
+        assert_eq!(sets.len(), 3, "VPS, SPS, PPS");
+        let idr: &[u8] = &[19 << 1, 1, 0xaf];
+        let aud: &[u8] = &[35 << 1, 1, 0x10];
+        let packet = annex_b(&[&[aud][..], &sets[..], &[idr][..]].concat());
+        assert_eq!(packet_dpb(true, &packet), Some(HEVC10_DPB));
+        // MPEG-TS extradata is Annex B too.
+        let annex_b_sets = annex_b(&sets);
+        assert_eq!(Record::of(true, &annex_b_sets), Record::AnnexB);
+        assert_eq!(extradata_dpb(true, &annex_b_sets), Some(HEVC10_DPB));
+        // A picture without parameter sets says nothing, and nothing after
+        // the picture is read.
+        assert_eq!(packet_dpb(true, &annex_b(&[aud, idr])), None);
+        assert_eq!(
+            packet_dpb(true, &annex_b(&[&[idr][..], &sets[..]].concat())),
+            None
+        );
+        assert_eq!(packet_dpb(true, &[]), None);
+    }
+
+    #[test]
+    fn an_h264_stream_declares_its_dpb_in_its_vui() {
+        // h264_bframes.mp4: as hevc10_bframes.mp4, with `-c:v libx264
+        // -pix_fmt yuv420p -bf 3 -g 10 -crf 45`. trace_headers: level 1.2,
+        // 16x8 macroblocks, max_dec_frame_buffering 4, max_num_reorder_frames
+        // 2.
+        let avcc = extradata("h264_bframes.mp4");
+        assert_eq!(Record::of(false, &avcc), Record::Avcc);
+        let dpb = Dpb {
+            pictures: 5,
+            reorder: 2,
+        };
+        assert_eq!(extradata_dpb(false, &avcc), Some(dpb));
+        let sets = parameter_sets(false, &avcc);
+        assert_eq!(sets.len(), 1, "the SPS alone");
+        let slice: &[u8] = &[0x65, 0x88];
+        assert_eq!(packet_dpb(false, &annex_b(&[sets[0], slice])), Some(dpb));
+        assert_eq!(packet_dpb(false, &annex_b(&[slice, sets[0]])), None);
+
+        // Without the VUI's figure: its level's most for its size (A.3.1),
+        // at most 16.
+        let mut sps = crate::mvc::syntax::parse_sps(&unescape(sets[0])).unwrap();
+        sps.vui = None;
+        assert_eq!(sps.dec_frame_buffering(), 16);
+        // Level 4 at 1080p: 32768 macroblocks over 120x68.
+        (sps.level, sps.width_mbs, sps.height_map_units) = (40, 120, 68);
+        assert_eq!(sps.dec_frame_buffering(), 4);
+    }
+
+    /// An HEVC SPS of layer `layer` with `sub_layers` + 1 temporal
+    /// sub-layers, the lowest with a profile of its own and the next with a
+    /// level, and (dec_pic_buffering_minus1, num_reorder_pics) for the
+    /// highest sub-layer alone or for each.
+    fn hevc_sps(layer: u8, sub_layers: u32, ordering: &[(u32, u32)]) -> Vec<u8> {
+        numbered_hevc_sps(0, layer, sub_layers, ordering)
+    }
+
+    /// [`hevc_sps`] with `sps_seq_parameter_set_id` `id`.
+    fn numbered_hevc_sps(id: u32, layer: u8, sub_layers: u32, ordering: &[(u32, u32)]) -> Vec<u8> {
+        use crate::mvc::bits::{Writer, escape_into};
+        let mut w = Writer::new();
+        w.u(4, 0); // sps_video_parameter_set_id
+        w.u(3, sub_layers);
+        w.flag(true); // sps_temporal_id_nesting_flag
+        // Main 10, its compatibility flag, progressive, frame only; then the
+        // 43 reserved bits and general_inbld_flag.
+        let profile = |w: &mut Writer| {
+            w.u(2, 0);
+            w.flag(false);
+            w.u(5, 2);
+            w.u(32, 1 << 29);
+            w.u(4, 0b1001);
+            w.u(32, 0);
+            w.u(12, 0);
+        };
+        profile(&mut w);
+        w.u(8, 153); // general_level_idc: 5.1
+        for i in 0..sub_layers {
+            w.flag(i == 0);
+            w.flag(i == 1);
+        }
+        if sub_layers > 0 {
+            for _ in sub_layers..8 {
+                w.u(2, 0);
+            }
+        }
+        for i in 0..sub_layers {
+            if i == 0 {
+                profile(&mut w);
+            }
+            if i == 1 {
+                w.u(8, 120);
+            }
+        }
+        w.ue(id); // sps_seq_parameter_set_id
+        w.ue(1); // 4:2:0
+        w.ue(3840);
+        w.ue(2176);
+        w.flag(true); // conformance window: 16 rows off the bottom
+        for offset in [0, 0, 0, 8] {
+            w.ue(offset);
+        }
+        w.ue(2); // 10-bit
+        w.ue(2);
+        w.ue(4); // log2_max_pic_order_cnt_lsb_minus4
+        w.flag(ordering.len() > 1);
+        for &(buffering, reorder) in ordering {
+            w.ue(buffering);
+            w.ue(reorder);
+            w.ue(0);
+        }
+        w.trailing();
+        let mut nal = vec![33 << 1 | layer >> 5, (layer & 0x1f) << 3 | 1];
+        escape_into(&w.into_bytes(), &mut nal);
+        nal
+    }
+
+    #[test]
+    fn hevc_sub_layers_count_their_highest() {
+        // The highest sub-layer's figures alone, holding for those below.
+        let sps = hevc_sps(0, 2, &[(5, 3)]);
+        // The reserved zero bits needed emulation prevention bytes.
+        assert!(sps.windows(3).any(|w| w == [0, 0, 3]));
+        let dpb = Dpb {
+            pictures: 6,
+            reorder: 3,
+        };
+        assert_eq!(sps_dpb(true, &sps), Some(dpb));
+        // Each sub-layer's: the highest's, which are the largest.
+        let sps = hevc_sps(0, 2, &[(1, 0), (3, 1), (5, 3)]);
+        assert_eq!(sps_dpb(true, &sps), Some(dpb));
+        // One that breaks the rule still gets room for its largest.
+        let sps = hevc_sps(0, 2, &[(5, 3), (3, 1), (1, 0)]);
+        assert_eq!(sps_dpb(true, &sps), Some(dpb));
+        // One sub-layer.
+        let sps = hevc_sps(0, 0, &[(4, 2)]);
+        assert_eq!(sps_dpb(true, &sps), Some(HEVC10_DPB));
+    }
+
+    #[test]
+    fn of_several_spss_the_largest_dpb_counts() {
+        // Two SPSs whose DPBs differ, the larger first: a stream whose
+        // pictures use SPS 0 and carry SPS 1 besides, which they don't.
+        let larger = numbered_hevc_sps(0, 0, 0, &[(5, 3)]);
+        let smaller = numbered_hevc_sps(1, 0, 0, &[(2, 1)]);
+        let six = Dpb {
+            pictures: 6,
+            reorder: 3,
+        };
+        assert_eq!(sps_dpb(true, &smaller).map(|d| d.pictures), Some(3));
+        // In an hvcC, one array of both.
+        let mut hvcc = vec![1u8; 22];
+        hvcc[21] = 0xf0 | 3;
+        hvcc.extend_from_slice(&[1, 0x80 | 33, 0, 2]);
+        for sps in [&larger, &smaller] {
+            hvcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+            hvcc.extend_from_slice(sps);
+        }
+        assert_eq!(Record::of(true, &hvcc), Record::Hvcc);
+        assert_eq!(parameter_sets(true, &hvcc).len(), 2);
+        assert_eq!(extradata_dpb(true, &hvcc), Some(six));
+        // As Annex B extradata, either way round.
+        assert_eq!(
+            extradata_dpb(true, &annex_b(&[&larger[..], &smaller])),
+            Some(six)
+        );
+        assert_eq!(
+            extradata_dpb(true, &annex_b(&[&smaller[..], &larger])),
+            Some(six)
+        );
+        // Ahead of a picture in a packet.
+        let idr: &[u8] = &[19 << 1, 1, 0xaf];
+        assert_eq!(
+            packet_dpb(true, &annex_b(&[&larger[..], &smaller, idr])),
+            Some(six)
+        );
+        // Of the same DPB, the most reordered: one SPS's own figures.
+        let fewer_reordered = numbered_hevc_sps(1, 0, 0, &[(5, 1)]);
+        assert_eq!(
+            packet_dpb(true, &annex_b(&[&larger[..], &fewer_reordered, idr])),
+            Some(six)
+        );
+    }
+
+    #[test]
+    fn what_is_not_a_base_layer_sps_says_nothing() {
+        // Another layer's SPS (MV-HEVC's second view), another unit, an
+        // SPS cut short, one past the most any level allows, H.264's SPS
+        // read as HEVC.
+        assert_eq!(sps_dpb(true, &hevc_sps(1, 0, &[(4, 2)])), None);
+        assert_eq!(sps_dpb(true, &[34 << 1, 1, 0xc1]), None);
+        let sps = hevc_sps(0, 0, &[(4, 2)]);
+        assert_eq!(sps_dpb(true, &sps[..sps.len() - 4]), None);
+        assert_eq!(
+            sps_dpb(true, &hevc_sps(0, 0, &[(15, 2)])).map(|d| d.pictures),
+            Some(16)
+        );
+        assert_eq!(sps_dpb(true, &hevc_sps(0, 0, &[(16, 2)])), None);
+        assert_eq!(sps_dpb(false, &sps), None);
+        assert_eq!(extradata_dpb(true, &[]), None);
+    }
+
+    #[test]
+    fn the_most_an_hevc_dpb_may_be_shrinks_with_the_picture() {
+        let most = |w, h| hevc_most_dpb(w, h).pictures;
+        assert_eq!(most(8192, 4320), 6);
+        assert_eq!(most(8192, 4096), 6);
+        assert_eq!(most(7680, 3840), 6);
+        assert_eq!(most(6144, 3072), 8);
+        assert_eq!(most(5760, 2880), 12);
+        assert_eq!(most(3840, 2160), 16);
+        assert_eq!(most(1920, 1080), 16);
     }
 
     #[test]

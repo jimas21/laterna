@@ -507,6 +507,9 @@ pub fn open(
         player.pause();
     }
     let info = player.info().clone();
+    if let Some(video) = info.video_stream() {
+        log::info!("{}", decoder_line(&label, video, &player.stats()));
+    }
     if settings.hardware_decoding {
         warn_if_software(&label, &info, &player.stats());
     }
@@ -710,6 +713,22 @@ pub(crate) fn picked_source_subtitles(
         .clone()
         .map(PickedSubtitles::File)
         .or_else(|| track.index.map(PickedSubtitles::Stream))
+}
+
+/// The one line logged for each play: the decoder in use (hardware or
+/// software, and its name), the codec and the picture size.
+fn decoder_line(name: &str, v: &StreamInfo, st: &fp_media::Stats) -> String {
+    let (w, h) = v.display_size();
+    format!(
+        "{name}: decoding {} {w}x{h} with the {} decoder ({})",
+        stream_desc(v),
+        if st.hardware {
+            "hardware V4L2"
+        } else {
+            "software"
+        },
+        st.video_decoder
+    )
 }
 
 /// Logs why a video the hardware could decode is decoded in software.
@@ -1384,6 +1403,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn each_play_logs_its_decoder_codec_and_size() {
+        let video = |codec: &str| StreamInfo {
+            index: 0,
+            kind: fp_media::StreamKind::Video,
+            codec: codec.into(),
+            language: None,
+            title: None,
+            default: true,
+            forced: false,
+            hearing_impaired: false,
+            width: 3840,
+            height: 2160,
+            fps: 24.0,
+            bit_depth: 10,
+            pixel_format: "yuv420p10le".into(),
+            interlaced: false,
+            transfer: Default::default(),
+            rotation: 0,
+            pixel_aspect: 1.0,
+            mvc: false,
+            frame_sequential: false,
+            sample_rate: 0,
+            channels: 0,
+            ambisonic: false,
+        };
+        let hardware = fp_media::Stats {
+            hardware: true,
+            video_decoder: "v4l2 (/dev/video1)".into(),
+            ..Default::default()
+        };
+        let line = decoder_line("Movie.mkv", &video("hevc"), &hardware);
+        assert_eq!(
+            line,
+            "Movie.mkv: decoding 10-bit HEVC 3840x2160 with the hardware V4L2 decoder (v4l2 (/dev/video1))"
+        );
+        let software = fp_media::Stats {
+            video_decoder: "libdav1d".into(),
+            ..Default::default()
+        };
+        let line = decoder_line("Movie.mkv", &video("av1"), &software);
+        assert!(line.contains("10-bit AV1 3840x2160 with the software decoder (libdav1d)"));
+    }
+
+    #[test]
     fn decode_damage_is_silent_until_there_is_some() {
         let mut st = fp_media::Stats::default();
         assert_eq!(damage_total(&st), 0);
@@ -1931,6 +1994,15 @@ mod tests {
         let wrapper = "V4L2 REQBUFS: Cannot allocate memory (os error 12)";
         let n = slow_decode_notice(&stream("hevc", 8), true, Some(wrapper), &nobody).detail;
         assert!(n.contains("busy"), "{n}");
+        // Granted fewer buffers than the video's reference pictures need:
+        // the driver ran out of memory partway, as busy as when it has
+        // none. (A 10-bit stream gets the same where the renderer shows
+        // 10-bit, a setting this test leaves alone.)
+        let short = "unsupported: V4L2 REQBUFS capture granted 5 of the 13 buffers asked for, \
+                     fewer than the 6 the decoder keeps: the driver is out of memory";
+        let n = slow_decode_notice(&stream("hevc", 8), true, Some(short), &nobody);
+        assert_eq!(n.label, "Decoder busy");
+        assert!(n.detail.contains("busy"), "{}", n.detail);
         // Named when they are known, by the names people know.
         let held = fp_media::SessionHolders {
             programs: vec!["steam".into(), "steamwebhelper".into(), "mpv".into()],

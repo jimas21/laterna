@@ -20,6 +20,7 @@ impl PlexSource {
         let height = uint(media, "height").unwrap_or(1080);
         let width = uint(media, "width").unwrap_or(height.saturating_mul(16) / 9);
         let media_id = text(media, "id").ok_or_else(|| Error::parse("Plex media", "missing id"))?;
+        let codec = transcode_codec(text(media, "videoCodec").as_deref());
         let endpoint = self.client()?;
         let heights = if endpoint.relay {
             vec![height.min(720)]
@@ -47,6 +48,9 @@ impl PlexSource {
                     .append_pair("width", &w.to_string())
                     .append_pair("height", &h.to_string())
                     .append_pair("bitrate", &bitrate.to_string());
+                if codec != DEFAULT_CODEC {
+                    id.append_pair("codec", codec);
+                }
                 TranscodeTarget {
                     id: id.finish(),
                     label: format!("{h}p"),
@@ -82,6 +86,10 @@ impl PlexSource {
         let media_id = args
             .get("media")
             .ok_or_else(|| Error::Unsupported("invalid Plex media target".into()))?;
+        let codec = match args.get("codec").map(String::as_str) {
+            Some("hevc") => "hevc",
+            _ => DEFAULT_CODEC,
+        };
         let raw = self.raw_item(&location.id)?;
         let media_index = array(&raw, "Media")
             .iter()
@@ -92,39 +100,66 @@ impl PlexSource {
         if let Some(before) = lock(&self.encoding).replace(encoding.clone()) {
             stop(&endpoint.client, &endpoint.base, &before);
         }
-        let mut query = url::form_urlencoded::Serializer::new(String::new());
-        query.append_pair("path", &format!("/library/metadata/{}", location.id))
-            .append_pair("mediaIndex", &media_index.to_string()).append_pair("partIndex", "-1")
-            .append_pair("protocol", "http").append_pair("directPlay", "0").append_pair("directStream", "1")
-            .append_pair("offset", &if start.is_finite() { start.max(0.0) } else { 0.0 }.to_string())
-            .append_pair("videoResolution", &format!("{width}x{height}"))
-            .append_pair("videoBitrate", &(bitrate / 1000).to_string())
-            .append_pair("X-Plex-Client-Profile-Name", "Generic")
-            .append_pair("X-Plex-Client-Profile-Extra", "add-transcode-target(type=videoProfile&context=streaming&protocol=http&container=mkv&videoCodec=h264&audioCodec=aac&subtitleCodec=srt)")
-            .append_pair("session", &encoding)
-            .append_pair("X-Plex-Session-Identifier", watch.map_or(encoding.as_str(), |s| s.id.as_str()));
-        if let Some(watch) = watch {
-            if let Some(audio) = &watch.audio_stream {
-                query.append_pair("audioStreamID", audio);
-            }
-            if let Some(subtitle) = &watch.subtitle_stream {
-                query.append_pair("subtitleStreamID", subtitle);
-                query.append_pair("subtitles", if subtitle == "0" { "none" } else { "burn" });
-            }
-        }
-        let query = query.finish();
-        let decision = self
-            .json(&format!("/video/:/transcode/universal/decision?{query}"))
-            .and_then(|value| {
-                let decision = super::container(&value);
-                if num(decision, "generalDecisionCode").is_some_and(|n| n >= 2000.0) {
-                    return Err(Error::Unsupported(
-                        text(decision, "generalDecisionText")
-                            .unwrap_or_else(|| "Plex declined transcoding".into()),
-                    ));
+        let build = |codec: &str| {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query
+                .append_pair("path", &format!("/library/metadata/{}", location.id))
+                .append_pair("mediaIndex", &media_index.to_string())
+                .append_pair("partIndex", "-1")
+                .append_pair("protocol", "http")
+                .append_pair("directPlay", "0")
+                .append_pair("directStream", "1")
+                .append_pair(
+                    "offset",
+                    &if start.is_finite() {
+                        start.max(0.0)
+                    } else {
+                        0.0
+                    }
+                    .to_string(),
+                )
+                .append_pair("videoResolution", &format!("{width}x{height}"))
+                .append_pair("videoBitrate", &(bitrate / 1000).to_string())
+                .append_pair("X-Plex-Client-Profile-Name", "Generic")
+                .append_pair("X-Plex-Client-Profile-Extra", &profile_extra(codec))
+                .append_pair("session", &encoding)
+                .append_pair(
+                    "X-Plex-Session-Identifier",
+                    watch.map_or(encoding.as_str(), |s| s.id.as_str()),
+                );
+            if let Some(watch) = watch {
+                if let Some(audio) = &watch.audio_stream {
+                    query.append_pair("audioStreamID", audio);
                 }
-                Ok(())
-            });
+                if let Some(subtitle) = &watch.subtitle_stream {
+                    query.append_pair("subtitleStreamID", subtitle);
+                    query.append_pair("subtitles", if subtitle == "0" { "none" } else { "burn" });
+                }
+            }
+            query.finish()
+        };
+        let decide = |query: &str| {
+            self.json(&format!("/video/:/transcode/universal/decision?{query}"))
+                .and_then(|value| {
+                    let decision = super::container(&value);
+                    if num(decision, "generalDecisionCode").is_some_and(|n| n >= 2000.0) {
+                        return Err(Error::Unsupported(
+                            text(decision, "generalDecisionText")
+                                .unwrap_or_else(|| "Plex declined transcoding".into()),
+                        ));
+                    }
+                    Ok(())
+                })
+        };
+        let mut query = build(codec);
+        let mut decision = decide(&query);
+        if decision.is_err() && codec != DEFAULT_CODEC {
+            // The server cannot encode HEVC (no licence, no hardware):
+            // H.264 is what every server can do.
+            log::info!("Plex declined an HEVC transcode, asking for H.264");
+            query = build(DEFAULT_CODEC);
+            decision = decide(&query);
+        }
         let body = decision
             .and_then(|_| {
                 resource_url(
@@ -155,6 +190,28 @@ impl PlexSource {
     }
 }
 
+/// What a transcode is encoded to unless the file needs another.
+const DEFAULT_CODEC: &str = "h264";
+
+/// Codecs the Steam Frame's hardware decoder cannot decode. A file in one
+/// is encoded to HEVC, which it decodes in hardware, rather than H.264.
+const NO_HARDWARE: [&str; 2] = ["av1", "vp9"];
+
+/// The codec to ask the server to encode a file with `video_codec` to.
+fn transcode_codec(video_codec: Option<&str>) -> &'static str {
+    match video_codec {
+        Some(c) if NO_HARDWARE.iter().any(|n| c.eq_ignore_ascii_case(n)) => "hevc",
+        _ => DEFAULT_CODEC,
+    }
+}
+
+/// The client profile addition naming what the transcode may be encoded to.
+fn profile_extra(codec: &str) -> String {
+    format!(
+        "add-transcode-target(type=videoProfile&context=streaming&protocol=http&container=mkv&videoCodec={codec}&audioCodec=aac&subtitleCodec=srt)"
+    )
+}
+
 fn stop(client: &crate::http::HttpClient, base: &str, id: &str) {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     query.append_pair("session", id);
@@ -164,5 +221,25 @@ fn stop(client: &crate::http::HttpClient, base: &str, id: &str) {
         .and_then(|r| r.error_for_status(&url))
     {
         log::debug!("stopping Plex encoding: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_without_a_hardware_decoder_are_encoded_to_hevc() {
+        assert_eq!(transcode_codec(Some("av1")), "hevc");
+        assert_eq!(transcode_codec(Some("VP9")), "hevc");
+        assert_eq!(transcode_codec(Some("hevc")), "h264");
+        assert_eq!(transcode_codec(Some("h264")), "h264");
+        assert_eq!(transcode_codec(None), "h264");
+    }
+
+    #[test]
+    fn the_profile_names_the_codec_asked_for() {
+        assert!(profile_extra("hevc").contains("videoCodec=hevc&"));
+        assert!(profile_extra("h264").contains("videoCodec=h264&"));
     }
 }
