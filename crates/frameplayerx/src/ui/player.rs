@@ -778,6 +778,7 @@ struct MoreState {
     loop_video: bool,
     autoplay: bool,
     speed: f64,
+    sleep: crate::sleep_timer::Sleep,
     size: Option<ScreenSize>,
     /// Keys the bar was too narrow for.
     dropped: Dropped,
@@ -822,6 +823,12 @@ fn more_columns(m: &MoreState) -> [Vec<MoreRow>; 2] {
             icons::BOOKMARK_SIMPLE,
             tr!("more-bookmark"),
             Does::act(Action::AddBookmark),
+        ),
+        MoreRow::value(
+            icons::TIMER,
+            tr!("more-sleep"),
+            sleep_label(m.sleep),
+            Action::CycleSleep,
         ),
     ];
     // What the bar had no room for.
@@ -882,6 +889,11 @@ fn more_columns(m: &MoreState) -> [Vec<MoreRow>; 2] {
             });
         }
     }
+    screen.push(MoreRow::go(
+        icons::GAME_CONTROLLER,
+        tr!("more-controller"),
+        Does::act(Action::OpenControllerSettings),
+    ));
     // Your room shows around a flat video's screen, or through a
     // side-by-side passthrough video's own mask.
     if m.passthrough_available {
@@ -927,6 +939,7 @@ pub fn more_panel(ctx: &egui::Context, v: &mut View) {
         loop_video: v.settings.loop_video,
         autoplay: v.settings.autoplay,
         speed: pb.player.speed(),
+        sleep: v.state.sleep,
         size: super::size::current(v.settings, &pb.settings, v.place_shown),
         dropped: v.state.bar_dropped,
     };
@@ -1109,6 +1122,19 @@ fn next_speed(speed: f64) -> f64 {
         .copied()
         .find(|s| *s > speed + 1e-3)
         .unwrap_or(SPEEDS[0])
+}
+
+/// What the sleep timer row says it is set to.
+fn sleep_label(sleep: crate::sleep_timer::Sleep) -> String {
+    use crate::sleep_timer::Sleep;
+    match sleep {
+        Sleep::Off => tr!("more-off").to_string(),
+        Sleep::EndOfItem => tr!("more-sleep-end").to_string(),
+        Sleep::After { minutes, .. } => {
+            let left = sleep.minutes_left().unwrap_or(minutes);
+            tr!("more-sleep-minutes", minutes = minutes, left = left)
+        }
+    }
 }
 
 fn fmt_speed(speed: f64) -> String {

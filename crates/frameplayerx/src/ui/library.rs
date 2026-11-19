@@ -57,6 +57,10 @@ pub fn browser(ctx: &egui::Context, v: &mut View) {
                 super::whats_new::card(ui, v);
                 return;
             }
+            if v.state.tips {
+                super::whats_new::tips(ui, v);
+                return;
+            }
             if v.state.picking.is_some() {
                 super::playlists::picker(ui, v);
                 return;
@@ -74,6 +78,11 @@ pub fn browser(ctx: &egui::Context, v: &mut View) {
                 Screen::UpNext => super::queue::page(ui, v),
             }
         });
+    // The opening, over everything the panel shows.
+    if let Some(mut a) = v.state.afterglow {
+        let running = super::afterglow::paint(ctx, ctx.screen_rect() - room, &mut a);
+        v.state.afterglow = running.then_some(a);
+    }
 }
 
 /// The app icon (assets/logo.svg): a lantern's brass lens throws a beam onto

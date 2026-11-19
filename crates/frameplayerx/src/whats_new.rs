@@ -56,9 +56,23 @@ pub fn to_show(last: &str, current: &str) -> Option<&'static Entry> {
     entry(current)
 }
 
+/// Whether the one-time hint card is due: after an update from a version
+/// that ran before (`last` is empty on a first run, which has nothing to
+/// point out yet). The caller has already checked it was not shown.
+pub fn tips_due(last: &str) -> bool {
+    !last.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hint_card_follows_an_update_not_a_first_run() {
+        assert!(!tips_due(""));
+        assert!(tips_due("0.18.0-beta.17"));
+        assert!(tips_due(crate::settings::EARLIER_VERSION));
+    }
 
     #[test]
     fn a_first_run_shows_nothing() {

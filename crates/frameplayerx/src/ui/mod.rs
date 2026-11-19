@@ -2,6 +2,7 @@
 //! state; anything that changes more than view-local state is returned as
 //! an [`Action`] for the app to apply.
 
+pub mod afterglow;
 pub mod catalog;
 pub mod controller_map;
 pub mod crash;
@@ -461,6 +462,13 @@ pub enum Action {
     ShowWhatsNew,
     /// The What's new card's OK.
     DismissWhatsNew,
+    /// The More list's sleep timer row: the next choice.
+    CycleSleep,
+    /// The one-time hint card's OK.
+    DismissTips,
+    /// Opens Settings > Controls (the button remap page), from the player's
+    /// More list or the hint card.
+    OpenControllerSettings,
     Recenter,
     TogglePassthrough,
     /// Settings › General › Screen follows you.
@@ -934,6 +942,12 @@ pub struct UiState {
     pub crash: Option<crash::CrashPrompt>,
     /// The What's new card, after an update or from About.
     pub whats_new: Option<&'static crate::whats_new::Entry>,
+    /// The sleep timer (off until chosen in the player's More list).
+    pub sleep: crate::sleep_timer::Sleep,
+    /// The one-time hint card shows (once the What's new card is gone).
+    pub tips: bool,
+    /// The opening over the library, while it runs.
+    pub afterglow: Option<afterglow::Afterglow>,
     pub open_error: Option<String>,
     pub opening: Option<String>,
     pub toast: Option<(String, std::time::Instant)>,
@@ -1022,6 +1036,9 @@ impl Default for UiState {
             bar_dropped: Default::default(),
             crash: None,
             whats_new: None,
+            sleep: Default::default(),
+            tips: false,
+            afterglow: None,
             open_error: None,
             opening: None,
             toast: None,

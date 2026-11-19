@@ -273,6 +273,11 @@ pub struct Settings {
     /// Empty on a first run; [`EARLIER_VERSION`] for a file saved before
     /// this was kept (see [`Settings::load`]).
     pub last_version: String,
+    /// The short opening over the library at start (Settings > General).
+    pub afterglow_opening: bool,
+    /// The one-time hint card (move, resize, seat, lights) has been shown
+    /// or dismissed.
+    pub tips_seen: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -413,6 +418,8 @@ impl Default for Settings {
             sound_from_screen: true,
             room_echo: ROOM_ECHO_START,
             last_version: String::new(),
+            afterglow_opening: true,
+            tips_seen: false,
         }
     }
 }
@@ -711,6 +718,25 @@ mod tests {
         assert_eq!(p.environment, "moon");
         let shown = crate::app::places::active_place(&p.environment, false, true, true);
         assert_eq!(shown, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_opening_starts_on_and_the_hint_card_unseen() {
+        let s = Settings::default();
+        assert!(s.afterglow_opening);
+        assert!(!s.tips_seen);
+        let name = format!("fp-opening-{}", std::process::id());
+        let dir = std::env::temp_dir().join(name);
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file from before has the opening on and the card unseen.
+        std::fs::write(&path, r#"{"volume": 0.5}"#).unwrap();
+        let p = Settings::load(&path);
+        assert!(p.afterglow_opening && !p.tips_seen);
+        std::fs::write(&path, r#"{"afterglow_opening": false, "tips_seen": true}"#).unwrap();
+        let p = Settings::load(&path);
+        assert!(!p.afterglow_opening && p.tips_seen);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

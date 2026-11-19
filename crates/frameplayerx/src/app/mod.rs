@@ -249,6 +249,8 @@ pub struct App {
     /// How far the house lights have come up, 1 full and 0 at the level they
     /// keep while a video plays (see [`places::house_step`]).
     house_ease: f32,
+    /// The sleep timer has turned the sound down (so it is put back).
+    sleep_faded: bool,
     /// Holds the house lights at this level, 0 dark to 1 full, instead of
     /// letting playback dim and raise them: for the desktop preview.
     pub house_override: Option<f32>,
@@ -410,6 +412,7 @@ impl App {
             places_enabled: places::enabled_from_env(),
             place_shown: None,
             house_ease: 1.0,
+            sleep_faded: false,
             house_override: None,
             remote_details_at: Instant::now(),
             remote_picture: None,

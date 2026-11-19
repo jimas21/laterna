@@ -75,6 +75,10 @@ impl App {
                     p.set_volume(v);
                 }
                 self.settings.volume = v;
+                // Someone who changes the volume while it fades is awake.
+                if self.sleep_faded {
+                    self.ui.sleep = Default::default();
+                }
             }
             Action::ClosePlayback => self.close_playback(),
             Action::SetFormat(f) => {
@@ -335,6 +339,22 @@ impl App {
                 self.ui.whats_new = crate::whats_new::for_about(env!("CARGO_PKG_VERSION"));
             }
             Action::DismissWhatsNew => self.ui.whats_new = None,
+            Action::CycleSleep => self.ui.sleep = self.ui.sleep.next(),
+            Action::DismissTips => {
+                self.ui.tips = false;
+                self.settings.tips_seen = true;
+            }
+            Action::OpenControllerSettings => {
+                self.ui.tips = false;
+                self.settings.tips_seen = true;
+                self.ui.whats_new = None;
+                self.ui.screen = crate::ui::Screen::Settings;
+                self.ui.settings_tab = crate::ui::SettingsTab::Controller;
+                self.ui.details = None;
+                self.ui.picking = None;
+                self.ui.more_open = false;
+                self.apply(Action::ShowBrowser(true));
+            }
             Action::Recenter => self.recenter(),
             Action::TogglePassthrough => self.settings.passthrough = !self.settings.passthrough,
             Action::ToggleFollow => self.settings.follow = !self.settings.follow,

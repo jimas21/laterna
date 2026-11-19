@@ -201,6 +201,9 @@ fn note(ui: &mut egui::Ui, text: &str) {
 
 fn controller(ui: &mut egui::Ui, v: &mut View) {
     use crate::bindings::Bindings;
+    heading(ui, tr!("settings-remap-heading"));
+    note(ui, tr!("settings-remap-desc"));
+    ui.add_space(8.0);
     super::controller_map::controller_map(ui, v);
     heading(ui, tr!("settings-controls-fixed"));
     widgets::rows(ui, |r| {
@@ -321,6 +324,11 @@ fn general(ui: &mut egui::Ui, v: &mut View) {
             tr!("settings-follow"),
             Some(tr!("settings-follow-desc")),
             &mut s.follow,
+        );
+        r.switch(
+            tr!("settings-opening"),
+            Some(tr!("settings-opening-desc")),
+            &mut s.afterglow_opening,
         );
         r.switch(
             tr!("settings-window-controls"),

@@ -42,7 +42,7 @@ settings-sound = Sound and subtitles
 # Short: a tab.
 settings-passthrough = Passthrough
 # Short: a tab.
-settings-controller = Controller
+settings-controller = Controls
 # Short: a tab.
 settings-haptics = Haptics
 # Heading of a group in Settings > Sound.
@@ -1138,6 +1138,24 @@ worker-reading = Reading videos
 whats-new-title = What's new in Laterna { $version }
 # Short: a button.
 whats-new-ok = OK
+# A switch: the short animation over the library when Laterna starts.
+settings-opening = Opening animation
+settings-opening-desc = A short animation over the library as Laterna starts. Press anywhere to skip it.
+# A heading over the controller drawing in Settings > Controls.
+settings-remap-heading = Change what the buttons do
+settings-remap-desc = Each glowing button can do something else. Point at one and pull the trigger to choose what it does, on its own or with the grip held.
+# A toast when the sleep timer pauses the video.
+sleep-paused = Paused by the sleep timer
+# The one-time card after an update.
+tips-title = Getting around
+tips-move = Point at the screen to bring up its move bar. Grab the bar to move the screen anywhere, and reach out or pull back to bring it nearer or push it away.
+tips-resize = Grab the screen's corner to make it bigger or smaller.
+tips-seat = Pick a seat: open More, then Place around the screen, and choose your seat.
+tips-lights = Dim the lights: the room darkens as the video plays and comes back up when you pause. Set how dark in the same place.
+# Short: a button.
+tips-ok = Got it
+# Short: a button.
+tips-buttons = Change controller buttons
 settings-whats-new = What's new
 settings-whats-new-desc = What changed in this version.
 # Short: a button.
@@ -1596,6 +1614,11 @@ more-follow-place = Does nothing inside a place
 more-multitask = Browse beside the video
 more-place = Place around the screen
 more-room = Show my room
+more-sleep = Sleep timer
+# The sleep timer's choice: { $minutes } is 15, 30, 45 or 60; { $left } counts down.
+more-sleep-minutes = { $minutes } min ({ $left } left)
+more-sleep-end = End of video
+more-controller = Change controller buttons
 more-on = On
 more-off = Off
 
