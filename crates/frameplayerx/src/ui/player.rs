@@ -3193,6 +3193,7 @@ mod tests {
                 "Up next list",
                 "Browse the library",
                 "Bookmark this moment",
+                "Sleep timer",
             ]
         );
         assert_eq!(
@@ -3202,6 +3203,7 @@ mod tests {
                 "Screen follows you",
                 "Browse beside the video",
                 "Place around the screen",
+                "Change controller buttons",
                 "Show my room",
             ]
         );
@@ -3214,6 +3216,11 @@ mod tests {
         // Only the rows that open something shut the list.
         assert!(play[3].closes && play[4].closes && play[5].closes);
         assert!(!play[0].closes && !screen[1].closes);
+        // The sleep timer steps through its choices and leaves the list open.
+        assert_eq!(play[6].mark, Mark::Value("Off".into()));
+        assert!(!play[6].closes);
+        // The controller buttons open Settings, so the list shuts.
+        assert!(screen[4].closes);
     }
 
     #[test]
@@ -3230,13 +3237,16 @@ mod tests {
     #[test]
     fn around_a_vr_video_only_its_mask_remains_of_the_screen_column() {
         let mut m = watching(false);
-        assert!(more_columns(&m)[1].is_empty());
+        assert_eq!(labels(&more_columns(&m)[1]), ["Change controller buttons"]);
         m.mask = Some(VideoFormat::default());
         let [play, screen] = more_columns(&m);
-        assert_eq!(labels(&screen), ["Use the video's mask"]);
-        assert_eq!(play.len(), 6);
+        assert_eq!(
+            labels(&screen),
+            ["Change controller buttons", "Use the video's mask"]
+        );
+        assert_eq!(play.len(), 7);
         m.passthrough_available = false;
-        assert!(more_columns(&m)[1].is_empty());
+        assert_eq!(more_columns(&m)[1].len(), 1);
     }
 
     #[test]
@@ -3250,6 +3260,6 @@ mod tests {
         assert_eq!(labels(&play).last(), Some(&"Hide the controls"));
         m.dropped.adjust = true;
         let [play, _] = more_columns(&m);
-        assert_eq!(&labels(&play)[6..], ["Adjust", "Hide the controls"]);
+        assert_eq!(&labels(&play)[7..], ["Adjust", "Hide the controls"]);
     }
 }
