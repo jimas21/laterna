@@ -469,7 +469,7 @@ impl Mixer {
         out.fill(0.0);
         let slew = 1.0 - (-1.0 / (FADE_TAU * RATE as f32)).exp();
         for l in &mut self.layers {
-            for frame in out.chunks_exact_mut(2) {
+            for frame in out.as_chunks_mut::<2>().0.iter_mut() {
                 l.gain += (l.target - l.gain) * slew;
                 if l.target == 0.0 && l.gain < SILENT {
                     l.gain = 0.0;
@@ -620,7 +620,12 @@ mod tests {
     #[test]
     fn a_murmur_has_two_channels_that_are_not_the_same() {
         let out = render_secs(Sound::Murmur, 3.0);
-        let diff: f32 = out.chunks_exact(2).map(|f| (f[0] - f[1]).abs()).sum();
+        let diff: f32 = out
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|f| (f[0] - f[1]).abs())
+            .sum();
         assert!(diff > 1.0, "{diff}");
     }
 
@@ -628,7 +633,7 @@ mod tests {
     fn crickets_sing_high_and_the_fire_does_not() {
         // A crude measure of pitch: how often the signal changes sign.
         let rate = |x: &[f32]| {
-            let l: Vec<f32> = x.chunks_exact(2).map(|f| f[0] + f[1]).collect();
+            let l: Vec<f32> = x.as_chunks::<2>().0.iter().map(|f| f[0] + f[1]).collect();
             let mut loud = 0usize;
             let mut zc = 0usize;
             for w in l.windows(2) {
@@ -664,9 +669,10 @@ mod tests {
         assert!(early > 0.003, "{early}");
         assert!(late == 0.0, "{late}");
         // No sample jumps by more than the sound itself moves.
-        let jump = out
-            .chunks_exact(2)
-            .zip(out.chunks_exact(2).skip(1))
+        let frames = out.as_chunks::<2>().0;
+        let jump = frames
+            .iter()
+            .zip(frames.iter().skip(1))
             .fold(0.0f32, |m, (a, b)| m.max((a[0] - b[0]).abs()));
         assert!(jump < 0.2, "{jump}");
         assert!(!m.audible());

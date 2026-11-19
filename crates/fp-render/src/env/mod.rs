@@ -96,6 +96,21 @@ impl Place {
         })
     }
 
+    /// The sounds the place makes, mixed on their own and set with the
+    /// Room ambience slider. A place with none is quiet.
+    pub fn ambience(self) -> &'static [AmbienceLoop] {
+        use fp_media::audio::ambience::Sound;
+        match self {
+            // The audience before the film: a soft murmur that goes as the
+            // house lights go down.
+            Place::Cinema => &[AmbienceLoop {
+                sound: Sound::Murmur,
+                with_house_lights: true,
+            }],
+            Place::Studio => &[],
+        }
+    }
+
     /// The seats and screen frame. Cheap: no meshes are built.
     ///
     /// A place with an installed pack (see [`pack`]) has the pack's seats and
