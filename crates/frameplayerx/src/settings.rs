@@ -766,7 +766,11 @@ mod tests {
         let p = Settings::load(&path);
         assert_eq!(p.ambience_level, AMBIENCE_START);
         assert!(!p.minimal_lighting);
-        std::fs::write(&path, r#"{"ambience_level": 9.0, "minimal_lighting": true}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"ambience_level": 9.0, "minimal_lighting": true}"#,
+        )
+        .unwrap();
         let p = Settings::load(&path);
         assert_eq!(p.ambience_level, 1.0);
         assert!(p.minimal_lighting);

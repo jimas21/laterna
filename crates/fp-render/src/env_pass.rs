@@ -1235,7 +1235,11 @@ mod tests {
         let mut changed = 0;
         let mut kept_picture = 0;
         for (k, m) in data.palette.iter().enumerate() {
-            let (f, off, half) = (full.palette2[k].x, at(0.0).palette2[k].x, at(0.5).palette2[k].x);
+            let (f, off, half) = (
+                full.palette2[k].x,
+                at(0.0).palette2[k].x,
+                at(0.5).palette2[k].x,
+            );
             match m.pattern {
                 Pattern::Emissive | Pattern::EmissiveHouse => {
                     assert!(f > 0.0);

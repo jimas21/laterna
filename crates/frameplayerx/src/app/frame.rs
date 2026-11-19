@@ -429,12 +429,10 @@ impl App {
         let device = &self.settings.audio_device;
         self.ambience
             .get_or_insert_with(|| {
-                fp_media::audio::ambience::Ambience::start(
-                    fp_media::audio::output::Backend::Alsa {
-                        device: device.clone(),
-                        latency_ms: 120,
-                    },
-                )
+                fp_media::audio::ambience::Ambience::start(fp_media::audio::output::Backend::Alsa {
+                    device: device.clone(),
+                    latency_ms: 120,
+                })
             })
             .set(&wants);
     }

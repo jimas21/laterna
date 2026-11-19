@@ -657,7 +657,8 @@ mod tests {
         m.set(&[]);
         let mut out = vec![0.0; 2 * RATE as usize * 6];
         m.render(&mut out);
-        let secs = |a: f32, b: f32| &out[(a * RATE as f32) as usize * 2..(b * RATE as f32) as usize * 2];
+        let secs =
+            |a: f32, b: f32| &out[(a * RATE as f32) as usize * 2..(b * RATE as f32) as usize * 2];
         let early = rms(secs(0.0, 0.5));
         let late = rms(secs(5.0, 6.0));
         assert!(early > 0.003, "{early}");
