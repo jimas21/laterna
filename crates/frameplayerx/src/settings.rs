@@ -116,6 +116,10 @@ pub const SCREEN_LIGHT_START: f32 = 0.5;
 /// How much room echo a place's sound has until it is changed.
 pub const ROOM_ECHO_START: f32 = 0.5;
 
+/// How loud a place's ambience (the murmur before a film, a camp fire) is
+/// until it is changed: modest, a share of the sound's own soft level.
+pub const AMBIENCE_START: f32 = 0.5;
+
 /// What the top of the Screen light slider asks of the renderer, as a
 /// multiple of the places' own strength: two stops of headroom, for a viewer
 /// who wants the room to follow the picture more than a real cinema's does.
@@ -269,6 +273,13 @@ pub struct Settings {
     /// How much echo a place's walls give the sound, 0 to 1; a place without
     /// walls (and plain video, and passthrough) has none whatever this is.
     pub room_echo: f32,
+    /// How loud a place's own sounds are, 0 (off) to 1: the murmur of a
+    /// cinema before the film. A place makes none when it is not shown.
+    pub ambience_level: f32,
+    /// Settings > Places > Minimal lighting: a place's own lights (exit
+    /// signs, step lights) go fully off for the film instead of dimming with
+    /// the house lights, and come back when it pauses.
+    pub minimal_lighting: bool,
     /// The version that ran last, so an update can show what is new once.
     /// Empty on a first run; [`EARLIER_VERSION`] for a file saved before
     /// this was kept (see [`Settings::load`]).
@@ -412,6 +423,8 @@ impl Default for Settings {
             screen_light_level: SCREEN_LIGHT_START,
             sound_from_screen: true,
             room_echo: ROOM_ECHO_START,
+            ambience_level: AMBIENCE_START,
+            minimal_lighting: false,
             last_version: String::new(),
         }
     }
@@ -498,6 +511,11 @@ impl Settings {
                         s.room_echo.clamp(0.0, 1.0)
                     } else {
                         ROOM_ECHO_START
+                    };
+                    s.ambience_level = if s.ambience_level.is_finite() {
+                        s.ambience_level.clamp(0.0, 1.0)
+                    } else {
+                        AMBIENCE_START
                     };
                     s.screen_light_level = if s.screen_light_level.is_finite() {
                         s.screen_light_level.clamp(0.0, 1.0)
@@ -732,6 +750,28 @@ mod tests {
         let p = Settings::load(&path);
         assert!(!p.sound_from_screen);
         assert_eq!(p.room_echo, 1.0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_ambience_starts_modest_and_minimal_lighting_off_and_both_are_kept_in_range() {
+        let s = Settings::default();
+        assert_eq!(s.ambience_level, AMBIENCE_START);
+        assert!(!s.minimal_lighting);
+        let dir = std::env::temp_dir().join(format!("fp-ambience-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file from before has them at the defaults.
+        std::fs::write(&path, r#"{"volume": 0.5}"#).unwrap();
+        let p = Settings::load(&path);
+        assert_eq!(p.ambience_level, AMBIENCE_START);
+        assert!(!p.minimal_lighting);
+        std::fs::write(&path, r#"{"ambience_level": 9.0, "minimal_lighting": true}"#).unwrap();
+        let p = Settings::load(&path);
+        assert_eq!(p.ambience_level, 1.0);
+        assert!(p.minimal_lighting);
+        std::fs::write(&path, r#"{"ambience_level": -2.0}"#).unwrap();
+        assert_eq!(Settings::load(&path).ambience_level, 0.0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -408,6 +408,37 @@ impl App {
         }
     }
 
+    /// Sets what the room around the picture sounds and shines like, from
+    /// where the house lights are: its ambience (silent with no place shown,
+    /// while the headset is off, and during the film) and, with Minimal
+    /// lighting on, how far its own lights glow.
+    fn update_room_ambience(&mut self, renderer: &mut Renderer, place: Option<Place>) {
+        let ease = self.house_override.unwrap_or(self.house_ease);
+        renderer.set_accent_lights(places::accent_light_scale(
+            self.settings.minimal_lighting,
+            ease,
+        ));
+        let wants = if self.headset_paused {
+            Vec::new()
+        } else {
+            places::ambience_wants(place, ease, self.settings.ambience_level)
+        };
+        if wants.is_empty() && self.ambience.is_none() {
+            return;
+        }
+        let device = &self.settings.audio_device;
+        self.ambience
+            .get_or_insert_with(|| {
+                fp_media::audio::ambience::Ambience::start(
+                    fp_media::audio::output::Backend::Alsa {
+                        device: device.clone(),
+                        latency_ms: 120,
+                    },
+                )
+            })
+            .set(&wants);
+    }
+
     /// The picture: what its yaw and pitch turn (by dragging it, or the
     /// Position sliders). A flat screen and the subtitles are placed from
     /// it; a 180°/360° picture turns the same way. A flat screen starts
@@ -814,6 +845,7 @@ impl App {
         let in_place = self.active_place(input.passthrough_available);
         self.place_shown = in_place;
         self.update_house_lights(input.dt);
+        self.update_room_ambience(renderer, in_place);
         let anchor_rot = anchor.to_scale_rotation_translation().1;
         let player = self.picture_anchor(anchor);
         // A room sits round the viewer in a seat and turns with the picture;

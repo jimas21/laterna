@@ -199,8 +199,8 @@ struct Murmur {
 
 /// How many talkers make the murmur.
 const VOICES: usize = 9;
-/// Scales the murmur to a modest level (about -30 dB of full scale).
-const MURMUR_GAIN: f32 = 0.5;
+/// Scales the murmur to a modest level (about -28 dB of full scale).
+const MURMUR_GAIN: f32 = 1.2;
 
 impl Murmur {
     fn new() -> Murmur {
@@ -367,7 +367,7 @@ struct Crickets {
 }
 
 const CRICKETS: usize = 5;
-const CRICKET_GAIN: f32 = 0.05;
+const CRICKET_GAIN: f32 = 0.15;
 
 impl Crickets {
     fn new() -> Crickets {
@@ -598,9 +598,8 @@ mod tests {
             let out = render_secs(s, 6.0);
             let r = rms(&out);
             let peak = out.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-            eprintln!("LEVEL {s:?} rms {r} peak {peak}");
             assert!(out.iter().all(|v| v.is_finite()), "{s:?}");
-            assert!(r > 0.003, "{s:?} is silent: rms {r}");
+            assert!(r > 0.008, "{s:?} is silent: rms {r}");
             assert!(r < 0.12, "{s:?} is loud: rms {r}");
             assert!(peak < 0.8, "{s:?} peaks at {peak}");
         }

@@ -5,6 +5,7 @@
 
 use crate::settings::{HOUSE_PLAYING, HOUSE_PLAYING_START, Settings};
 use fp_media::PlayerState;
+use fp_media::audio::ambience::Sound;
 use fp_render::env::{Layout, Place};
 use glam::{Mat4, Vec2, Vec3};
 
@@ -129,6 +130,56 @@ pub fn house_level(ease: f32, playing_level: f32) -> f32 {
 /// when the preview holds the lights at one (`App::house_override`).
 pub fn house_shown(ease: f32, forced: Option<f32>, playing_level: f32) -> f32 {
     house_level(forced.unwrap_or(ease), playing_level)
+}
+
+/// The house-light ease at and under which the lights count as down for the
+/// film: what depends on them (the room's murmur, the exit signs under
+/// Minimal lighting) is gone entirely from there, not left to fade out for
+/// ever. The ease reaches it about 1.8 s into a film.
+const LIGHTS_DOWN_AT: f32 = 0.05;
+
+/// How far the house lights are up as the room's own sounds and lights see
+/// it: 1 with them up, 0 once they are down for the film, easing between.
+pub fn lights_up(ease: f32) -> f32 {
+    if !ease.is_finite() {
+        return 1.0;
+    }
+    ((ease - LIGHTS_DOWN_AT) / (1.0 - LIGHTS_DOWN_AT)).clamp(0.0, 1.0)
+}
+
+/// The sounds the room makes and how loud, for `place` (`None`: no place is
+/// shown, so there is no room to hear) with the house lights at `ease` and
+/// the Room ambience slider at `level` (0 to 1). A sound that goes with the
+/// house lights fades with them and is silent during the film.
+pub fn ambience_wants(place: Option<Place>, ease: f32, level: f32) -> Vec<(Sound, f32)> {
+    let Some(place) = place else {
+        return Vec::new();
+    };
+    let level = if level.is_finite() {
+        level.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    place
+        .ambience()
+        .iter()
+        .map(|l| {
+            let follow = if l.with_house_lights {
+                lights_up(ease)
+            } else {
+                1.0
+            };
+            (l.sound, level * follow)
+        })
+        .filter(|&(_, gain)| gain > 0.0)
+        .collect()
+}
+
+/// How strongly the room's own lights (exit signs, step lights) glow: as
+/// built, or with Minimal lighting on, in step with the house lights, so they
+/// are off for the film and come back when it pauses.
+pub fn accent_light_scale(minimal: bool, ease: f32) -> f32 {
+    if minimal { lights_up(ease) } else { 1.0 }
 }
 
 /// The index of the seat to sit in: the one picked for `place` if it is
@@ -277,6 +328,54 @@ mod tests {
         }
         assert!(ease >= 0.95, "1 s of Paused: {ease}");
         assert!(held < ease);
+    }
+
+    #[test]
+    fn the_murmur_goes_with_the_house_lights_and_only_in_a_place() {
+        let at = |place, ease, level| ambience_wants(place, ease, level);
+        let murmur = |g: f32| vec![(Sound::Murmur, g)];
+        assert_eq!(at(Some(Place::Cinema), 1.0, 0.4), murmur(0.4));
+        // Part way down the sound is part way down; during the film it is
+        // not asked for at all.
+        let mid = at(Some(Place::Cinema), 0.5, 1.0)[0].1;
+        assert!(mid > 0.3 && mid < 0.7, "{mid}");
+        assert!(at(Some(Place::Cinema), 0.04, 1.0).is_empty());
+        assert!(at(Some(Place::Cinema), 0.0, 1.0).is_empty());
+        // No place (plain, passthrough, a 360 video), a quiet room (a
+        // place that makes no sound) and a slider at 0 are all silent.
+        assert!(at(None, 1.0, 1.0).is_empty());
+        assert!(at(Some(Place::Studio), 1.0, 1.0).is_empty());
+        assert!(at(Some(Place::Cinema), 1.0, 0.0).is_empty());
+        // Nonsense in is calm out.
+        assert!(at(Some(Place::Cinema), 1.0, f32::NAN).is_empty());
+        assert_eq!(at(Some(Place::Cinema), f32::NAN, 2.0), murmur(1.0));
+    }
+
+    #[test]
+    fn the_murmur_is_silent_two_seconds_into_a_film_and_back_after_a_pause() {
+        let dt = 1.0 / 72.0;
+        let mut ease = 1.0;
+        for _ in 0..144 {
+            ease = house_step(ease, 0.0, dt);
+        }
+        assert!(ambience_wants(Some(Place::Cinema), ease, 1.0).is_empty());
+        for _ in 0..72 {
+            ease = house_step(ease, 1.0, dt);
+        }
+        let back = ambience_wants(Some(Place::Cinema), ease, 1.0);
+        assert!(back[0].1 > 0.9, "{back:?}");
+    }
+
+    #[test]
+    fn minimal_lighting_turns_the_accent_lights_off_for_the_film_only() {
+        assert_eq!(accent_light_scale(false, 0.0), 1.0);
+        assert_eq!(accent_light_scale(false, 1.0), 1.0);
+        assert_eq!(accent_light_scale(true, 1.0), 1.0);
+        assert_eq!(accent_light_scale(true, 0.0), 0.0);
+        assert_eq!(accent_light_scale(true, 0.03), 0.0);
+        let mid = accent_light_scale(true, 0.5);
+        assert!(mid > 0.0 && mid < 1.0);
+        assert_eq!(accent_light_scale(true, f32::NAN), 1.0);
     }
 
     #[test]

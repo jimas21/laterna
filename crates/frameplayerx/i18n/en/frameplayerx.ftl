@@ -159,6 +159,8 @@ settings-sound-screen = Sound from the screen
 settings-sound-screen-desc = The sound of a flat video comes from where the screen is and stays there as you turn your head. Stereo is placed at the screen's edges, and 5.1 and 7.1 surround speakers beside and behind you. Turn it off to keep the sound in your head, as the file mixed it.
 settings-room-echo = Room echo
 settings-room-echo-desc = How much of a place's own sound, like a cinema's large hall, comes back to you. Plain video and passthrough have none.
+settings-room-ambience = Room ambience
+settings-room-ambience-desc = The soft sounds of a place, like the murmur of a cinema before the film. They fade as the lights go down and stay off during the video. 0 turns them off.
 settings-audio-device = Audio device
 # "default" is the device's name: keep it as it is.
 settings-audio-device-desc = "default" follows the system output.
@@ -1544,6 +1546,8 @@ place-house-lights = House lights while playing
 place-house-lights-desc = How bright the room stays once the video starts. The lights come up when you pause.
 place-screen-light = Screen light
 place-screen-light-desc = How much the walls, ceiling and seats take on the colours of the picture. 0 turns it off.
+place-minimal-lighting = Minimal lighting
+place-minimal-lighting-desc = The room's own lights, like exit signs and step lights, go fully out while the video plays and come back when you pause.
 # Under the adjust panel's Screen heading while a room is chosen.
 place-sets-screen = This room has its own screen. Size above picks your seat to make it look bigger or smaller.
 # Settings > Places: places that are not in the app and can be downloaded. Shown

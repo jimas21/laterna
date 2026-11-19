@@ -117,6 +117,9 @@ pub(crate) struct EnvInput {
     pub eye_pos: [Vec3; 2],
     /// House-light level, 0 dark to 1 full.
     pub house: f32,
+    /// How strongly the place's own lights glow (exit signs, step lights):
+    /// 0 off, 1 as built. A projector's window is not one of them.
+    pub accent: f32,
     /// How far a sky place's floor is lowered (zero or below).
     pub floor_drop: f32,
     /// Seconds.
@@ -210,6 +213,21 @@ impl Look {
         }
         u.palette = self.palette;
         u.palette2 = self.palette2;
+        let accent = if input.accent.is_finite() {
+            input.accent.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if accent < 1.0 {
+            for (code, extra) in self.palette.iter().zip(u.palette2.iter_mut()) {
+                let code = code.w as u32;
+                if code == pattern_code(Pattern::Emissive)
+                    || code == pattern_code(Pattern::EmissiveHouse)
+                {
+                    extra.x *= accent;
+                }
+            }
+        }
         u.baked = Vec4::new(self.baked_gain, 0.0, 0.0, 0.0);
         u
     }
@@ -1030,6 +1048,7 @@ mod tests {
             room_view_proj: [Mat4::IDENTITY; 2],
             eye_pos: [Vec3::new(-0.03, 1.0, 2.0), Vec3::new(0.03, 1.0, 2.0)],
             house,
+            accent: 1.0,
             floor_drop: 0.0,
             time: 12.5,
             screen: None,
@@ -1201,6 +1220,43 @@ mod tests {
         assert_eq!(u.fog.w, 0.0);
         assert_eq!(u.sky_zenith, Vec4::ZERO);
         assert_eq!(u.sky_horizon, Vec4::ZERO);
+    }
+
+    #[test]
+    fn accent_lights_dim_with_the_scale_but_the_picture_window_does_not() {
+        let data = Place::Cinema.build_builtin();
+        let look = Look::new(&data);
+        let at = |scale: f32| {
+            let mut i = input(1.0);
+            i.accent = scale;
+            look.uniform(&i)
+        };
+        let full = at(1.0);
+        let mut changed = 0;
+        let mut kept_picture = 0;
+        for (k, m) in data.palette.iter().enumerate() {
+            let (f, off, half) = (full.palette2[k].x, at(0.0).palette2[k].x, at(0.5).palette2[k].x);
+            match m.pattern {
+                Pattern::Emissive | Pattern::EmissiveHouse => {
+                    assert!(f > 0.0);
+                    assert_eq!(off, 0.0, "{k}");
+                    assert!((half - f * 0.5).abs() < 1e-6, "{k}");
+                    changed += 1;
+                }
+                Pattern::EmissivePicture => {
+                    assert_eq!(off, f, "the projector's window follows the picture");
+                    kept_picture += 1;
+                }
+                _ => assert_eq!(off, f),
+            }
+            // The rest of the material is left alone.
+            assert_eq!(at(0.0).palette2[k].y, full.palette2[k].y);
+        }
+        assert!(changed >= 2 && kept_picture >= 1);
+        // Out of range or not a number is full or off, never a surprise.
+        assert_eq!(at(f32::NAN).palette2, full.palette2);
+        assert_eq!(at(7.0).palette2, full.palette2);
+        assert_eq!(at(-1.0).palette2, at(0.0).palette2);
     }
 
     #[test]
