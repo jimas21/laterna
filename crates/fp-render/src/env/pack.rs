@@ -477,7 +477,6 @@ impl<'a> Set<'a> {
             return bad(format!("{} basis textures ({BASIS} wanted)", t.basis.len()));
         }
         match (&t.material, t.material_size) {
-            (None, None) => {}
             (None, Some(_)) => return bad("textures.material_size without textures.material"),
             (Some(_), _) if self.format < PER_SEAT_FORMAT => {
                 return bad(format!("textures.material needs format {PER_SEAT_FORMAT}"));
@@ -488,7 +487,7 @@ impl<'a> Set<'a> {
                     t.size
                 ));
             }
-            (Some(_), _) => {}
+            (None, None) | (Some(_), _) => {}
         }
         for name in self.texture_files() {
             if !plain_name(name) {
