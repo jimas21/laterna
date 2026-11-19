@@ -55,3 +55,10 @@ Steam Frame controllers (Settings > Controller): renders of Valve's own
   models are Valve Corporation's; these pictures are not covered by
   Laterna's Apache-2.0 licence. Steam and the Steam logo are
   trademarks of Valve Corporation.
+
+Sounds:
+
+Room ambience (the murmur of a cinema before the film, a camp fire, crickets) is
+  made by Laterna itself, sample by sample, from a noise generator
+  (crates/fp-media/src/audio/ambience.rs). No recording is used, so there is
+  nothing to credit or license: it is covered by Laterna's own licence.
