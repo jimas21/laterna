@@ -41,6 +41,13 @@ struct Env {
     // A baked place pack (env_baked.wgsl): x its basis gain, y the picture's
     // light on, z the basis read anisotropically, w the colours read so.
     baked: vec4<f32>,
+    // The picture as one rectangle, for a baked place's highlight
+    // (env_baked.wgsl): xyz its middle and w half its width, xyz the unit
+    // vector along its width (left to right) and w half its height.
+    screen_c: vec4<f32>,
+    screen_r: vec4<f32>,
+    // x: the highlight on (1) or off (0), y: its strength.
+    shine: vec4<f32>,
 };
 
 struct PushConstants {

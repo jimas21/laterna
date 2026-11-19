@@ -91,6 +91,42 @@ pub fn screen_patches(
     (patches, normal)
 }
 
+/// The picture as one rectangle in room space, which a baked place's
+/// highlight reflects: where it is, which way its width runs and how big it
+/// is. Its height runs along the normal crossed with `right`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenRect {
+    /// The middle of the picture.
+    pub centre: Vec3,
+    /// The unit vector along its width, left to right as the audience sees it.
+    pub right: Vec3,
+    /// Half its width and half its height, metres.
+    pub half: Vec2,
+}
+
+/// The rectangle the `patches` of [`screen_patches`] tile, or `None` when
+/// they are off (no area) or have no size to speak of. A curved screen is
+/// taken as the flat one through its patches' centres.
+pub fn screen_rect(patches: &[Vec4; PATCHES]) -> Option<ScreenRect> {
+    if patches.iter().any(|p| p.w <= 0.0) {
+        return None;
+    }
+    let at = |row: usize, col: usize| patches[row * COLS + col].truncate();
+    let centre = patches.iter().map(|p| p.truncate()).sum::<Vec3>() / PATCHES as f32;
+    // Cell centres sit at -0.75, -0.25, 0.25, 0.75 of the half width across
+    // and at +-0.5 of the half height up and down, so the outer ones are 1.5
+    // and 1 half sizes apart.
+    let across = ((at(0, COLS - 1) - at(0, 0)) + (at(1, COLS - 1) - at(1, 0))) / 2.0;
+    let up: Vec3 = (0..COLS).map(|c| at(0, c) - at(1, c)).sum::<Vec3>() / COLS as f32;
+    let half = Vec2::new(across.length() / 1.5, up.length());
+    let right = across.try_normalize()?;
+    (half.x > 1e-4 && half.y > 1e-4 && centre.is_finite()).then_some(ScreenRect {
+        centre,
+        right,
+        half,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +243,38 @@ mod tests {
         light.update(Some(sample), 40.0);
         assert!((light.rgb[2].x - 1.0).abs() < 1e-4);
         assert_eq!(light.rgb[1], Vec3::ZERO);
+    }
+
+    #[test]
+    fn the_rectangle_is_the_screen_the_patches_tile() {
+        let (patches, normal) = screen_patches(pose(), SIZE, 0.0, Mat4::IDENTITY);
+        let rect = screen_rect(&patches).expect("a screen");
+        let to_world = pose();
+        assert!(
+            rect.centre
+                .abs_diff_eq(to_world.transform_point3(Vec3::ZERO), 1e-4)
+        );
+        assert!((rect.half.x - SIZE.x / 2.0).abs() < 1e-4, "{}", rect.half);
+        assert!((rect.half.y - SIZE.y / 2.0).abs() < 1e-4, "{}", rect.half);
+        assert!(
+            rect.right
+                .abs_diff_eq(to_world.transform_vector3(Vec3::X), 1e-5)
+        );
+        // Up is the normal crossed with right, as the shader makes it.
+        let up = normal.cross(rect.right);
+        assert!(
+            up.abs_diff_eq(to_world.transform_vector3(Vec3::Y), 1e-5),
+            "{up}"
+        );
+    }
+
+    #[test]
+    fn no_rectangle_without_a_screen_or_a_size() {
+        assert_eq!(screen_rect(&[Vec4::ZERO; PATCHES]), None);
+        let (mut patches, _) = screen_patches(pose(), SIZE, 0.0, Mat4::IDENTITY);
+        patches[5].w = 0.0;
+        assert_eq!(screen_rect(&patches), None);
+        let (flat, _) = screen_patches(pose(), Vec2::new(0.0, 0.0), 0.0, Mat4::IDENTITY);
+        assert_eq!(screen_rect(&flat), None);
     }
 }

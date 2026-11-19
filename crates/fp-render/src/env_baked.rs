@@ -15,8 +15,9 @@
 //! of one-shot submissions that wait for the GPU (a stall of a frame or so,
 //! once per pack).
 
+use crate::env::ktx2::Encoding as TexEncoding;
 use crate::env::ktx2::{Encoding, astc_vk_format, full_chain};
-use crate::env::pack::{BASIS, Baked, TextureArray};
+use crate::env::pack::{BASIS, Baked, DEFAULT_MATERIAL, TextureArray};
 use crate::gpu::Gpu;
 use crate::mem::{self, Buffer, Image};
 use crate::{Result, VkContext};
@@ -26,15 +27,16 @@ use gpu_allocator::MemoryLocation;
 /// What the sets' layout holds: the place uniform, the sampler, the colour
 /// textures, the basis textures, and the basis textures' own sampler (plain
 /// trilinear: the light is smooth, anisotropic taps on it are wasted work;
-/// the shader takes either by a uniform, so a headset can compare), and the
-/// collapsed light ([`Lightmap`]).
-pub(crate) const BINDINGS: [(u32, vk::DescriptorType); 6] = [
+/// the shader takes either by a uniform, so a headset can compare), the
+/// collapsed light ([`Lightmap`]) and the material texture (one layer).
+pub(crate) const BINDINGS: [(u32, vk::DescriptorType); 7] = [
     (0, vk::DescriptorType::UNIFORM_BUFFER),
     (1, vk::DescriptorType::SAMPLER),
     (2, vk::DescriptorType::SAMPLED_IMAGE),
     (3, vk::DescriptorType::SAMPLED_IMAGE),
     (4, vk::DescriptorType::SAMPLER),
     (5, vk::DescriptorType::SAMPLED_IMAGE),
+    (6, vk::DescriptorType::SAMPLED_IMAGE),
 ];
 
 /// The collapsed light's format: float, so a bright light is not
@@ -278,6 +280,9 @@ const ANISOTROPY: f32 = 8.0;
 pub(crate) struct BakedGpu {
     colors: Image,
     basis: Image,
+    /// The material texture: the pack's, or a 1 x 1 texel of
+    /// [`DEFAULT_MATERIAL`].
+    material: Image,
     /// The picture's light collapsed to one texture, when it could be made.
     light: Option<Lightmap>,
     sampler: vk::Sampler,
@@ -657,6 +662,22 @@ impl BakedGpu {
                 return Err(e);
             }
         };
+        // The pack's material texture, or one weak, rough texel.
+        let default_material = TextureArray {
+            size: 1,
+            encoding: TexEncoding::Rgba8,
+            layers: vec![vec![DEFAULT_MATERIAL.to_vec()]],
+        };
+        let material_tex = baked.material.as_ref().unwrap_or(&default_material);
+        let material = match upload_array(gpu, material_tex, false, "place material") {
+            Ok(i) => i,
+            Err(e) => {
+                let (mut colors, mut basis) = (colors, basis);
+                colors.destroy(gpu);
+                basis.destroy(gpu);
+                return Err(e);
+            }
+        };
         let light = match Lightmap::new(gpu, baked.basis.size, basis.mips, light_shift) {
             Ok(l) => Some(l),
             Err(e) => {
@@ -667,6 +688,7 @@ impl BakedGpu {
         let mut b = BakedGpu {
             colors,
             basis,
+            material,
             light,
             sampler: vk::Sampler::null(),
             basis_sampler: vk::Sampler::null(),
@@ -721,7 +743,7 @@ impl BakedGpu {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 3 * n,
+                descriptor_count: 4 * n,
             },
         ];
         // SAFETY: plain object creation on a valid device; `destroy` frees
@@ -744,6 +766,9 @@ impl BakedGpu {
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
             let basis = [vk::DescriptorImageInfo::default()
                 .image_view(self.basis.views[0])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+            let material = [vk::DescriptorImageInfo::default()
+                .image_view(self.material.views[0])
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
             let light = self.light.as_ref().map(|l| {
                 [vk::DescriptorImageInfo::default()
@@ -775,6 +800,7 @@ impl BakedGpu {
                     write(2, vk::DescriptorType::SAMPLED_IMAGE).image_info(&colors),
                     write(3, vk::DescriptorType::SAMPLED_IMAGE).image_info(&basis),
                     write(4, vk::DescriptorType::SAMPLER).image_info(&basis_sampler),
+                    write(6, vk::DescriptorType::SAMPLED_IMAGE).image_info(&material),
                 ];
                 if let Some(light) = light.as_ref() {
                     writes.push(write(5, vk::DescriptorType::SAMPLED_IMAGE).image_info(light));
@@ -829,6 +855,7 @@ impl BakedGpu {
         self.sets.clear();
         self.colors.destroy(gpu);
         self.basis.destroy(gpu);
+        self.material.destroy(gpu);
         if let Some(mut l) = self.light.take() {
             l.destroy(gpu);
         }
@@ -848,11 +875,12 @@ mod tests {
             (3, "basis"),
             (4, "basis_sampler"),
             (5, "lightmap"),
+            (6, "material"),
         ] {
             let line = format!("@group(0) @binding({binding}) var {name}");
             assert!(shader.contains(&line), "env_baked.wgsl lacks `{line}`");
         }
         let numbers: Vec<u32> = BINDINGS.iter().map(|b| b.0).collect();
-        assert_eq!(numbers, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(numbers, [0, 1, 2, 3, 4, 5, 6]);
     }
 }
