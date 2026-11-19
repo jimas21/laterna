@@ -22,9 +22,35 @@ use std::time::{Duration, Instant};
 mod common;
 use common::{
     EYE_HEIGHT, SIZE, centre, cinema_params, eyes_looking, frame, is_blue, is_red, ktx2_solid,
-    near, params, place_frame, px, render, render_eyes, setup, setup_counting, setup_samples, srgb,
-    write_wall_mesh,
+    near, params, place_frame, px, render, render_eyes, srgb, write_wall_mesh,
 };
+
+/// These tests are about the built-in rooms, so no installed pack may stand
+/// in for them, whatever `FRAMEPLAYERX_PLACES_DIR` points at: the catalog is
+/// fixed as empty before anything asks for it.
+fn no_installed_packs() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("laterna-no-packs-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        fp_render::env::pack::use_catalog_for_tests(&dir);
+    });
+}
+
+fn setup() -> Option<(Renderer, OffscreenEyes)> {
+    no_installed_packs();
+    common::setup()
+}
+
+fn setup_samples(size: u32, samples: u32) -> Option<(Renderer, OffscreenEyes)> {
+    no_installed_packs();
+    common::setup_samples(size, samples)
+}
+
+fn setup_counting(size: u32) -> Option<(Renderer, OffscreenEyes)> {
+    no_installed_packs();
+    common::setup_counting(size)
+}
 
 /// The same picture on a screen of the user's own, in front of nothing.
 fn plain_params() -> VideoParams {
