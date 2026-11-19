@@ -267,7 +267,7 @@ impl App {
             }
         }
         if self.settings.afterglow_opening {
-            self.ui.afterglow = Some(crate::ui::afterglow::Afterglow::new());
+            self.ui.afterglow = Some(ui::afterglow::Afterglow::new());
         }
         if self.settings.last_version != current {
             self.settings.last_version = current.to_string();

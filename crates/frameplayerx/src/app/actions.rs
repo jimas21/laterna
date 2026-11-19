@@ -348,8 +348,8 @@ impl App {
                 self.ui.tips = false;
                 self.settings.tips_seen = true;
                 self.ui.whats_new = None;
-                self.ui.screen = crate::ui::Screen::Settings;
-                self.ui.settings_tab = crate::ui::SettingsTab::Controller;
+                self.ui.screen = Screen::Settings;
+                self.ui.settings_tab = ui::SettingsTab::Controller;
                 self.ui.details = None;
                 self.ui.picking = None;
                 self.ui.more_open = false;

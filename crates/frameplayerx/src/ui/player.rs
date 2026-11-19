@@ -3171,6 +3171,7 @@ mod tests {
             loop_video: false,
             autoplay: true,
             speed: 1.0,
+            sleep: Default::default(),
             size: Some(ScreenSize::Cinema),
             dropped: Dropped::default(),
         }

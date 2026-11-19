@@ -54,10 +54,6 @@ impl Sleep {
         }
     }
 
-    pub fn is_on(self) -> bool {
-        self != Sleep::Off
-    }
-
     /// Whole minutes left, rounded up, for a timed choice.
     pub fn minutes_left(self) -> Option<u32> {
         match self {
@@ -115,7 +111,7 @@ mod tests {
     fn off_does_nothing() {
         let mut s = Sleep::Off;
         assert_eq!(s.tick(100.0, Some(1.0)), Tick::Idle);
-        assert!(!s.is_on());
+        assert_eq!(s, Sleep::Off);
     }
 
     #[test]
@@ -146,7 +142,7 @@ mod tests {
             Tick::Fade(g) => assert!((g - 0.5).abs() < 1e-4),
             other => panic!("{other:?}"),
         }
-        assert!(s.is_on());
+        assert_ne!(s, Sleep::Off);
         assert_eq!(s.tick(0.016, Some(0.2)), Tick::Pause);
         assert_eq!(s, Sleep::Off);
     }
