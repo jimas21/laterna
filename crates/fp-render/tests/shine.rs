@@ -22,6 +22,7 @@ use fp_render::{EyeView, Renderer};
 use glam::{Quat, Vec3};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 mod common;
 use common::{SIZE, cinema_params, frame, ktx2_solid, place_frame, setup};
@@ -111,7 +112,9 @@ fn eyes_at(x: f32, up: f32, back: f32) -> [EyeView; 2] {
     [ev(-0.032), ev(0.032)]
 }
 
-/// One frame of the room from `eyes`, the left eye read back, after the
+static CLOCK: AtomicU32 = AtomicU32::new(1);
+
+/// Six frames of the room from `eyes`, the last one's left eye read back, after the
 /// picture's light has settled.
 fn shoot(
     r: &mut Renderer,
@@ -121,7 +124,10 @@ fn shoot(
     screen_light: f32,
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    for t in 1..=6 {
+    for _ in 0..6 {
+        // A second a frame, never back: the picture's light only eases
+        // forward in time.
+        let t = CLOCK.fetch_add(1, Ordering::Relaxed);
         let env = EnvFrame {
             screen_light,
             time: f64::from(t),
