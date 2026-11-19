@@ -1,5 +1,6 @@
 //! Audio: resampling, time-stretch, ambisonic rendering and device output.
 
+pub mod ambience;
 pub mod ambisonic;
 pub mod output;
 pub mod resample;
