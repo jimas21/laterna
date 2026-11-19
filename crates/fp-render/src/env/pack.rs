@@ -1567,7 +1567,7 @@ mod tests {
         // The manifest's own name ("Test") wins over the folder's.
         assert_eq!(found[0].name, "Test");
         assert_eq!(found[0].id, "user-my-cinema");
-        assert_eq!(found[0].kind(), super::super::PlaceKind::Room);
+        assert_eq!(found[0].kind(), PlaceKind::Room);
         assert_eq!(found[0].layout().seats.len(), 3);
         assert!(found[0].layout().screen.is_some());
         // It builds, from its own folder, and replaces nothing.

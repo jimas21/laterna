@@ -412,7 +412,9 @@ pub fn dimmed(rgba: &[u8]) -> Vec<u8> {
             (linear_to_srgb(lin) * 255.0).round().clamp(0.0, 255.0) as u8
         })
         .collect();
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| {
             [
                 table[p[0] as usize],
