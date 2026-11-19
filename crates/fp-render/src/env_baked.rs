@@ -3,7 +3,7 @@
 //! each frame slot that points at them and at that slot's place uniform.
 //!
 //! The textures are two 2D arrays so the shader needs two image bindings, not
-//! ten: layer 0 and 1 of `colors` are the house-lights-up and lights-off
+//! ten (and a third for the collapsed light, see [`Lightmap`]): layer 0 and 1 of `colors` are the house-lights-up and lights-off
 //! pictures (sRGB, decoded by the sampler), layers 0 to 7 of `basis` the
 //! light of each patch of the screen (square-root coded, so plain UNORM). The
 //! two arrays may differ in size. A format 1 pack's textures have one level
@@ -26,14 +26,246 @@ use gpu_allocator::MemoryLocation;
 /// What the sets' layout holds: the place uniform, the sampler, the colour
 /// textures, the basis textures, and the basis textures' own sampler (plain
 /// trilinear: the light is smooth, anisotropic taps on it are wasted work;
-/// the shader takes either by a uniform, so a headset can compare).
-pub(crate) const BINDINGS: [(u32, vk::DescriptorType); 5] = [
+/// the shader takes either by a uniform, so a headset can compare), and the
+/// collapsed light ([`Lightmap`]).
+pub(crate) const BINDINGS: [(u32, vk::DescriptorType); 6] = [
     (0, vk::DescriptorType::UNIFORM_BUFFER),
     (1, vk::DescriptorType::SAMPLER),
     (2, vk::DescriptorType::SAMPLED_IMAGE),
     (3, vk::DescriptorType::SAMPLED_IMAGE),
     (4, vk::DescriptorType::SAMPLER),
+    (5, vk::DescriptorType::SAMPLED_IMAGE),
 ];
+
+/// The collapsed light's format: float, so a bright light is not
+/// clipped and the sum is not rounded to eight bits.
+pub(crate) const LIGHT_FORMAT: vk::Format = vk::Format::B10G11R11_UFLOAT_PACK32;
+
+/// The smallest level of the collapsed light that is made: a surface seen
+/// smaller than that reads the last level made.
+const LIGHT_MIN_EDGE: u32 = 16;
+
+/// How many levels down the basis textures' chain the collapsed light starts
+/// (each level halves a side), unless the pack's chain is too short for it.
+pub(crate) const DEFAULT_COLLAPSE_SHIFT: u32 = 0;
+
+/// The picture's light on the place as one texture: the eight basis
+/// textures squared and weighted by the patches' colours, drawn again when
+/// the colours have moved (`env_collapse.wgsl`, one small draw for each
+/// level). Its levels are made from the basis textures' own levels from
+/// `shift` down, level for level, so each is the box average of the full
+/// size sum.
+struct Lightmap {
+    image: Image,
+    /// A view of one level each, to draw into.
+    levels: Vec<vk::ImageView>,
+    /// The level of the basis textures the first level is made from.
+    shift: u32,
+    /// Texels on the side of the first level.
+    edge: u32,
+}
+
+impl Lightmap {
+    /// For basis textures `size` texels square with `basis_levels` levels.
+    /// Starts out black and readable.
+    fn new(gpu: &Gpu, size: u32, basis_levels: u32, shift: u32) -> Result<Lightmap> {
+        // SAFETY: valid physical device.
+        let props = unsafe {
+            gpu.instance
+                .get_physical_device_format_properties(gpu.pdev, LIGHT_FORMAT)
+        };
+        let need = vk::FormatFeatureFlags::COLOR_ATTACHMENT
+            | vk::FormatFeatureFlags::SAMPLED_IMAGE
+            | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR;
+        if !props.optimal_tiling_features.contains(need) {
+            return Err(crate::Error::Unsupported(format!(
+                "{LIGHT_FORMAT:?} cannot be drawn into and filtered on this device"
+            )));
+        }
+        let shift = shift.min(basis_levels.saturating_sub(1));
+        let edge = (size >> shift).max(1);
+        let mut count = 1;
+        while count < basis_levels - shift && (edge >> count) >= LIGHT_MIN_EDGE {
+            count += 1;
+        }
+        let usage = vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::TRANSFER_DST;
+        let image = Image::new(
+            gpu,
+            edge,
+            edge,
+            &[LIGHT_FORMAT],
+            usage,
+            count,
+            "place light",
+        )?;
+        let mut l = Lightmap {
+            image,
+            levels: Vec::new(),
+            shift,
+            edge,
+        };
+        for level in 0..count {
+            match mem::view(gpu, l.image.image, LIGHT_FORMAT, level, 1) {
+                Ok(v) => l.levels.push(v),
+                Err(e) => {
+                    l.destroy(gpu);
+                    return Err(e);
+                }
+            }
+        }
+        // Black, in the layout the sets say, so a read before the first
+        // collapse is legal.
+        let image = l.image.image;
+        let range = subresource(0, count, 0);
+        let done = one_shot(gpu, |cmd| {
+            mem::barrier(
+                gpu,
+                cmd,
+                image,
+                range,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                mem::TOP,
+                mem::TRANSFER_WRITE,
+            );
+            // SAFETY: recording; the image is in the layout named.
+            unsafe {
+                gpu.device.cmd_clear_color_image(
+                    cmd,
+                    image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &vk::ClearColorValue::default(),
+                    &[range],
+                );
+            }
+            mem::barrier(
+                gpu,
+                cmd,
+                image,
+                range,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                mem::TRANSFER_WRITE,
+                mem::SHADER_READ,
+            );
+        });
+        if let Err(e) = done {
+            l.destroy(gpu);
+            return Err(e);
+        }
+        Ok(l)
+    }
+
+    /// Draws every level from the basis textures and the weights in the
+    /// uniform of `set`, into `cmd` (outside any rendering), and leaves the
+    /// light readable by fragment shaders. What frames already submitted
+    /// read of it is waited for first.
+    fn record(
+        &self,
+        gpu: &Gpu,
+        cmd: vk::CommandBuffer,
+        set: vk::DescriptorSet,
+        pipe: vk::Pipeline,
+        layout: vk::PipelineLayout,
+    ) {
+        let d = &gpu.device;
+        let all = subresource(0, self.levels.len() as u32, 0);
+        let read = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        let write = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+        // The old contents are not wanted: every level is drawn whole.
+        mem::barrier(
+            gpu,
+            cmd,
+            self.image.image,
+            all,
+            vk::ImageLayout::UNDEFINED,
+            write,
+            mem::SHADER_READ,
+            mem::COLOR_WRITE,
+        );
+        // SAFETY: recording with a valid pipeline, set and views; the push
+        // range is the pipeline layout's.
+        unsafe {
+            d.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipe);
+            d.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                0,
+                &[set],
+                &[],
+            );
+            for (i, view) in self.levels.iter().enumerate() {
+                let edge = (self.edge >> i).max(1);
+                let area = vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent: vk::Extent2D {
+                        width: edge,
+                        height: edge,
+                    },
+                };
+                let target = [vk::RenderingAttachmentInfo::default()
+                    .image_view(*view)
+                    .image_layout(write)
+                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .store_op(vk::AttachmentStoreOp::STORE)];
+                d.cmd_begin_rendering(
+                    cmd,
+                    &vk::RenderingInfo::default()
+                        .render_area(area)
+                        .layer_count(1)
+                        .color_attachments(&target),
+                );
+                d.cmd_set_viewport(
+                    cmd,
+                    0,
+                    &[vk::Viewport {
+                        x: 0.0,
+                        y: 0.0,
+                        width: edge as f32,
+                        height: edge as f32,
+                        min_depth: 0.0,
+                        max_depth: 1.0,
+                    }],
+                );
+                d.cmd_set_scissor(cmd, 0, &[area]);
+                // The level of the basis textures of this size.
+                let basis_level = self.shift + i as u32;
+                d.cmd_push_constants(
+                    cmd,
+                    layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &basis_level.to_le_bytes(),
+                );
+                d.cmd_draw(cmd, 3, 1, 0, 0);
+                d.cmd_end_rendering(cmd);
+            }
+        }
+        mem::barrier(
+            gpu,
+            cmd,
+            self.image.image,
+            all,
+            write,
+            read,
+            mem::COLOR_WRITE,
+            mem::SHADER_READ,
+        );
+    }
+
+    fn destroy(&mut self, gpu: &Gpu) {
+        // SAFETY: not in use (the caller waited); ours.
+        unsafe {
+            for v in self.levels.drain(..) {
+                gpu.device.destroy_image_view(v, None);
+            }
+        }
+        self.image.destroy(gpu);
+    }
+}
 
 /// The colour textures' format: decoded from sRGB on sampling.
 const COLOR_FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
@@ -46,6 +278,8 @@ const ANISOTROPY: f32 = 8.0;
 pub(crate) struct BakedGpu {
     colors: Image,
     basis: Image,
+    /// The picture's light collapsed to one texture, when it could be made.
+    light: Option<Lightmap>,
     sampler: vk::Sampler,
     /// Trilinear, no anisotropy: for the basis textures.
     basis_sampler: vk::Sampler,
@@ -398,11 +632,14 @@ fn upload_array(gpu: &Gpu, tex: &TextureArray, srgb: bool, name: &str) -> Result
 impl BakedGpu {
     /// Uploads `baked`'s textures and makes a set per entry of `uniforms`
     /// (each frame slot's place uniform buffer and its size) in `set_layout`.
+    /// The collapsed light starts `light_shift` levels down the basis
+    /// textures' chain at most.
     pub fn new(
         gpu: &Gpu,
         set_layout: vk::DescriptorSetLayout,
         uniforms: &[(vk::Buffer, u64)],
         baked: &Baked,
+        light_shift: u32,
     ) -> Result<BakedGpu> {
         if baked.colors.layers.len() != 2 || baked.basis.layers.len() != BASIS {
             return Err(crate::Error::Unsupported(format!(
@@ -420,9 +657,17 @@ impl BakedGpu {
                 return Err(e);
             }
         };
+        let light = match Lightmap::new(gpu, baked.basis.size, basis.mips, light_shift) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                log::warn!("the picture's light is read from eight textures: {e}");
+                None
+            }
+        };
         let mut b = BakedGpu {
             colors,
             basis,
+            light,
             sampler: vk::Sampler::null(),
             basis_sampler: vk::Sampler::null(),
             pool: vk::DescriptorPool::null(),
@@ -476,7 +721,7 @@ impl BakedGpu {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 2 * n,
+                descriptor_count: 3 * n,
             },
         ];
         // SAFETY: plain object creation on a valid device; `destroy` frees
@@ -500,6 +745,11 @@ impl BakedGpu {
             let basis = [vk::DescriptorImageInfo::default()
                 .image_view(self.basis.views[0])
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+            let light = self.light.as_ref().map(|l| {
+                [vk::DescriptorImageInfo::default()
+                    .image_view(l.image.views[0])
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]
+            });
             for &(buffer, range) in uniforms {
                 let layouts = [set_layout];
                 let set = d
@@ -519,13 +769,16 @@ impl BakedGpu {
                         .dst_binding(binding)
                         .descriptor_type(ty)
                 };
-                let writes = [
+                let mut writes = vec![
                     write(0, vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&uniform),
                     write(1, vk::DescriptorType::SAMPLER).image_info(&sampler),
                     write(2, vk::DescriptorType::SAMPLED_IMAGE).image_info(&colors),
                     write(3, vk::DescriptorType::SAMPLED_IMAGE).image_info(&basis),
                     write(4, vk::DescriptorType::SAMPLER).image_info(&basis_sampler),
                 ];
+                if let Some(light) = light.as_ref() {
+                    writes.push(write(5, vk::DescriptorType::SAMPLED_IMAGE).image_info(light));
+                }
                 d.update_descriptor_sets(&writes, &[]);
             }
         }
@@ -535,6 +788,30 @@ impl BakedGpu {
     /// The set for frame slot `slot`.
     pub fn set(&self, slot: usize) -> Option<vk::DescriptorSet> {
         self.sets.get(slot).copied()
+    }
+
+    /// Whether the picture's light can be read as one texture.
+    pub fn has_light(&self) -> bool {
+        self.light.is_some()
+    }
+
+    /// Records the draw that collapses the picture's light into one texture
+    /// (the weights are in slot `slot`'s uniform) into `cmd`, outside any
+    /// rendering, with `pipe` in `layout`. False when there is no such
+    /// texture or slot.
+    pub fn record_collapse(
+        &self,
+        gpu: &Gpu,
+        cmd: vk::CommandBuffer,
+        slot: usize,
+        pipe: vk::Pipeline,
+        layout: vk::PipelineLayout,
+    ) -> bool {
+        let (Some(light), Some(set)) = (self.light.as_ref(), self.set(slot)) else {
+            return false;
+        };
+        light.record(gpu, cmd, set, pipe, layout);
+        true
     }
 
     /// Frees everything. The device must be idle of anything that uses it.
@@ -552,6 +829,9 @@ impl BakedGpu {
         self.sets.clear();
         self.colors.destroy(gpu);
         self.basis.destroy(gpu);
+        if let Some(mut l) = self.light.take() {
+            l.destroy(gpu);
+        }
     }
 }
 
@@ -567,11 +847,12 @@ mod tests {
             (2, "colors"),
             (3, "basis"),
             (4, "basis_sampler"),
+            (5, "lightmap"),
         ] {
             let line = format!("@group(0) @binding({binding}) var {name}");
             assert!(shader.contains(&line), "env_baked.wgsl lacks `{line}`");
         }
         let numbers: Vec<u32> = BINDINGS.iter().map(|b| b.0).collect();
-        assert_eq!(numbers, [0, 1, 2, 3, 4]);
+        assert_eq!(numbers, [0, 1, 2, 3, 4, 5]);
     }
 }

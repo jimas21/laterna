@@ -125,8 +125,11 @@ fn the_cinemas_overdraw_from_each_seat_sorted_and_in_the_packs_order() {
         return;
     };
     let pack = fp_render::env::pack::load(&dir).expect("the Cinema pack loads");
+    // A fragment of a film playing reads the dark texture, and the light:
+    // eight basis textures, or the one collapsed texture.
     let reads_lights_down = 1;
     let basis_reads = 8;
+    let collapsed_reads = 1;
     r.set_place_data(Place::Cinema, pack.into_place_data());
     let picture = frame(160, 90, |_, _| [128, 128, 128]);
 
@@ -143,8 +146,16 @@ fn the_cinemas_overdraw_from_each_seat_sorted_and_in_the_packs_order() {
         // run: the count must not move.
         r.set_place_knobs(false, true);
         let sorted_no_basis = measure(&mut r, &mut e, seat, &picture);
+        // The light read from the eight textures again: the same fragments.
+        r.set_place_collapse(false);
+        let sorted_eight = measure(&mut r, &mut e, seat, &picture);
+        r.set_place_collapse(true);
         r.set_place_knobs(true, true);
         table.push((seat, unsorted, sorted, sorted_no_basis));
+        assert_eq!(
+            sorted.invocations, sorted_eight.invocations,
+            "{seat:?}: collapsing the light changed the fragment count"
+        );
 
         assert!(
             sorted.covered * 100 >= (SIZE as u64 * SIZE as u64) * 50,
@@ -167,11 +178,11 @@ fn the_cinemas_overdraw_from_each_seat_sorted_and_in_the_packs_order() {
         "overdraw of the Cinema, {SIZE}x{SIZE} left eye, lavapipe (invocations / covered pixels):"
     );
     eprintln!(
-        "seat    covered   pack order            sorted               est. texture reads (sorted, lights down)"
+        "seat    covered   pack order            sorted               est. texture reads (sorted, lights down): eight basis | collapsed | no light"
     );
     for (seat, unsorted, sorted, no_basis) in &table {
         eprintln!(
-            "{:<7} {:>7}   {:>8} = {:.2}x   {:>8} = {:.2}x   basis on {:>9}, off {:>8}",
+            "{:<7} {:>7}   {:>8} = {:.2}x   {:>8} = {:.2}x   {:>9} | {:>9} | {:>8}",
             format!("{seat:?}"),
             sorted.covered,
             unsorted.invocations,
@@ -179,6 +190,7 @@ fn the_cinemas_overdraw_from_each_seat_sorted_and_in_the_packs_order() {
             sorted.invocations,
             sorted.overdraw(),
             sorted.invocations * (reads_lights_down + basis_reads),
+            sorted.invocations * (reads_lights_down + collapsed_reads),
             no_basis.invocations * reads_lights_down,
         );
     }

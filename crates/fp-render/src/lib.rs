@@ -96,5 +96,7 @@ pub(crate) const PEAK_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pea
 pub(crate) const ENV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/env.spv"));
 pub(crate) const SKY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sky.spv"));
 pub(crate) const ENV_BAKED_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/env_baked.spv"));
+pub(crate) const ENV_COLLAPSE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/env_collapse.spv"));
 pub(crate) const SCENE_TP10_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/scene_tp10.spv"));

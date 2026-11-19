@@ -13,7 +13,7 @@
 use crate::env::light::PATCHES;
 use crate::env::pack::BakedVertex;
 use crate::env::{Lighting, Pattern, Place, PlaceData, PlaceKind, SeatName, Sky, Vertex};
-use crate::env_baked::{self, BakedGpu};
+use crate::env_baked::{self, BakedGpu, LIGHT_FORMAT};
 use crate::gpu::Gpu;
 use crate::mem::Buffer;
 use crate::perf_ab::Knobs;
@@ -52,6 +52,37 @@ pub(crate) struct EnvUniform {
     /// (0), z the basis read anisotropically, w the colours read
     /// anisotropically.
     pub baked: Vec4,
+}
+
+/// What the collapse draws the picture's light with: each patch's colour
+/// times the light's strength (`env_collapse.wgsl`).
+type Weights = [Vec3; PATCHES];
+
+/// A change in a weight smaller than this, as a share of it, is left out of
+/// the collapsed light until it has grown (the light is compared with the
+/// weights it was last drawn with, so nothing is lost, only late): under half
+/// a code value of the picture's light in the final colour, whatever its
+/// level.
+const COLLAPSE_RELATIVE: f32 = 0.004;
+/// The same for weights near zero, linear light.
+const COLLAPSE_ABSOLUTE: f32 = 1.0 / 8192.0;
+
+/// The weights `u` asks for, or `None` when its picture's light is not read
+/// (the light off, a basis gain of 0, or the knob).
+fn collapse_weights(u: &EnvUniform) -> Option<Weights> {
+    let strength = u.baked.x * u.screen_n.w;
+    (u.baked.y > 0.5 && strength > 0.0).then(|| u.patch_rgb.map(|c| c.truncate() * strength))
+}
+
+/// Whether `new` differs from `old`, which the collapsed light was drawn
+/// with, by more than the tolerance in any weight.
+fn weights_moved(old: &Weights, new: &Weights) -> bool {
+    old.iter().zip(new).any(|(a, b)| {
+        let (a, b) = (a.to_array(), b.to_array());
+        a.iter().zip(b).any(|(&a, b)| {
+            (a - b).abs() > COLLAPSE_ABSOLUTE.max(COLLAPSE_RELATIVE * a.abs().max(b.abs()))
+        })
+    })
 }
 
 /// The picture's light on the place this frame, in room space.
@@ -225,6 +256,23 @@ pub(crate) struct EnvPass {
     baked_set_layout: vk::DescriptorSetLayout,
     baked_layout: vk::PipelineLayout,
     baked_pipe: vk::Pipeline,
+    /// The baked pipeline with `fs_lit`, which reads the picture's light as
+    /// one texture, and the draw that makes that texture (null when either
+    /// could not be made: the eight reads are used then).
+    lit_pipe: vk::Pipeline,
+    collapse_pipe: vk::Pipeline,
+    /// The picture's light is collapsed into one texture and read from it
+    /// (the default), not read from the eight basis textures.
+    collapse: bool,
+    /// Levels of the basis textures' chain the collapsed light starts down,
+    /// for the packs loaded from now on.
+    collapse_shift: u32,
+    /// The weights the collapsed light holds, once it does, and whether the
+    /// next frame has to draw it again.
+    collapsed: Option<Weights>,
+    collapse_due: bool,
+    /// Collapses recorded since the pack was loaded.
+    collapse_runs: u64,
     /// The knobs (perf_ab.rs): the picture's light on a baked place, its
     /// anisotropic reads, and the nearest-first order.
     basis: bool,
@@ -304,6 +352,13 @@ impl EnvPass {
             baked_set_layout: vk::DescriptorSetLayout::null(),
             baked_layout: vk::PipelineLayout::null(),
             baked_pipe: vk::Pipeline::null(),
+            lit_pipe: vk::Pipeline::null(),
+            collapse_pipe: vk::Pipeline::null(),
+            collapse: true,
+            collapse_shift: env_baked::DEFAULT_COLLAPSE_SHIFT,
+            collapsed: None,
+            collapse_due: false,
+            collapse_runs: 0,
             basis: true,
             basis_aniso: false,
             place_aniso: true,
@@ -429,30 +484,59 @@ impl EnvPass {
         }
     }
 
-    /// The baked pipeline at `samples` samples a pixel, in the layout made by
-    /// `ensure_baked_pipe`.
-    fn make_baked_pipe(
+    /// The baked pipelines at `samples` samples a pixel, in the layout made
+    /// by `ensure_baked_pipe`: the one with the eight basis reads, and the
+    /// one that reads the collapsed light (null where that one could not be
+    /// made).
+    fn make_baked_pipes(
         &self,
         gpu: &Gpu,
         depth: vk::Format,
         samples: vk::SampleCountFlags,
-    ) -> Result<vk::Pipeline> {
+    ) -> Result<(vk::Pipeline, vk::Pipeline)> {
         let color_format = self.target.0;
         let attributes = baked_attributes();
+        let desc = PipelineDesc {
+            spv: crate::ENV_BAKED_SPV,
+            layout: self.baked_layout,
+            color_format,
+            vertex_stride: size_of::<BakedVertex>() as u32,
+            attributes: &attributes,
+            blend: false,
+            descriptor_buffer: false,
+            depth: Depth::TestWrite(depth),
+            samples,
+        };
+        let baked = pipeline::create(gpu, &desc)?;
+        let lit = pipeline::create_entry(gpu, &desc, c"fs_lit").unwrap_or_else(|e| {
+            log::warn!("the picture's light is read from eight textures: {e}");
+            vk::Pipeline::null()
+        });
+        Ok((baked, lit))
+    }
+
+    /// The draw that collapses the picture's light into one texture: a
+    /// fullscreen triangle into [`LIGHT_FORMAT`], whatever the eye passes
+    /// are drawn in. Null where it could not be made.
+    fn make_collapse_pipe(&self, gpu: &Gpu) -> vk::Pipeline {
         pipeline::create(
             gpu,
             &PipelineDesc {
-                spv: crate::ENV_BAKED_SPV,
+                spv: crate::ENV_COLLAPSE_SPV,
                 layout: self.baked_layout,
-                color_format,
-                vertex_stride: size_of::<BakedVertex>() as u32,
-                attributes: &attributes,
+                color_format: LIGHT_FORMAT,
+                vertex_stride: 0,
+                attributes: &[],
                 blend: false,
                 descriptor_buffer: false,
-                depth: Depth::TestWrite(depth),
-                samples,
+                depth: Depth::None,
+                samples: vk::SampleCountFlags::TYPE_1,
             },
         )
+        .unwrap_or_else(|e| {
+            log::warn!("the picture's light is read from eight textures: {e}");
+            vk::Pipeline::null()
+        })
     }
 
     /// Makes the baked pipeline the first time a pack is loaded: users with
@@ -464,7 +548,8 @@ impl EnvPass {
         let (depth, samples) = (self.target.1, self.target.2);
         self.baked_set_layout = pipeline::set_layout(gpu, &env_baked::BINDINGS)?;
         self.baked_layout = pipeline::layout(gpu, self.baked_set_layout, 4)?;
-        self.baked_pipe = self.make_baked_pipe(gpu, depth, samples)?;
+        (self.baked_pipe, self.lit_pipe) = self.make_baked_pipes(gpu, depth, samples)?;
+        self.collapse_pipe = self.make_collapse_pipe(gpu);
         Ok(())
     }
 
@@ -482,11 +567,11 @@ impl EnvPass {
         }
         let (env_pipe, sky_pipe) = self.make_pipes(gpu, depth, samples)?;
         let baked = if self.baked_pipe == vk::Pipeline::null() {
-            Ok(vk::Pipeline::null())
+            Ok((vk::Pipeline::null(), vk::Pipeline::null()))
         } else {
-            self.make_baked_pipe(gpu, depth, samples)
+            self.make_baked_pipes(gpu, depth, samples)
         };
-        let baked_pipe = match baked {
+        let (baked_pipe, lit_pipe) = match baked {
             Ok(p) => p,
             Err(e) => {
                 // SAFETY: just made, never bound.
@@ -502,8 +587,10 @@ impl EnvPass {
             gpu.device.destroy_pipeline(self.env_pipe, None);
             gpu.device.destroy_pipeline(self.sky_pipe, None);
             gpu.device.destroy_pipeline(self.baked_pipe, None);
+            gpu.device.destroy_pipeline(self.lit_pipe, None);
         }
         (self.env_pipe, self.sky_pipe, self.baked_pipe) = (env_pipe, sky_pipe, baked_pipe);
+        self.lit_pipe = lit_pipe;
         (self.target.1, self.target.2) = (depth, samples);
         Ok(())
     }
@@ -516,6 +603,87 @@ impl EnvPass {
         self.sort = knobs.sort;
         // The order is worth making when something can want it.
         self.sort_work = knobs.sort || knobs.ab;
+        self.collapse = knobs.collapse;
+        self.collapse_shift = knobs
+            .collapse_shift
+            .unwrap_or(env_baked::DEFAULT_COLLAPSE_SHIFT);
+        self.collapsed = None;
+    }
+
+    /// The picture's light read from one collapsed texture, or from the eight
+    /// basis textures (the A/B cycle). The collapsed texture is drawn afresh
+    /// when it is turned on.
+    pub fn set_collapse(&mut self, on: bool) {
+        self.collapse = on;
+        self.collapsed = None;
+    }
+
+    /// The collapsed light of the packs loaded from now on starts `shift`
+    /// levels down the basis textures' chain (for tests).
+    pub fn set_collapse_shift(&mut self, shift: u32) {
+        self.collapse_shift = shift;
+    }
+
+    /// How many times the collapsed light has been drawn since the knobs
+    /// were last set or a pack loaded (for tests and the log).
+    pub fn collapse_runs(&self) -> u64 {
+        self.collapse_runs
+    }
+
+    /// Whether the loaded baked place is drawn from the collapsed light:
+    /// the knob is on and the textures and pipelines for it exist.
+    fn reads_collapsed(&self) -> bool {
+        self.collapse
+            && self.lit_pipe != vk::Pipeline::null()
+            && self.collapse_pipe != vk::Pipeline::null()
+            && self
+                .loaded
+                .as_ref()
+                .and_then(|l| l.baked.as_ref())
+                .is_some_and(BakedGpu::has_light)
+    }
+
+    /// Notes the weights slot `slot`'s uniform `u` asks the collapse for and
+    /// whether the collapsed light has to be drawn again before the next eye
+    /// pass: when it was never drawn for the light now on, or a weight has
+    /// moved past the tolerance since it was.
+    fn plan_collapse(&mut self, u: &EnvUniform) {
+        let Some(new) = self
+            .reads_collapsed()
+            .then(|| collapse_weights(u))
+            .flatten()
+        else {
+            // Not read: it will be drawn afresh when it is.
+            self.collapsed = None;
+            self.collapse_due = false;
+            return;
+        };
+        if self
+            .collapsed
+            .as_ref()
+            .is_none_or(|old| weights_moved(old, &new))
+        {
+            self.collapsed = Some(new);
+            self.collapse_due = true;
+        }
+    }
+
+    /// Records the draw of the collapsed light into `cmd`, outside any
+    /// rendering and before the eye passes, if the last written uniform
+    /// called for it. True when it did.
+    pub fn record_collapse(&mut self, gpu: &Gpu, cmd: vk::CommandBuffer, slot: usize) -> bool {
+        if !std::mem::take(&mut self.collapse_due) || !self.reads_collapsed() {
+            return false;
+        }
+        let drawn = self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.baked.as_ref())
+            .is_some_and(|b| {
+                b.record_collapse(gpu, cmd, slot, self.collapse_pipe, self.baked_layout)
+            });
+        self.collapse_runs += u64::from(drawn);
+        drawn
     }
 
     /// The picture's light on a baked place, on or off (the A/B cycle).
@@ -646,7 +814,13 @@ impl EnvPass {
                     .iter()
                     .map(|s| (s.uniform.buffer, size_of::<EnvUniform>() as u64))
                     .collect();
-                Some(BakedGpu::new(gpu, self.baked_set_layout, &uniforms, b)?)
+                Some(BakedGpu::new(
+                    gpu,
+                    self.baked_set_layout,
+                    &uniforms,
+                    b,
+                    self.collapse_shift,
+                )?)
             }
             None => None,
         };
@@ -692,6 +866,10 @@ impl EnvPass {
         };
         self.generation += 1;
         self.ordered_for = None;
+        // The new pack's light texture is black until it is drawn.
+        self.collapsed = None;
+        self.collapse_due = false;
+        self.collapse_runs = 0;
         if let Some(pack) = pack.filter(|_| self.sort_work) {
             if self.sorter.is_none() {
                 self.sorter = PlaceSorter::new();
@@ -740,6 +918,7 @@ impl EnvPass {
     pub fn write(&mut self, slot: usize, u: &EnvUniform) {
         if let Some(s) = self.slots.get_mut(slot) {
             s.uniform.bytes()[..size_of::<EnvUniform>()].copy_from_slice(bytemuck::bytes_of(u));
+            self.plan_collapse(u);
         }
     }
 
@@ -752,10 +931,16 @@ impl EnvPass {
         let d = &gpu.device;
         let bind = vk::PipelineBindPoint::GRAPHICS;
         if let Some(set) = l.baked.as_ref().and_then(|b| b.set(slot)) {
-            // A pack: one pipeline, no sky (the room is all there is).
+            // A pack: one pipeline, no sky (the room is all there is). The
+            // one that reads the collapsed light, unless that is off.
+            let pipe = if self.reads_collapsed() {
+                self.lit_pipe
+            } else {
+                self.baked_pipe
+            };
             // SAFETY: as below; the baked sets point at the same uniforms.
             unsafe {
-                d.cmd_bind_pipeline(cmd, bind, self.baked_pipe);
+                d.cmd_bind_pipeline(cmd, bind, pipe);
                 d.cmd_bind_descriptor_sets(cmd, bind, self.baked_layout, 0, &[set], &[]);
                 d.cmd_push_constants(
                     cmd,
@@ -810,6 +995,8 @@ impl EnvPass {
             d.destroy_pipeline(self.env_pipe, None);
             d.destroy_pipeline(self.sky_pipe, None);
             d.destroy_pipeline(self.baked_pipe, None);
+            d.destroy_pipeline(self.lit_pipe, None);
+            d.destroy_pipeline(self.collapse_pipe, None);
             d.destroy_pipeline_layout(self.layout, None);
             d.destroy_pipeline_layout(self.baked_layout, None);
             d.destroy_descriptor_set_layout(self.set_layout, None);
@@ -946,6 +1133,44 @@ mod tests {
         // Slots past the palette are black, plain and dark.
         let spare = u.palette[data.palette.len()];
         assert_eq!(spare, Vec4::ZERO);
+    }
+
+    #[test]
+    fn a_weight_must_move_a_share_of_itself_to_draw_the_collapse_again() {
+        let w = |v: f32| [Vec3::splat(v); PATCHES];
+        // Not moved at all, or by a thousandth of itself.
+        assert!(!weights_moved(&w(0.5), &w(0.5)));
+        assert!(!weights_moved(&w(0.5), &w(0.5005)));
+        // By a percent: drawn again.
+        assert!(weights_moved(&w(0.5), &w(0.505)));
+        // One patch, one channel is enough.
+        let mut one = w(0.5);
+        one[5].y = 0.52;
+        assert!(weights_moved(&w(0.5), &one));
+        // Near zero the absolute floor decides, not the share.
+        assert!(!weights_moved(&w(0.0), &w(0.00005)));
+        assert!(weights_moved(&w(0.0), &w(0.001)));
+    }
+
+    #[test]
+    fn the_collapse_asks_for_the_weights_only_while_the_light_is_read() {
+        let mut u: EnvUniform = bytemuck::Zeroable::zeroed();
+        u.baked.x = 0.5;
+        // No picture: the strength is zero.
+        assert!(collapse_weights(&u).is_none());
+        u.screen_n.w = 2.0;
+        u.patch_rgb[3] = Vec4::new(0.1, 0.2, 0.3, 0.0);
+        // The pass sets this one from its knob.
+        assert!(collapse_weights(&u).is_none());
+        u.baked.y = 1.0;
+        let w = collapse_weights(&u).expect("read");
+        // The gain 0.5 times the strength 2.
+        assert_eq!(w[3], Vec3::new(0.1, 0.2, 0.3));
+        u.baked.x = 0.25;
+        assert_eq!(
+            collapse_weights(&u).expect("read")[3],
+            Vec3::new(0.05, 0.1, 0.15)
+        );
     }
 
     #[test]

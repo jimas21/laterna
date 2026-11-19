@@ -4,6 +4,12 @@
 //!
 //! - `FRAMEPLAYERX_PLACE_BASIS=0`: a baked place leaves out the picture's
 //!   light (eight texture reads a pixel).
+//! - `FRAMEPLAYERX_PLACE_COLLAPSE=0`: a baked place reads the picture's light
+//!   from the eight basis textures again (the old path), not from the one
+//!   texture they are collapsed into whenever the picture's colours move.
+//! - `FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT=0|1|2|3|4`: how many levels down the
+//!   basis textures' chain that one texture starts (0, the default: as big as
+//!   they are; 1: a quarter of the texels), for places loaded from then on.
 //! - `FRAMEPLAYERX_PLACE_SORT=0`: a baked place is drawn in the order its
 //!   pack was written, not nearest first.
 //! - `FRAMEPLAYERX_BASIS_ANISO=1`: the basis textures are read with the
@@ -39,6 +45,8 @@ pub(crate) struct Variant {
     pub depth: u32,
     /// A baked place's colour textures read anisotropically.
     pub aniso: bool,
+    /// The picture's light read from one collapsed texture, not eight.
+    pub collapse: bool,
 }
 
 impl Variant {
@@ -48,11 +56,12 @@ impl Variant {
             bits => bits.to_string(),
         };
         format!(
-            "msaa{} basis={} sort={} z={depth} aniso={}",
+            "msaa{} basis={} sort={} z={depth} aniso={} collapse={}",
             self.samples,
             on(self.basis),
             on(self.sort),
-            on(self.aniso)
+            on(self.aniso),
+            on(self.collapse)
         )
     }
 }
@@ -62,22 +71,27 @@ fn on(b: bool) -> &'static str {
 }
 
 /// What the app does without any knob: the light on, sorted, 4x, the
-/// device's own depth format, anisotropic colours.
+/// device's own depth format, anisotropic colours, the light collapsed.
 const DEFAULT: Variant = Variant {
     samples: 4,
     basis: true,
     sort: true,
     depth: 0,
     aniso: true,
+    collapse: true,
 };
 
 /// What the cycle steps through, most informative first. The first is the
 /// default, so every other line is read against it; then each knob alone
-/// (what beta.10 did, the light off, a 16- and a 24-bit depth buffer,
-/// colours read trilinear), then the sample counts. Ten variants, ten
-/// seconds each: a hundred seconds.
-pub(crate) const VARIANTS: [Variant; 10] = [
+/// (the light read from eight textures, what beta.10 did, the light off, a 16-
+/// and a 24-bit depth buffer, colours read trilinear), then the sample
+/// counts. Eleven variants, ten seconds each: 110 seconds.
+pub(crate) const VARIANTS: [Variant; 11] = [
     DEFAULT,
+    Variant {
+        collapse: false,
+        ..DEFAULT
+    },
     Variant {
         sort: false,
         ..DEFAULT
@@ -131,6 +145,11 @@ pub(crate) struct Knobs {
     pub basis: bool,
     pub sort: bool,
     pub basis_aniso: bool,
+    /// The picture's light read from one collapsed texture (the default).
+    pub collapse: bool,
+    /// Levels down the basis textures' chain the collapsed one starts, if
+    /// asked for.
+    pub collapse_shift: Option<u32>,
     /// The place's colour textures read anisotropically (the default).
     pub place_aniso: bool,
     /// Bits of the eye passes' depth buffer asked for, if any.
@@ -159,6 +178,10 @@ impl Knobs {
             basis: default_on("FRAMEPLAYERX_PLACE_BASIS"),
             sort: default_on("FRAMEPLAYERX_PLACE_SORT"),
             basis_aniso: default_off("FRAMEPLAYERX_BASIS_ANISO"),
+            collapse: default_on("FRAMEPLAYERX_PLACE_COLLAPSE"),
+            collapse_shift: value("FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT")
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|&n| n <= 4),
             place_aniso: default_on("FRAMEPLAYERX_PLACE_ANISO"),
             depth: value("FRAMEPLAYERX_DEPTH").and_then(|v| match v.as_str() {
                 "16" => Some(16),
@@ -181,6 +204,12 @@ impl Knobs {
         }
         if self.basis_aniso {
             set.push("FRAMEPLAYERX_BASIS_ANISO=1".to_string());
+        }
+        if !self.collapse {
+            set.push("FRAMEPLAYERX_PLACE_COLLAPSE=0".to_string());
+        }
+        if let Some(n) = self.collapse_shift {
+            set.push(format!("FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT={n}"));
         }
         if !self.place_aniso {
             set.push("FRAMEPLAYERX_PLACE_ANISO=0".to_string());
@@ -347,6 +376,8 @@ mod tests {
                 basis: true,
                 sort: true,
                 basis_aniso: false,
+                collapse: true,
+                collapse_shift: None,
                 place_aniso: true,
                 depth: None,
                 ab: false
@@ -375,6 +406,21 @@ mod tests {
         assert!(Knobs::parse(env(&[("FRAMEPLAYERX_PLACE_BASIS", "1")])).basis);
         assert!(!Knobs::parse(env(&[("FRAMEPLAYERX_PERF_AB", "0")])).ab);
         assert!(!Knobs::parse(env(&[("FRAMEPLAYERX_PERF_AB", "")])).ab);
+    }
+
+    #[test]
+    fn the_collapse_is_on_unless_turned_off_and_its_size_is_0_to_4() {
+        assert!(Knobs::parse(env(&[])).collapse);
+        let k = Knobs::parse(env(&[("FRAMEPLAYERX_PLACE_COLLAPSE", "0")]));
+        assert!(!k.collapse);
+        assert_eq!(k.describe(), "FRAMEPLAYERX_PLACE_COLLAPSE=0");
+        let shift = |v: &str| Knobs::parse(env(&[("FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT", v)]));
+        assert_eq!(shift("0").collapse_shift, Some(0));
+        assert_eq!(shift(" 2 ").collapse_shift, Some(2));
+        for other in ["", "-1", "5", "x", "1.5"] {
+            assert_eq!(shift(other).collapse_shift, None, "{other:?}");
+        }
+        assert_eq!(shift("2").describe(), "FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT=2");
     }
 
     #[test]
@@ -410,11 +456,16 @@ mod tests {
                 basis: true,
                 sort: true,
                 depth: 0,
-                aniso: true
+                aniso: true,
+                collapse: true
             }
         );
         // Each knob changed alone, the rest as the default.
         let alone = [
+            Variant {
+                collapse: false,
+                ..d
+            },
             Variant { sort: false, ..d },
             Variant { basis: false, ..d },
             Variant { depth: 16, ..d },
@@ -439,8 +490,8 @@ mod tests {
                 );
             }
         }
-        // No variant twice, and no more than ten (a hundred seconds).
-        assert!(VARIANTS.len() <= 10);
+        // No variant twice, and no more than eleven (110 seconds).
+        assert!(VARIANTS.len() <= 11);
         for (i, a) in VARIANTS.iter().enumerate() {
             assert!(!VARIANTS[i + 1..].contains(a));
         }
@@ -520,14 +571,17 @@ mod tests {
     #[test]
     fn a_line_says_the_variant_and_its_numbers() {
         let m = Measured {
-            variant: VARIANTS[2],
+            variant: Variant {
+                basis: false,
+                ..VARIANTS[0]
+            },
             frames: 640,
             total: Some((8.5, 11.2)),
             eyes: None,
         };
         let line = m.line();
         assert!(
-            line.contains("msaa4 basis=off sort=on z=auto aniso=on"),
+            line.contains("msaa4 basis=off sort=on z=auto aniso=on collapse=on"),
             "{line}"
         );
         assert!(line.contains("8.50/11.20"), "{line}");
