@@ -118,7 +118,7 @@ pub const ROOM_ECHO_START: f32 = 0.5;
 
 /// How loud a place's ambience (the murmur before a film, a camp fire) is
 /// until it is changed: modest, a share of the sound's own soft level.
-pub const AMBIENCE_START: f32 = 0.5;
+pub const AMBIENCE_START: f32 = 0.0;
 
 /// What the top of the Screen light slider asks of the renderer, as a
 /// multiple of the places' own strength: two stops of headroom, for a viewer
@@ -281,6 +281,9 @@ pub struct Settings {
     pub room_echo: f32,
     /// How loud a place's own sounds are, 0 (off) to 1: the murmur of a
     /// cinema before the film. A place makes none when it is not shown.
+    /// Off to start with: the synthesised murmur sounded harsh on the
+    /// headset. Stored under a new name so beta.18's saved 0.5 is dropped.
+    #[serde(rename = "room_ambience")]
     pub ambience_level: f32,
     /// Settings > Places > Minimal lighting: a place's own lights (exit
     /// signs, step lights) go fully off for the film instead of dimming with

@@ -56,9 +56,9 @@ pub const FORMAT: u32 = 3;
 /// The first format with a mesh and textures for each seat.
 pub const PER_SEAT_FORMAT: u32 = 3;
 /// What a set without a material texture is given: R roughness 0.85, G
-/// specular mask 0.25, B and A reserved. Weak and rough on purpose, so a pack
-/// made before the material map existed looks no worse for the highlight.
-pub const DEFAULT_MATERIAL: [u8; 4] = [217, 64, 0, 255];
+/// specular mask 0, B and A reserved: no highlight at all, so a pack made
+/// before the material map existed looks exactly as it was baked.
+pub const DEFAULT_MATERIAL: [u8; 4] = [217, 0, 0, 255];
 /// The most bytes one set of a format 2 or 3 pack's texture files may add up
 /// to (a format 3 pack has a set for each seat, so the whole pack may be more).
 pub const MAX_TEXTURE_BYTES: u64 = 32 << 20;

@@ -158,7 +158,7 @@ settings-audio-delay-desc = Plays the sound later (+) or earlier (-) than the pi
 settings-sound-screen = Sound from the screen
 settings-sound-screen-desc = The sound of a flat video comes from where the screen is and stays there as you turn your head. Stereo is placed at the screen's edges, and 5.1 and 7.1 surround speakers beside and behind you. Turn it off to keep the sound in your head, as the file mixed it.
 settings-room-echo = Room echo
-settings-room-echo-desc = How much of a place's own sound, like a cinema's large hall, comes back to you. Plain video and passthrough have none.
+settings-room-echo-desc = How much of a place's own sound, like a cinema's large hall, comes back to you. Just the screen and passthrough have none.
 settings-room-ambience = Room ambience
 settings-room-ambience-desc = The soft sounds of a place, like the murmur of a cinema before the film. They fade as the lights go down and stay off during the video. 0 turns them off.
 settings-audio-device = Audio device
@@ -1534,11 +1534,11 @@ earbuds-pause-desc = The video stays paused when the earbud goes back in.
 
 # Short: a tab, and the title of its page.
 settings-places = Places
-settings-places-desc = The place round flat videos and the menus. Plain is the empty background. Place around the screen, in the control bar's More list, changes it while a video plays. Your choice stays until you change it.
+settings-places-desc = The place round flat videos and the menus. Just the screen is an empty, dark background. Place around the screen, in the control bar's More list, changes it while a video plays. Your choice stays until you change it.
 # The picker's heading in the adjust panel, and a heading in Settings.
 place-heading = Place
 # Short: a chip. The empty background, no place.
-place-plain = Plain
+place-plain = Just the screen
 # Short: a chip. Your real room, seen through the headset.
 place-your-room = Your room
 # Short: a chip.
