@@ -337,6 +337,8 @@ pub fn sky_from_picture(path: &Path) -> Result<PlaceData, String> {
         // No picture light: the sky is not lit by the screen.
         basis_gain: 0.0,
         seat: None,
+        // A photo has no gloss: the default (rough, weak) material.
+        material: None,
     };
     let mut data = pack::sky_place_data(baked);
     data.sky = Sky::None;
@@ -403,7 +405,7 @@ fn linear_to_srgb(v: f32) -> f32 {
     }
 }
 
-/// The RGBA8 texels at [`DARK_LEVEL`] of their light (in linear light, then
+/// The RGBA8 texels at `DARK_LEVEL` of their light (in linear light, then
 /// back to sRGB): the picture with the house lights down.
 pub fn dimmed(rgba: &[u8]) -> Vec<u8> {
     let table: Vec<u8> = (0..=255u8)

@@ -140,7 +140,7 @@ impl Place {
                 sound: Sound::Murmur,
                 with_house_lights: true,
             }],
-            Place::Studio => &[],
+            Place::Studio | Place::User(_) => &[],
         }
     }
 
