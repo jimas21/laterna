@@ -912,6 +912,25 @@ impl Rows<'_> {
         })
     }
 
+    /// [`Rows::slider`] with the knob's travel bent by `curve` (see
+    /// [`slider_curved`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn slider_curved(
+        &mut self,
+        title: &str,
+        desc: Option<&str>,
+        value: &mut f32,
+        range: std::ops::RangeInclusive<f32>,
+        default: f32,
+        suffix: &str,
+        decimals: usize,
+        curve: f32,
+    ) -> bool {
+        self.row(title, desc, |ui| {
+            slider_control_curved(ui, value, range, default, suffix, decimals, curve)
+        })
+    }
+
     /// A full-width line of content (a hint, a list) inside the card.
     pub fn content<R>(&mut self, add: impl FnOnce(&mut Ui) -> R) -> R {
         self.next_row(|ui| {
@@ -1039,6 +1058,20 @@ pub fn slider_control(
     suffix: &str,
     decimals: usize,
 ) -> bool {
+    slider_control_curved(ui, value, range, default, suffix, decimals, 1.0)
+}
+
+/// [`slider_control`] whose knob travel is bent by `curve` (see
+/// [`slider_curved`]).
+pub fn slider_control_curved(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default: f32,
+    suffix: &str,
+    decimals: usize,
+    curve: f32,
+) -> bool {
     let mut changed = false;
     let reset = (*value - default).abs() > 1e-4;
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::click());
@@ -1072,7 +1105,7 @@ pub fn slider_control(
     // What the row leaves it, so at a large interface size it doesn't run
     // over the text beside it.
     let width = ui.available_width().clamp(120.0, 240.0);
-    let resp = slider(ui, value, range.clone(), width);
+    let resp = slider_curved(ui, value, range.clone(), width, curve);
     changed |= resp.changed();
     if resp.hovered() {
         let ctx = ui.ctx().clone();
@@ -1294,18 +1327,43 @@ pub fn slider(
     range: std::ops::RangeInclusive<f32>,
     width: f32,
 ) -> Response {
+    slider_curved(ui, value, range, width, 1.0)
+}
+
+/// How far along its rail (0 to 1) the knob of a slider over `lo..=hi` sits
+/// for `value`, when the travel is bent by `curve`: the value at a fraction
+/// `f` of the rail is `lo + (hi - lo) * f.powf(curve)`, so a `curve` above 1
+/// gives the low end more of the rail.
+pub fn rail_fraction(value: f32, lo: f32, hi: f32, curve: f32) -> f32 {
+    if hi > lo {
+        ((value - lo) / (hi - lo))
+            .clamp(0.0, 1.0)
+            .powf(1.0 / curve.max(1e-3))
+    } else {
+        0.0
+    }
+}
+
+/// The value at a fraction `f` of the rail: the inverse of [`rail_fraction`].
+pub fn rail_value(f: f32, lo: f32, hi: f32, curve: f32) -> f32 {
+    lo + (hi - lo) * f.clamp(0.0, 1.0).powf(curve.max(1e-3))
+}
+
+/// A [`slider`] whose knob travel is bent by `curve` (see [`rail_fraction`]):
+/// the house lights use it so 1 to 2 % is not a hair's width of rail.
+pub fn slider_curved(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    width: f32,
+    curve: f32,
+) -> Response {
     let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(width, 36.0), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let inset = 11.0;
     let rail_x = (rect.left() + inset)..=(rect.right() - inset);
     let len = rail_x.end() - rail_x.start();
-    let fraction = |v: f32| {
-        if hi > lo {
-            ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    };
+    let fraction = |v: f32| rail_fraction(v, lo, hi, curve);
     if resp.hovered() {
         let pass = ui.ctx().cumulative_pass_nr();
         ui.data_mut(|d| d.insert_temp(egui::Id::new(OVER_SLIDER), pass));
@@ -1332,7 +1390,7 @@ pub fn slider(
                     let v0 = if (origin.x - knob).abs() <= GRAB_REACH {
                         *value
                     } else {
-                        lo + ((origin.x - rail_x.start()) / len).clamp(0.0, 1.0) * (hi - lo)
+                        rail_value((origin.x - rail_x.start()) / len, lo, hi, curve)
                     };
                     (origin.x, v0)
                 }
@@ -1342,7 +1400,7 @@ pub fn slider(
             d.insert_temp(grab, (origin, from_x, v0));
             (from_x, v0)
         });
-        let v = (v0 + (p.x - from_x) / len * (hi - lo)).clamp(lo, hi);
+        let v = rail_value(fraction(v0) + (p.x - from_x) / len, lo, hi, curve);
         if (v - *value).abs() > f32::EPSILON {
             *value = v;
             resp.mark_changed();

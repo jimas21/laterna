@@ -53,6 +53,10 @@ pub struct FrameInput {
     /// The compositor can draw panels and rays as quad layers (OpenXR);
     /// otherwise (the desktop preview) everything is drawn into the eyes.
     pub layers: bool,
+    /// How many panel layers the compositor has room for beside the picture,
+    /// the pointers and the test card (only with `layers`). A panel that
+    /// does not fit is drawn into the eyes instead of being dropped.
+    pub layer_budget: usize,
     /// Render-thread time of the previous frame, ms, and the display's
     /// refresh rate (OpenXR), for the performance overlay.
     pub frame_ms: Option<f32>,

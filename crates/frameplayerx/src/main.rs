@@ -998,6 +998,10 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                 hands: input.hands,
                 passthrough_available: session.supports_passthrough_blend(),
                 layers,
+                // The projection layer, the two pointers and the test card
+                // come out of what the runtime allows.
+                layer_budget: (session.max_layers() as usize)
+                    .saturating_sub(1 + 2 + usize::from(card_layer.is_some())),
                 frame_ms: last_frame_ms,
                 display_hz: Some(frame.state.predicted_display_period.as_nanos())
                     .filter(|&ns| ns > 0)

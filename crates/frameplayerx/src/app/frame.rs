@@ -606,7 +606,11 @@ impl App {
             self.ui.toast(notice);
         }
         self.panels[BAR].visible = playing && self.ui_visible && (!self.show_browser || multitask);
-        self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
+        let adjust_up = self.panels[BAR].visible && self.ui.adjust_open;
+        if adjust_up && !self.panels[ADJUST].visible {
+            self.ui.adjust_top = true;
+        }
+        self.panels[ADJUST].visible = adjust_up;
         // The More list takes the picker's place above the bar.
         self.panels[TRACKS].visible =
             self.panels[BAR].visible && (self.ui.tracks_open || self.ui.more_open);
@@ -1097,8 +1101,12 @@ impl App {
         let distance = |p: &Panel| (p.pose.w_axis.truncate() - eye).length();
         order.sort_by(|(_, a), (_, b)| distance(b).total_cmp(&distance(a)));
         let mut layers = Vec::new();
-        for (key, p) in order {
-            let layered = input.layers && !p.in_eyes && p.fully_shown();
+        let wants: Vec<bool> = order
+            .iter()
+            .map(|(_, p)| input.layers && !p.in_eyes && p.fully_shown())
+            .collect();
+        let granted = grant_layers(&wants, input.layer_budget);
+        for ((key, p), layered) in order.into_iter().zip(granted) {
             match p.id {
                 // Fully shown: the compositor draws it. Fading: drawn into
                 // the eyes, where opacity works.
@@ -1251,6 +1259,22 @@ fn follows_head(setting: bool, flat: bool, dragging: bool) -> bool {
 
 /// What a video's format, view settings, turn and pixel shape say about the
 /// picture: the parts of `VideoParams` its screen's size and curve come from.
+/// Which of the panels that want a compositor layer (`wants`, far to near)
+/// get one when only `budget` fit: the nearest. The rest are drawn into the
+/// eyes, where they still show, rather than being dropped from the frame by
+/// the runtime's limit (a pop-up or its close key that "wasn't showing").
+fn grant_layers(wants: &[bool], budget: usize) -> Vec<bool> {
+    let mut left = budget;
+    let mut granted = vec![false; wants.len()];
+    for (i, want) in wants.iter().enumerate().rev() {
+        if *want && left > 0 {
+            granted[i] = true;
+            left -= 1;
+        }
+    }
+    granted
+}
+
 fn describe_video(video: &mut VideoParams, p: &Playback, shown: fp_core::view::ViewSettings) {
     video.format = p.format;
     video.settings = shown;
@@ -1442,6 +1466,18 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn panels_over_the_layer_budget_go_into_the_eyes_nearest_first() {
+        // Far to near; the first and third do not want a layer.
+        let wants = [false, true, false, true, true];
+        assert_eq!(grant_layers(&wants, 9), [false, true, false, true, true]);
+        // Room for two: the nearest two keep theirs, the farthest is
+        // drawn in the eyes instead (not dropped).
+        assert_eq!(grant_layers(&wants, 2), [false, false, false, true, true]);
+        assert_eq!(grant_layers(&wants, 0), [false; 5]);
+        assert_eq!(grant_layers(&[], 3), Vec::<bool>::new());
+    }
 
     #[test]
     fn follow_pauses_while_the_picture_is_dragged() {
