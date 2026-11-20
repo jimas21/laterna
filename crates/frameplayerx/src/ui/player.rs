@@ -3413,6 +3413,7 @@ mod tests {
         let mut m = watching(false);
         m.dropped = Dropped {
             hide: true,
+            place: false,
             adjust: false,
         };
         let [play, _] = more_columns(&m);
