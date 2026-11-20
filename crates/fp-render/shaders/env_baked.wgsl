@@ -39,10 +39,10 @@
 // moved: what `fs_lit` reads in place of the eight reads of `fs_main`.
 @group(0) @binding(5) var lightmap: texture_2d<f32>;
 
-// The pack's material texture, layer 0: R roughness, G specular mask (0 matte,
+// The pack's material texture: R roughness, G specular mask (0 matte,
 // 1 a glossy dielectric), B and A reserved. A pack without one gets a 1 x 1
 // weak, rough one (src/env/pack.rs `DEFAULT_MATERIAL`).
-@group(0) @binding(6) var material: texture_2d_array<f32>;
+@group(0) @binding(6) var material: texture_2d<f32>;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -131,7 +131,7 @@ fn span_cover(c: f32, h: f32, s: f32) -> f32 {
 // come first, in uniform control flow; everything after is arithmetic that
 // may differ from pixel to pixel.
 fn shine_light(in: VsOut) -> vec3<f32> {
-    let m = textureSample(material, basis_sampler, in.uv, 0).rg;
+    let m = textureSample(material, basis_sampler, in.uv).rg;
     let slope = cross(dpdx(in.rpos), dpdy(in.rpos));
 
     let to_eye = env.eye_pos[pc.eye].xyz - in.rpos;
