@@ -14,6 +14,7 @@ mod bindings;
 mod controls;
 mod crash;
 mod drives;
+mod hands;
 mod image_cache;
 mod jobs;
 mod libraries;
