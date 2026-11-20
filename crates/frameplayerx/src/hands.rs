@@ -15,7 +15,12 @@ use std::sync::OnceLock;
 /// `FRAMEPLAYERX_CONTROLLERS=0` draws none (a kill switch, as for places).
 pub fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("FRAMEPLAYERX_CONTROLLERS").is_none_or(|v| v != "0"))
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("FRAMEPLAYERX_CONTROLLERS").as_deref(),
+            Ok("0")
+        )
+    })
 }
 
 /// A box in the controller's frame (-Z is where it points): the corners it
