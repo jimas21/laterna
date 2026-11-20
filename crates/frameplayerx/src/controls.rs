@@ -829,8 +829,9 @@ mod tests {
         assert_eq!(run(&mut c, &h, cx), vec![Cmd::DragBegin]);
         // Arm out 0.4 m further, then back in 0.2 m.
         let out = settle(&mut c, &mut h, 0.7);
-        let reach_at = |z: f32| 0.2f32.hypot(z);
-        let gap = reach_at(0.7) - reach_at(0.3);
+        // Measured along the line the hand was on from the head when it began.
+        let line = Vec3::new(0.0, -0.2, -0.3);
+        let gap = Vec3::new(0.0, -0.2, -0.7).dot(line.normalize()) - line.length();
         assert!((out - gap).abs() < 1e-3, "{out}");
         let back = settle(&mut c, &mut h, 0.5);
         assert!(back > 0.0 && back < out, "{back}");
