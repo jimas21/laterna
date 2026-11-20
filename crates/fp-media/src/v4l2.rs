@@ -36,11 +36,13 @@
 //! The player's decoder lends its CAPTURE buffers out with the frames,
 //! exported as DMA-BUFs ([`crate::SharedPicture`]), and the renderer reads
 //! the pictures there; a buffer is queued again once its frame is dropped.
-//! It then asks for [`CAPTURE_BUFFERS`] buffers or the driver's minimum
-//! plus [`MAX_LENT`], whichever is more (the same 8 on the Frame, whose
-//! minimum is 1). A buffer is lent only while the driver keeps its minimum
-//! queued without it ([`lendable`]), so decoding never waits on the
-//! renderer. Otherwise, and whenever frames aren't shared
+//! It then asks for what the decoder has to keep ([`CaptureNeeds`]) plus
+//! [`MAX_LENT`], and at least [`CAPTURE_BUFFERS`]. In NV12 the decoder keeps
+//! what the driver asks for (1 on the Frame: 8 buffers). Q10C buffers are
+//! the decoder's reference pictures, so it also keeps the stream's DPB (13
+//! buffers for an 8K stream with a DPB of 5). A buffer is lent only while
+//! the decoder keeps that many without it ([`lendable`]), so decoding never
+//! waits on the renderer. Otherwise, and whenever frames aren't shared
 //! ([`crate::decode::shared_frames`], [`shareable`]), the picture is copied
 //! out into a pooled `AVFrame` and the buffer goes straight back.
 //!
@@ -54,13 +56,21 @@
 
 /// Bitstream (OUTPUT) buffers to request.
 pub(crate) const OUTPUT_BUFFERS: u32 = 6;
-/// Decoded-picture (CAPTURE) buffers to request (at least the driver minimum).
+/// Decoded-picture (CAPTURE) buffers to request at least, whatever the
+/// decoder keeps and lends: the 8 that 8-bit video was measured to play on
+/// without running short, lending up to 7 of them.
 pub(crate) const CAPTURE_BUFFERS: u32 = 8;
 /// CAPTURE buffers that can be out with frames at once when frames are
 /// shared: the player's queue of shared frames ([`SHARED_QUEUE`]), the
-/// frame waiting for room in it, the picture on screen and the two frames
-/// the GPU is still reading. The decoder asks for this many on top of what
-/// the driver has to keep queued.
+/// frame the decode thread holds waiting for room in it, and the frames
+/// the renderer's two frame slots read until the GPU is done with them
+/// (the newer one is the picture on screen): 6. One more is a margin:
+/// should anything hold a frame longer than counted, the next picture is
+/// still lent rather than copied, which for an 8K 10-bit picture costs the
+/// GPU 6.5 to 8 ms; while the player holds fewer, the decoder has it to
+/// decode a picture further ahead. It costs a buffer (68 MB at 8K 10-bit).
+/// The decoder asks for this many on top of what it keeps
+/// ([`CaptureNeeds`]).
 pub(crate) const MAX_LENT: u32 = 7;
 /// Shared frames the player queues ahead. Each holds a decoder buffer, and
 /// the decoder runs well ahead of real time, so fewer than copies.
@@ -68,11 +78,230 @@ pub(crate) const SHARED_QUEUE: usize = 3;
 
 /// Whether the CAPTURE buffer just dequeued may be lent out with its frame:
 /// of `buffers`, `lent` are out already, one may be `held` (after LAST),
-/// and the driver must keep `min` queued without this one. Otherwise the
-/// picture is copied and the buffer queued again, so lending never starves
-/// the decoder whatever holds the frames.
-pub(crate) fn lendable(buffers: usize, lent: usize, held: bool, min: u32) -> bool {
-    buffers.saturating_sub(lent + held as usize + 1) >= min as usize
+/// and the decoder must keep `keep` ([`CaptureNeeds::keep`]) without this
+/// one. Otherwise the picture is copied and the buffer queued again, so
+/// lending never starves the decoder whatever holds the frames.
+pub(crate) fn lendable(buffers: usize, lent: usize, held: bool, keep: u32) -> bool {
+    buffers.saturating_sub(lent + held as usize + 1) >= keep as usize
+}
+
+/// The DPB that sizes CAPTURE once an SPS declaring `sps` is sent to the
+/// device, `seen` being the largest so far: `sps` when it is larger
+/// ([`crate::nal::Dpb`]'s order), else `None`, nothing changing. The
+/// largest, not the latest: a stream may carry an SPS its pictures don't
+/// use, and room for that one alone can be too little for theirs.
+///
+/// Seen counts from the extradata on, for as long as the decoder is open:
+/// through seeks, which go back into the same stream and its SPSs, and
+/// through resolution changes. Starting over at one would need to know
+/// which SPSs are the new size's, and timing doesn't tell: each packet is
+/// read as it is sent, ahead of the device by the bitstream queued and
+/// pending, so by the time the device signals the change, the new size's
+/// SPS has been counted with the old one's and maybe more after it.
+/// Counting too few is what freezes the video, where counting too many
+/// costs memory: at the new size, room for a larger DPB another size
+/// declared, at most 16 pictures.
+pub(crate) fn larger_dpb(
+    seen: Option<crate::nal::Dpb>,
+    sps: Option<crate::nal::Dpb>,
+) -> Option<crate::nal::Dpb> {
+    sps.filter(|&d| Some(d) > seen)
+}
+
+/// What the decoder needs to keep of its CAPTURE buffers (with the driver:
+/// queued, or holding pictures decoded and not yet dequeued), never lent.
+/// The inputs are kept for the log, so a person can check the count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CaptureNeeds {
+    /// `V4L2_CID_MIN_BUFFERS_FOR_CAPTURE`, 1 when the driver doesn't say.
+    pub control: u32,
+    /// The largest DPB of the stream's SPSs ([`larger_dpb`]), when one was
+    /// read ([`crate::nal::sps_dpb`]).
+    pub dpb: Option<crate::nal::Dpb>,
+    /// The CAPTURE buffers are the decoder's reference pictures (Q10C), so
+    /// the stream's DPB counts. In NV12 it doesn't: on the Frame, 8-bit
+    /// video lending all but one of 8 buffers never ran short, as if the
+    /// driver kept its references in buffers of its own.
+    pub references: bool,
+    /// The visible picture size: with no SPS read, HEVC's largest DPB for
+    /// it stands in ([`crate::nal::hevc_most_dpb`]).
+    pub size: (u32, u32),
+}
+
+impl CaptureNeeds {
+    /// The stream's DPB in pictures, when it counts.
+    fn counted_dpb(&self) -> Option<u32> {
+        self.references.then(|| {
+            self.dpb
+                .unwrap_or_else(|| crate::nal::hevc_most_dpb(self.size.0, self.size.1))
+                .pictures
+        })
+    }
+
+    /// Buffers to keep: the driver's minimum, or the stream's DPB (the
+    /// picture being decoded included) plus one, whichever is more. The one
+    /// is the picture the decoder has just output: its buffer is no longer
+    /// in the DPB, but it isn't the decoder's again until dequeued, and
+    /// until then it counts as kept, not lent. Without it the decoder could
+    /// only start the next picture once the player took the last one.
+    pub(crate) fn keep(&self) -> u32 {
+        self.control
+            .max(self.counted_dpb().map_or(0, |p| p + 1))
+            .max(1)
+    }
+}
+
+impl std::fmt::Display for CaptureNeeds {
+    /// "driver minimum 1, largest stream DPB 5 with 3 reordered": the
+    /// reorder count is that SPS's own, which its DPB holds.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "driver minimum {}, ", self.control)?;
+        match (self.dpb, self.references) {
+            (Some(d), _) => write!(
+                f,
+                "largest stream DPB {} with {} reordered",
+                d.pictures, d.reorder
+            )?,
+            (None, true) => write!(
+                f,
+                "stream DPB unread, the most HEVC allows at {}x{}: {}",
+                self.size.0,
+                self.size.1,
+                self.counted_dpb().unwrap_or(0)
+            )?,
+            (None, false) => write!(f, "stream DPB unread")?,
+        }
+        if !self.references {
+            write!(f, ", not counted in NV12")?;
+        }
+        Ok(())
+    }
+}
+
+/// How the CAPTURE buffers were counted: what was asked for, what `REQBUFS`
+/// gave back, and from that what the decoder keeps and what may be lent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CaptureCount {
+    pub needs: CaptureNeeds,
+    /// What the player can hold at once ([`MAX_LENT`]); 0 when frames are
+    /// copied.
+    pub lend: u32,
+    /// The count the last `REQBUFS` asked for ([`CaptureCount::ask`]).
+    pub asked: u32,
+    /// The count it gave back: the buffers there are.
+    pub granted: u32,
+}
+
+impl CaptureCount {
+    /// The count to ask `REQBUFS` for first: what the decoder keeps and
+    /// what the player can hold, and at least [`CAPTURE_BUFFERS`].
+    pub(crate) fn ask(needs: &CaptureNeeds, lend: u32) -> u32 {
+        CAPTURE_BUFFERS.max(needs.keep() + lend)
+    }
+
+    /// The count to ask for after `REQBUFS` found no memory for `asked`:
+    /// room to lend halved each time (13, 9, 7, then 6 for the 8K stream
+    /// keeping 6), as lending fewer beats copying every picture; `None`
+    /// once even what the decoder keeps alone failed.
+    pub(crate) fn fewer(asked: u32, keep: u32) -> Option<u32> {
+        (asked > keep).then(|| keep + (asked - keep) / 2)
+    }
+
+    /// Buffers the decoder keeps. A driver may raise the count asked for to
+    /// what it requires to work (vidioc-reqbufs.rst): it then needs every
+    /// one of them, and none can be lent. Granting fewer (out of memory)
+    /// leaves less to lend, not less to keep; fewer than this, and the
+    /// video goes to software ([`CaptureCount::enough`]).
+    pub(crate) fn keep(&self) -> u32 {
+        let keep = self.needs.keep();
+        if self.granted > self.asked {
+            keep.max(self.granted)
+        } else {
+            keep
+        }
+    }
+
+    /// This count, when `REQBUFS` granted at least what the decoder keeps;
+    /// else the error that sends the video to software at once. A driver
+    /// grants fewer than asked when it runs out of memory
+    /// (vidioc-reqbufs.rst), and with fewer than it keeps, the decoder
+    /// would starve until found stalled 5 s on. The message says so, and
+    /// the player reads "memory" as the hardware decoder being busy
+    /// (`slow_decode_notice`), as when `REQBUFS` fails for memory outright.
+    pub(crate) fn enough(self) -> Result<CaptureCount, crate::Error> {
+        let keep = self.keep();
+        if self.granted >= keep {
+            return Ok(self);
+        }
+        Err(crate::Error::Unsupported(format!(
+            "V4L2 REQBUFS capture granted {} of the {} buffers asked for, fewer than the {keep} \
+             the decoder keeps: the driver is out of memory",
+            self.granted, self.asked
+        )))
+    }
+
+    /// The most buffers [`lendable`] lets out at once.
+    pub(crate) fn lent_at_most(&self) -> u32 {
+        if self.lend == 0 {
+            0
+        } else {
+            self.granted.saturating_sub(self.keep())
+        }
+    }
+}
+
+impl std::fmt::Display for CaptureCount {
+    /// "asked for 13 (driver minimum 1, stream DPB 5 with 3 reordered,
+    /// player holds 7): the decoder keeps 6, up to 7 lent".
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "asked for {} ({}, ", self.asked, self.needs)?;
+        if self.lend > 0 {
+            write!(f, "player holds {})", self.lend)?;
+        } else {
+            write!(f, "frames copied)")?;
+        }
+        if self.granted > self.asked {
+            write!(f, ", raised by the driver to {}", self.granted)?;
+        } else if self.granted < self.asked {
+            write!(f, ", given {}", self.granted)?;
+        }
+        write!(f, ": the decoder keeps {}", self.keep())?;
+        match self.lent_at_most() {
+            0 if self.lend > 0 => write!(f, ", none lent"),
+            0 => Ok(()),
+            n => write!(f, ", up to {n} lent"),
+        }
+    }
+}
+
+/// The error for a decoder that produced no picture for `seconds` while it
+/// had bitstream to decode: what was waiting and where its buffers were,
+/// so a stall can be explained from the log. `capture` is (buffers, lent,
+/// held, kept); `None` before CAPTURE was set up. Kept clear of the words
+/// the player reads as "out of memory or busy" (`slow_decode_notice`).
+pub(crate) fn stalled(
+    seconds: u64,
+    pending: usize,
+    bitstream: (usize, usize),
+    capture: Option<(usize, usize, bool, u32)>,
+) -> crate::Error {
+    let (queued, buffers) = bitstream;
+    let mut message = format!(
+        "V4L2 decoder stalled: no picture for {seconds} s with {pending} packets pending, \
+         {queued} of {buffers} bitstream buffers queued"
+    );
+    match capture {
+        Some((buffers, lent, held, keep)) => {
+            let queued = buffers.saturating_sub(lent + held as usize);
+            message += &format!(
+                "; capture buffers: {queued} of {buffers} queued to the driver, {lent} lent, {} \
+                 held, {keep} kept for the decoder",
+                held as u32
+            );
+        }
+        None => message += "; capture not set up",
+    }
+    crate::Error::Unsupported(message)
 }
 
 /// Whether pictures of a stream may be lent at all. 8-bit HDR ones never
@@ -910,17 +1139,20 @@ mod linux {
         set: u64,
         /// Buffers lent out with frames, queued again when they come back.
         lent: Vec<bool>,
-        /// Buffers the driver needs queued to keep decoding.
-        min: u32,
+        /// Buffers the decoder keeps, never lent ([`CaptureCount::keep`]).
+        keep: u32,
     }
 
     impl Capture {
-        /// Whether a buffer just dequeued may be lent: the driver keeps at
-        /// least its minimum queued without it.
+        /// Whether a buffer just dequeued may be lent: the decoder keeps at
+        /// least what it needs without it.
         fn can_lend(&self) -> bool {
-            let lent = self.lent.iter().filter(|&&l| l).count();
             !self.exports.is_empty()
-                && lendable(self.bufs.len(), lent, self.held.is_some(), self.min)
+                && lendable(self.bufs.len(), self.lent(), self.held.is_some(), self.keep)
+        }
+
+        fn lent(&self) -> usize {
+            self.lent.iter().filter(|&&l| l).count()
         }
     }
 
@@ -962,6 +1194,9 @@ mod linux {
         /// IRAP pictures with parameter sets unlike the hvcC's were seen
         /// (logged).
         in_band_parameter_sets: bool,
+        /// The largest DPB of the SPSs sent to the device, in the extradata
+        /// and in the packets ([`larger_dpb`]), which sizes CAPTURE.
+        dpb: Option<crate::nal::Dpb>,
         /// CAPTURE buffers flagged as broken since the last good picture.
         broken_in_a_row: u32,
         /// CAPTURE buffers flagged as broken since opening.
@@ -1216,6 +1451,13 @@ mod linux {
                 ));
             }
             let stream_size = (p.width as u32, p.height as u32);
+            let extradata = if p.extradata.is_null() || p.extradata_size <= 0 {
+                &[][..]
+            } else {
+                // SAFETY: the stream's extradata holds extradata_size bytes.
+                unsafe { std::slice::from_raw_parts(p.extradata, p.extradata_size as usize) }
+            };
+            let dpb = crate::nal::extradata_dpb(codec == Codec::Hevc, extradata);
             let (device, fd) = find_device(codec)?;
             let mut dec = V4l2Decoder {
                 out_bufs: Vec::new(),
@@ -1229,6 +1471,7 @@ mod linux {
                 bsf: std::ptr::null_mut(),
                 hvcc_parameter_sets: Vec::new(),
                 in_band_parameter_sets: false,
+                dpb,
                 broken_in_a_row: 0,
                 flagged: 0,
                 out_free: Vec::new(),
@@ -1565,6 +1808,31 @@ mod linux {
                         }
                     }
                 }
+                // The SPS the device is about to read, in band or the
+                // extradata's copy, for sizing CAPTURE at its source change.
+                // SAFETY: the filter's packet holds size bytes at data.
+                let sent = unsafe {
+                    let p = &*out.as_ptr();
+                    crate::nal::packet_dpb(
+                        self.codec == Codec::Hevc,
+                        std::slice::from_raw_parts(p.data, size as usize),
+                    )
+                };
+                // A smaller one changes nothing, and isn't logged: SPSs
+                // come again with every IRAP picture.
+                if let Some(dpb) = larger_dpb(self.dpb, sent) {
+                    if let Some(was) = self.dpb {
+                        log::info!(
+                            "V4L2: an SPS in the stream declares a DPB of {} with {} reordered, \
+                             the largest yet (was {} with {})",
+                            dpb.pictures,
+                            dpb.reorder,
+                            was.pictures,
+                            was.reorder
+                        );
+                    }
+                    self.dpb = Some(dpb);
+                }
                 let pts = if pts == ff::AV_NOPTS_VALUE { dts } else { pts };
                 if self.arm_floor {
                     self.arm_floor = false;
@@ -1644,6 +1912,29 @@ mod linux {
             }
         }
 
+        /// The visible size of CAPTURE format `f` (COMPOSE), else its size.
+        fn visible(&self, f: &Format) -> (u32, u32) {
+            let mut s = Selection {
+                type_: BUF_TYPE_CAPTURE,
+                target: SEL_TGT_COMPOSE,
+                ..Default::default()
+            };
+            match ioctl(&self.fd, VIDIOC_G_SELECTION, &mut s) {
+                Ok(()) if s.width > 0 && s.height > 0 => (s.width, s.height),
+                _ => (f.width(), f.height()),
+            }
+        }
+
+        /// What the decoder keeps of CAPTURE buffers for format `f`.
+        fn capture_needs(&self, f: &Format) -> CaptureNeeds {
+            CaptureNeeds {
+                control: self.min_capture_buffers(),
+                dpb: self.dpb,
+                references: self.pixelformat == Q10C,
+                size: self.visible(f),
+            }
+        }
+
         /// The CAPTURE layout for format `f` (visible size from COMPOSE).
         fn layout(&self, f: &Format) -> Result<Layout> {
             if f.pixelformat() != self.pixelformat || f.num_planes() != 1 {
@@ -1653,15 +1944,7 @@ mod linux {
                     f.num_planes()
                 )));
             }
-            let mut s = Selection {
-                type_: BUF_TYPE_CAPTURE,
-                target: SEL_TGT_COMPOSE,
-                ..Default::default()
-            };
-            let visible = match ioctl(&self.fd, VIDIOC_G_SELECTION, &mut s) {
-                Ok(()) if s.width > 0 && s.height > 0 => (s.width, s.height),
-                _ => (f.width(), f.height()),
-            };
+            let visible = self.visible(f);
             let (stride, size) = (f.bytesperline(0) as usize, f.sizeimage(0) as usize);
             let layout = if self.pixelformat == Q10C {
                 Q10cLayout::new((f.width(), f.height()), stride, size, visible).map(Layout::Q10c)
@@ -1692,7 +1975,7 @@ mod linux {
                 f = self.g_fmt_capture()?;
             }
             let layout = self.layout(&f)?;
-            let min = self.min_capture_buffers();
+            let needs = self.capture_needs(&f);
             let share = self.share
                 && crate::decode::shared_frames()
                 && shareable(
@@ -1702,16 +1985,47 @@ mod linux {
                         ff::AVCOL_TRC_SMPTE2084 | ff::AVCOL_TRC_ARIB_STD_B67
                     ),
                 );
-            let lent = if share { MAX_LENT } else { 0 };
-            let mut r = RequestBuffers {
-                count: CAPTURE_BUFFERS.max(min + lent),
-                type_: BUF_TYPE_CAPTURE_MPLANE,
-                memory: MEMORY_MMAP,
-                ..Default::default()
+            let lend = if share { MAX_LENT } else { 0 };
+            let mut asked = CaptureCount::ask(&needs, lend);
+            let granted = loop {
+                let mut r = RequestBuffers {
+                    count: asked,
+                    type_: BUF_TYPE_CAPTURE_MPLANE,
+                    memory: MEMORY_MMAP,
+                    ..Default::default()
+                };
+                match ioctl(&self.fd, VIDIOC_REQBUFS, &mut r) {
+                    Ok(()) if r.count > 0 => break r.count,
+                    Ok(()) => {
+                        return Err(Error::Unsupported(
+                            "V4L2 REQBUFS capture granted 0 buffers".into(),
+                        ));
+                    }
+                    Err(e) if e.raw_os_error() == Some(libc::ENOMEM) => {
+                        let Some(fewer) = CaptureCount::fewer(asked, needs.keep()) else {
+                            return Err(err("REQBUFS capture", e));
+                        };
+                        log::warn!(
+                            "V4L2 REQBUFS capture x{asked}: {e}; asking for {fewer}, \
+                             fewer pictures lent"
+                        );
+                        asked = fewer;
+                    }
+                    Err(e) => return Err(err("REQBUFS capture", e)),
+                }
             };
-            ioctl(&self.fd, VIDIOC_REQBUFS, &mut r).map_err(|e| err("REQBUFS capture", e))?;
+            // Too few fails here: the buffers go with the device session,
+            // which `Decoder::fall_back` closes before opening the next
+            // decoder.
+            let count = CaptureCount {
+                needs,
+                lend,
+                asked,
+                granted,
+            }
+            .enough()?;
             let mut bufs = Vec::new();
-            for i in 0..r.count {
+            for i in 0..granted {
                 let mut planes = [Plane::default(); 1];
                 let mut b = Buffer::new(BUF_TYPE_CAPTURE_MPLANE, i, &mut planes);
                 ioctl(&self.fd, VIDIOC_QUERYBUF, &mut b).map_err(|e| err("QUERYBUF capture", e))?;
@@ -1726,13 +2040,14 @@ mod linux {
                 );
             }
             let exports = if share {
-                self.export_buffers(r.count).unwrap_or_else(|e| {
+                self.export_buffers(granted).unwrap_or_else(|e| {
                     log::warn!("V4L2: capture buffers not shared, pictures are copied: {e}");
                     Vec::new()
                 })
             } else {
                 Vec::new()
             };
+            let shared = !exports.is_empty();
             self.cap = Some(Capture {
                 lent: vec![false; bufs.len()],
                 bufs,
@@ -1740,27 +2055,38 @@ mod linux {
                 layout,
                 held: None,
                 set: NEXT_SHARED.fetch_add(1, Ordering::Relaxed),
-                min,
+                keep: count.keep(),
                 exports,
             });
-            for i in 0..r.count {
+            for i in 0..granted {
                 self.queue_capture(i)?;
             }
             let mut t = BUF_TYPE_CAPTURE_MPLANE as i32;
             ioctl(&self.fd, VIDIOC_STREAMON, &mut t).map_err(|e| err("STREAMON capture", e))?;
             let visible = layout.visible();
-            let shared = self.cap.as_ref().is_some_and(|c| !c.exports.is_empty());
-            log::info!(
-                "V4L2 capture {} {}x{} (visible {}x{}, stride {}) x{} buffers of {} bytes \
-                 (driver minimum {min}){}",
+            let count = CaptureCount {
+                lend: if shared { lend } else { 0 },
+                ..count
+            };
+            // Fewer buffers than asked, or more the driver keeps: lending
+            // and memory differ from what was planned.
+            let level = if granted == asked {
+                log::Level::Info
+            } else {
+                log::Level::Warn
+            };
+            log::log!(
+                level,
+                "V4L2 capture {} {}x{} (visible {}x{}, stride {}) x{granted} buffers of {} bytes \
+                 ({} in all){}; {count}",
                 fourcc_str(f.pixelformat()),
                 f.width(),
                 f.height(),
                 visible.0,
                 visible.1,
                 layout.stride(),
-                r.count,
                 f.sizeimage(0),
+                u64::from(granted) * u64::from(f.sizeimage(0)),
                 if shared { ", shared with the GPU" } else { "" }
             );
             Ok(())
@@ -1931,12 +2257,15 @@ mod linux {
         }
 
         /// The LAST buffer of a resolution change: reuse the buffers when
-        /// they fit (no admission check), else reallocate.
+        /// they fit (no admission check), else reallocate. Either way what
+        /// the decoder keeps is counted again, from the new format and the
+        /// stream's SPS as it is now.
         fn change_resolution(&mut self) -> Result<()> {
             self.drc_pending = false;
             let f = self.g_fmt_capture()?;
-            let min = self.min_capture_buffers();
-            let (allocated_for, count, smallest) = self
+            let needs = self.capture_needs(&f);
+            let keep = needs.keep();
+            let (allocated_for, count, smallest, kept, shared) = self
                 .cap
                 .as_ref()
                 .map(|c| {
@@ -1944,27 +2273,41 @@ mod linux {
                         c.allocated_for,
                         c.bufs.len() as u32,
                         c.bufs.iter().map(|m| m.len).min().unwrap_or(0),
+                        c.keep,
+                        !c.exports.is_empty(),
                     )
                 })
-                .unwrap_or(((0, 0), 0, 0));
+                .unwrap_or(((0, 0), 0, 0, 0, false));
             let need = f.sizeimage(0) as usize;
             let new_format = (f.width(), f.height());
             if f.pixelformat() == self.pixelformat
-                && can_reuse_capture(allocated_for, count, smallest, new_format, min, need)
+                && can_reuse_capture(allocated_for, count, smallest, new_format, keep, need)
             {
                 let layout = self.layout(&f)?;
                 if layout.end() <= smallest {
+                    // The same coded size: what the driver raised the count
+                    // to for it still holds.
+                    let keep = keep.max(kept);
                     let (w, h) = layout.visible();
-                    log::info!("V4L2 stream now {w}x{h}: reusing {count} capture buffers");
+                    log::info!(
+                        "V4L2 stream now {w}x{h}: reusing {count} capture buffers ({needs}): \
+                         the decoder keeps {keep}, up to {} lent",
+                        if shared {
+                            count.saturating_sub(keep)
+                        } else {
+                            0
+                        }
+                    );
                     if let Some(c) = self.cap.as_mut() {
                         c.layout = layout;
+                        c.keep = keep;
                     }
                     return self.resume();
                 }
             }
             log::info!(
                 "V4L2 stream now {}x{} {}: reallocating capture ({count} x {smallest} bytes, \
-                 need {min} x {need})",
+                 need {keep} x {need})",
                 f.width(),
                 f.height(),
                 fourcc_str(f.pixelformat())
@@ -2172,7 +2515,17 @@ mod linux {
                         self.finished = true;
                         return Ok(Some(false));
                     }
-                    return Err(Error::Unsupported("V4L2 decoder stalled".into()));
+                    return Err(stalled(
+                        STALL.as_secs(),
+                        self.pending.len(),
+                        (
+                            self.out_bufs.len() - self.out_free.len(),
+                            self.out_bufs.len(),
+                        ),
+                        self.cap
+                            .as_ref()
+                            .map(|c| (c.bufs.len(), c.lent(), c.held.is_some(), c.keep)),
+                    ));
                 }
                 self.wait(50);
             }
@@ -2542,23 +2895,286 @@ mod tests {
         assert!(!can_reuse_capture(k8, 8, nv12_8k, k8, 7, 0));
     }
 
+    /// How many of `buffers` [`lendable`] lets out at once.
+    fn lent_at_most(buffers: u32, keep: u32) -> u32 {
+        (0..=buffers as usize)
+            .take_while(|&lent| lendable(buffers as usize, lent, false, keep))
+            .count() as u32
+    }
+
+    /// The 8K 10-bit HEVC stream that froze on the Frame: Main 10 as Q10C,
+    /// a DPB of 5 with 3 reordered, the driver's minimum 1.
+    fn ten_bit_8k(dpb: Option<crate::nal::Dpb>) -> CaptureNeeds {
+        CaptureNeeds {
+            control: 1,
+            dpb,
+            references: true,
+            size: (8192, 4096),
+        }
+    }
+
+    const DPB_5: crate::nal::Dpb = crate::nal::Dpb {
+        pictures: 5,
+        reorder: 3,
+    };
+
+    /// Asking with `needs` and lending `lend`, when the driver gives back
+    /// `granted` (`None`: as asked).
+    fn counted(needs: CaptureNeeds, lend: u32, granted: Option<u32>) -> CaptureCount {
+        let asked = CaptureCount::ask(&needs, lend);
+        CaptureCount {
+            needs,
+            lend,
+            asked,
+            granted: granted.unwrap_or(asked),
+        }
+    }
+
     #[test]
-    fn buffers_are_lent_only_while_the_driver_keeps_its_minimum() {
-        // Minimum 4 plus MAX_LENT: that many go out, the rest stays.
+    fn ten_bit_8k_keeps_its_dpb_and_lends_what_the_player_holds() {
+        let c = counted(ten_bit_8k(Some(DPB_5)), MAX_LENT, None);
+        // The DPB, plus the picture output and not yet dequeued: 6. Plus 7
+        // lent: 13 buffers of 67,928,064 bytes, 883 MB (8 before: 543 MB).
+        assert_eq!((c.needs.keep(), c.asked, c.keep()), (6, 13, 6));
+        assert_eq!(c.lent_at_most(), MAX_LENT);
+        assert_eq!(lent_at_most(c.granted, c.keep()), MAX_LENT);
+        assert_eq!(u64::from(c.granted) * 67_928_064, 883_064_832);
+        assert_eq!(
+            c.to_string(),
+            "asked for 13 (driver minimum 1, largest stream DPB 5 with 3 reordered, player \
+             holds 7): the decoder keeps 6, up to 7 lent"
+        );
+        // What froze: 8 buffers, 7 of them out, 1 left for a DPB of 5.
+        assert!(lendable(8, 6, false, 1));
+        assert!(!lendable(8, 2, false, 6));
+        // Copied frames: the decoder has all its buffers back at once, and
+        // gets the usual 8.
+        let copied = counted(ten_bit_8k(Some(DPB_5)), 0, None);
+        assert_eq!((copied.asked, copied.lent_at_most()), (8, 0));
+        assert_eq!(
+            copied.to_string(),
+            "asked for 8 (driver minimum 1, largest stream DPB 5 with 3 reordered, frames \
+             copied): the decoder keeps 6"
+        );
+    }
+
+    #[test]
+    fn a_stream_without_b_frames_keeps_less() {
+        // One reference and the picture being decoded, nothing reordered.
+        let dpb = crate::nal::Dpb {
+            pictures: 2,
+            reorder: 0,
+        };
+        let c = counted(ten_bit_8k(Some(dpb)), MAX_LENT, None);
+        assert_eq!((c.keep(), c.asked, c.lent_at_most()), (3, 10, 7));
+        // A driver that asks for more than the stream wins.
+        let needs = CaptureNeeds {
+            control: 4,
+            ..ten_bit_8k(Some(dpb))
+        };
+        assert_eq!(needs.keep(), 4);
+    }
+
+    #[test]
+    fn eight_bit_keeps_the_count_it_plays_on() {
+        // NV12: the stream's DPB is logged, not counted: 8 buffers, 7 lent,
+        // as before.
+        let nv12 = CaptureNeeds {
+            references: false,
+            ..ten_bit_8k(Some(DPB_5))
+        };
+        let c = counted(nv12, MAX_LENT, None);
+        assert_eq!((c.keep(), c.asked, c.lent_at_most()), (1, 8, 7));
+        assert_eq!(
+            c.to_string(),
+            "asked for 8 (driver minimum 1, largest stream DPB 5 with 3 reordered, not counted \
+             in NV12, player holds 7): the decoder keeps 1, up to 7 lent"
+        );
+        // A driver minimum above 1 still adds MAX_LENT, as before.
+        let c = counted(CaptureNeeds { control: 4, ..nv12 }, MAX_LENT, None);
+        assert_eq!((c.keep(), c.asked), (4, 11));
+        let unread = CaptureNeeds { dpb: None, ..nv12 };
+        assert_eq!(
+            unread.to_string(),
+            "driver minimum 1, stream DPB unread, not counted in NV12"
+        );
+    }
+
+    #[test]
+    fn an_unread_sps_counts_the_most_hevc_allows() {
+        // 6 pictures at 8K, 16 at 4K: what a conforming stream may declare.
+        let c = counted(ten_bit_8k(None), MAX_LENT, None);
+        assert_eq!((c.keep(), c.asked), (7, 14));
+        assert_eq!(
+            c.needs.to_string(),
+            "driver minimum 1, stream DPB unread, the most HEVC allows at 8192x4096: 6"
+        );
+        let uhd = CaptureNeeds {
+            size: (3840, 2160),
+            ..ten_bit_8k(None)
+        };
+        assert_eq!(uhd.keep(), 17);
+    }
+
+    #[test]
+    fn a_driver_that_raises_the_count_keeps_them_all() {
+        // It requires 15 to work: none of them can be lent.
+        let c = counted(ten_bit_8k(Some(DPB_5)), MAX_LENT, Some(15));
+        assert_eq!((c.keep(), c.lent_at_most()), (15, 0));
+        assert_eq!(lent_at_most(c.granted, c.keep()), 0);
+        assert_eq!(
+            c.to_string(),
+            "asked for 13 (driver minimum 1, largest stream DPB 5 with 3 reordered, player \
+             holds 7), raised by the driver to 15: the decoder keeps 15, none lent"
+        );
+        assert!(c.enough().is_ok());
+    }
+
+    #[test]
+    fn a_driver_that_grants_fewer_lends_fewer_down_to_what_the_decoder_keeps() {
+        // At least what the decoder keeps: fewer lent.
+        let c = counted(ten_bit_8k(Some(DPB_5)), MAX_LENT, Some(10));
+        assert_eq!((c.keep(), c.lent_at_most()), (6, 4));
+        assert_eq!(lent_at_most(c.granted, c.keep()), 4);
+        assert!(
+            c.to_string()
+                .ends_with(", given 10: the decoder keeps 6, up to 4 lent")
+        );
+        assert_eq!(c.enough().ok(), Some(c));
+        // Just what it keeps: every picture is copied.
+        let c = counted(ten_bit_8k(Some(DPB_5)), MAX_LENT, Some(6));
+        assert_eq!(c.lent_at_most(), 0);
+        assert!(!lendable(6, 0, false, c.keep()));
+        assert!(c.to_string().ends_with(", none lent"));
+        assert!(c.enough().is_ok());
+        // Fewer than it keeps: the decoder would starve, so setup fails,
+        // and the video goes to software at once.
+        let e = counted(ten_bit_8k(Some(DPB_5)), MAX_LENT, Some(5))
+            .enough()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "unsupported: V4L2 REQBUFS capture granted 5 of the 13 buffers asked for, fewer than \
+             the 6 the decoder keeps: the driver is out of memory"
+        );
+        // The player reads "memory" as the hardware decoder being busy
+        // (`slow_decode_notice`), as for a REQBUFS that fails for it.
+        assert!(e.contains("memory"));
+        // Copied frames keep as many, and fail the same way.
+        let copied = counted(ten_bit_8k(Some(DPB_5)), 0, Some(5));
+        assert!(copied.enough().is_err());
+        // NV12 keeps the driver's minimum: any buffer will do.
+        let nv12 = CaptureNeeds {
+            references: false,
+            ..ten_bit_8k(Some(DPB_5))
+        };
+        assert!(counted(nv12, MAX_LENT, Some(1)).enough().is_ok());
+    }
+
+    #[test]
+    fn out_of_memory_asks_for_fewer_down_to_what_the_decoder_keeps() {
+        let keep = ten_bit_8k(Some(DPB_5)).keep();
+        let asks: Vec<u32> =
+            std::iter::successors(Some(13), |&a| CaptureCount::fewer(a, keep)).collect();
+        assert_eq!(asks, [13, 9, 7, 6]);
+        assert_eq!(CaptureCount::fewer(1, 1), None);
+        // A retry granted fewer than it keeps fails as the first ask does.
+        let retry = |asked, granted| CaptureCount {
+            asked,
+            granted,
+            ..counted(ten_bit_8k(Some(DPB_5)), MAX_LENT, None)
+        };
+        assert!(retry(9, 9).enough().is_ok());
+        assert!(retry(6, 6).enough().is_ok());
+        assert!(
+            retry(6, 5)
+                .enough()
+                .unwrap_err()
+                .to_string()
+                .contains("granted 5 of the 6 buffers asked for, fewer than the 6")
+        );
+    }
+
+    /// The DPB the decoder sizes CAPTURE from after sending SPSs declaring
+    /// `sent` in turn, `None` for a packet with no SPS read.
+    fn seen(sent: &[Option<crate::nal::Dpb>]) -> Option<crate::nal::Dpb> {
+        sent.iter()
+            .fold(None, |seen, &sps| larger_dpb(seen, sps).or(seen))
+    }
+
+    #[test]
+    fn the_largest_dpb_seen_counts_not_the_latest() {
+        let smaller = crate::nal::Dpb {
+            pictures: 3,
+            reorder: 1,
+        };
+        // The larger first (the extradata's, say), then a smaller one in
+        // band: the larger still counts, and the pool is sized for it.
+        let dpb = seen(&[Some(DPB_5), None, Some(smaller), Some(smaller)]);
+        assert_eq!(dpb, Some(DPB_5));
+        let c = counted(ten_bit_8k(dpb), MAX_LENT, None);
+        assert_eq!((c.keep(), c.asked), (6, 13));
+        // A smaller or the same one changes nothing, so nothing is logged.
+        assert_eq!(larger_dpb(Some(DPB_5), Some(smaller)), None);
+        assert_eq!(larger_dpb(Some(DPB_5), Some(DPB_5)), None);
+        assert_eq!(larger_dpb(Some(DPB_5), None), None);
+        // A larger one, whenever it comes, does.
+        let six = crate::nal::Dpb {
+            pictures: 6,
+            reorder: 2,
+        };
+        assert_eq!(larger_dpb(Some(DPB_5), Some(six)), Some(six));
+        assert_eq!(seen(&[Some(smaller), Some(six), Some(DPB_5)]), Some(six));
+        assert_eq!(larger_dpb(None, Some(smaller)), Some(smaller));
+        // Of the same DPB, the most reordered: the figures logged are one
+        // SPS's own.
+        let fewer_reordered = crate::nal::Dpb {
+            pictures: 5,
+            reorder: 1,
+        };
+        assert_eq!(seen(&[Some(fewer_reordered), Some(DPB_5)]), Some(DPB_5));
+        assert_eq!(seen(&[Some(DPB_5), Some(fewer_reordered)]), Some(DPB_5));
+    }
+
+    #[test]
+    fn buffers_are_lent_only_while_the_decoder_keeps_its_need() {
+        // Keeping 4 with MAX_LENT more: that many go out, the rest stays.
         let buffers = (4 + MAX_LENT) as usize;
-        let lent_at_most = (0..=buffers)
-            .take_while(|&lent| lendable(buffers, lent, false, 4))
-            .count();
-        assert_eq!(lent_at_most, MAX_LENT as usize);
+        assert_eq!(lent_at_most(buffers as u32, 4), MAX_LENT);
         // A buffer held after LAST counts as out.
         assert!(lendable(buffers, 6, false, 4));
         assert!(!lendable(buffers, 6, true, 4));
-        // With the minimum alone (frames not shared, or too few buffers),
-        // nothing.
+        // With what the decoder keeps alone (frames not shared, or too few
+        // buffers), nothing.
         assert!(!lendable(4, 0, false, 4));
         assert!(!lendable(0, 0, false, 1));
-        // Enough to cover what the player and renderer hold at once.
-        assert!(MAX_LENT as usize > SHARED_QUEUE + 2);
+        // Enough to cover what the player and renderer hold at once: the
+        // queue, the frame waiting for room in it, and the renderer's two
+        // frame slots (fp-render's SLOTS), one of them the picture on
+        // screen.
+        assert!(MAX_LENT as usize > SHARED_QUEUE + 1 + 2);
+    }
+
+    #[test]
+    fn a_stall_says_where_the_buffers_were() {
+        let e = stalled(5, 4, (6, 6), Some((13, 7, false, 6))).to_string();
+        assert_eq!(
+            e,
+            "unsupported: V4L2 decoder stalled: no picture for 5 s with 4 packets pending, 6 of \
+             6 bitstream buffers queued; capture buffers: 6 of 13 queued to the driver, 7 lent, \
+             0 held, 6 kept for the decoder"
+        );
+        // The player tells "busy" and "too big" from these words; a stall
+        // is neither.
+        for word in ["memory", "busy", "no free", "too big"] {
+            assert!(!e.to_ascii_lowercase().contains(word), "{word}");
+        }
+        assert!(
+            stalled(5, 0, (0, 6), None)
+                .to_string()
+                .ends_with("; capture not set up")
+        );
     }
 
     #[test]

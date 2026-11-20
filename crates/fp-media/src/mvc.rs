@@ -34,7 +34,7 @@
 
 pub(crate) mod bits;
 mod rewrite;
-mod syntax;
+pub(crate) mod syntax;
 
 use crate::decode::{Decoder, Frame, Packet, Skip};
 use crate::input::Input;

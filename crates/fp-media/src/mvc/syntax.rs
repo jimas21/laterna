@@ -95,6 +95,16 @@ impl Sps {
             .map_or_else(|| self.max_dpb_frames(), |r| r.max_num_reorder_frames)
     }
 
+    /// The frames the DPB holds (max_dec_frame_buffering): as the VUI says,
+    /// else its level's most for its picture size, as E.2.1 infers it for
+    /// all but intra-only profiles (which this over-counts).
+    pub(crate) fn dec_frame_buffering(&self) -> u32 {
+        self.vui
+            .as_ref()
+            .and_then(|v| v.restriction)
+            .map_or_else(|| self.max_dpb_frames(), |r| r.max_dec_frame_buffering)
+    }
+
     /// Whether a view coded with `other` decodes its samples the same way:
     /// everything but the numbering of frames and pictures.
     pub(crate) fn decodes_like(&self, other: &Sps) -> Result<(), Bad> {

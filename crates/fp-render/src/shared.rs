@@ -33,8 +33,9 @@ const SAMPLED: vk::ImageLayout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
 /// Frame's 90 Hz.
 ///
 /// While a video plays, the decoder cycles through a handful of buffers (8
-/// on the Frame), so each one comes back after a few video frames: a third
-/// of a second at 24 fps, still under two seconds at a quarter of normal
+/// on the Frame for 8-bit video, 13 for 8K 10-bit, whose reference pictures
+/// stay in them), so each one comes back after a few video frames: about
+/// half a second at 24 fps, still under three seconds at a quarter of normal
 /// speed. Five seconds also outlasts a seek or a short stall. A buffer that
 /// stays away longer most likely belongs to a decoder that frames no longer
 /// come from (the next video's are copied, or decoded in software), and a
