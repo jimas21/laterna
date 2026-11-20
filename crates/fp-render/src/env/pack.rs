@@ -55,6 +55,10 @@ pub const BASIS: usize = 8;
 pub const FORMAT: u32 = 3;
 /// The first format with a mesh and textures for each seat.
 pub const PER_SEAT_FORMAT: u32 = 3;
+/// What a set without a material texture is given: R roughness 0.85, G
+/// specular mask 0.25, B and A reserved. Weak and rough on purpose, so a pack
+/// made before the material map existed looks no worse for the highlight.
+pub const DEFAULT_MATERIAL: [u8; 4] = [217, 64, 0, 255];
 /// The most bytes one set of a format 2 or 3 pack's texture files may add up
 /// to (a format 3 pack has a set for each seat, so the whole pack may be more).
 pub const MAX_TEXTURE_BYTES: u64 = 32 << 20;
@@ -122,6 +126,15 @@ pub struct TextureSpec {
     /// The sizes of the texture files added up. Format 2 only.
     #[serde(default)]
     pub bytes: Option<u64>,
+    /// The set's material texture, a KTX2 file (format 3 only): R roughness,
+    /// G specular mask, B and A reserved, stored as they are (UNORM, not
+    /// sRGB). Left out, the set gets [`DEFAULT_MATERIAL`].
+    #[serde(default)]
+    pub material: Option<String>,
+    /// Side of the material texture, a power of two up to `size`; the basis
+    /// textures' side when left out.
+    #[serde(default)]
+    pub material_size: Option<u32>,
 }
 
 /// A mesh with its textures: what one seat of a format 3 pack draws.
@@ -463,7 +476,20 @@ impl<'a> Set<'a> {
         if t.basis.len() != BASIS {
             return bad(format!("{} basis textures ({BASIS} wanted)", t.basis.len()));
         }
-        for name in [&t.house, &t.dark].into_iter().chain(&t.basis) {
+        match (&t.material, t.material_size) {
+            (None, Some(_)) => return bad("textures.material_size without textures.material"),
+            (Some(_), _) if self.format < PER_SEAT_FORMAT => {
+                return bad(format!("textures.material needs format {PER_SEAT_FORMAT}"));
+            }
+            (Some(_), Some(n)) if n == 0 || n > t.size || !n.is_power_of_two() => {
+                return bad(format!(
+                    "material size {n} (a power of two up to the texture size {} wanted)",
+                    t.size
+                ));
+            }
+            (None, None) | (Some(_), _) => {}
+        }
+        for name in self.texture_files() {
             if !plain_name(name) {
                 return bad(format!("texture file name {name:?}"));
             }
@@ -484,9 +510,21 @@ impl<'a> Set<'a> {
         }
     }
 
+    /// Side of the material texture, when the set has one.
+    fn material_size(&self) -> u32 {
+        self.textures
+            .material_size
+            .unwrap_or_else(|| self.basis_size())
+    }
+
+    /// Every texture file: house, dark, the basis textures, then the
+    /// material texture if there is one.
     fn texture_files(&self) -> impl Iterator<Item = &'a String> + use<'a> {
         let t = self.textures;
-        [&t.house, &t.dark].into_iter().chain(&t.basis)
+        [&t.house, &t.dark]
+            .into_iter()
+            .chain(&t.basis)
+            .chain(&t.material)
     }
 }
 
@@ -557,6 +595,10 @@ pub struct Baked {
     /// The light of each patch of the screen, [`BASIS`] textures, as stored:
     /// square-root coded.
     pub basis: TextureArray,
+    /// The material texture (one layer: R roughness, G specular mask, B and A
+    /// reserved, as stored), when the set has one; the renderer uses
+    /// [`DEFAULT_MATERIAL`] otherwise.
+    pub material: Option<TextureArray>,
     pub basis_gain: f32,
     /// The seat whose set this is, for a format 3 pack (the viewer sits in
     /// that seat, or one that falls back to it); `None` for a pack with one
@@ -578,9 +620,14 @@ impl fmt::Debug for Baked {
 impl Baked {
     /// Whether either texture set is ASTC blocks rather than RGBA8.
     pub fn is_astc(&self) -> bool {
-        [&self.colors, &self.basis]
-            .iter()
-            .any(|t| matches!(t.encoding, Encoding::Astc { .. }))
+        [
+            Some(&self.colors),
+            Some(&self.basis),
+            self.material.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|t| matches!(t.encoding, Encoding::Astc { .. }))
     }
 
     /// The same pack with its ASTC textures decoded to RGBA8 (on all the
@@ -590,7 +637,14 @@ impl Baked {
         if !self.is_astc() {
             return Ok(None);
         }
-        let sets = [&self.colors, &self.basis];
+        let sets: Vec<&TextureArray> = [
+            Some(&self.colors),
+            Some(&self.basis),
+            self.material.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let jobs: Vec<(usize, usize)> = sets
             .iter()
             .enumerate()
@@ -630,11 +684,13 @@ impl Baked {
         };
         let colors = array(&self.colors)?;
         let basis = array(&self.basis)?;
+        let material = self.material.as_ref().map(&mut array).transpose()?;
         Ok(Some(Baked {
             vertices: self.vertices.clone(),
             indices: self.indices.clone(),
             colors,
             basis,
+            material,
             basis_gain: self.basis_gain,
             seat: self.seat,
         }))
@@ -926,8 +982,9 @@ pub fn load_seat_with(
     let bytes = read_capped(&mesh_path, set.mesh_len(), "mesh")?;
     let (vertices, indices) = parse_mesh(&bytes, set.mesh)?;
     drop(bytes);
-    let (colors, basis, path) = if manifest.format == 1 {
-        load_png_textures(dir, set)?
+    let (colors, basis, material, path) = if manifest.format == 1 {
+        let (colors, basis, path) = load_png_textures(dir, set)?;
+        (colors, basis, None, path)
     } else {
         load_ktx2_textures(dir, set, keep_astc)?
     };
@@ -936,6 +993,7 @@ pub fn load_seat_with(
         indices,
         colors,
         basis,
+        material,
         basis_gain: set.basis_gain,
         seat: manifest.resolve(seat),
     };
@@ -1026,7 +1084,7 @@ fn load_ktx2_textures(
     dir: &Path,
     set: Set<'_>,
     keep_astc: bool,
-) -> Result<(TextureArray, TextureArray, TexturePath), PackError> {
+) -> Result<LoadedTextures, PackError> {
     let t = set.textures;
     let (size, basis_size) = (t.size, set.basis_size());
     let mut colors = Vec::new();
@@ -1037,7 +1095,17 @@ fn load_ktx2_textures(
     for name in &t.basis {
         basis.push(read_texture(dir, name, basis_size)?);
     }
-    let total: u64 = colors.iter().chain(&basis).map(|x| x.file_len).sum();
+    let material = t
+        .material
+        .as_ref()
+        .map(|name| read_texture(dir, name, set.material_size()))
+        .transpose()?;
+    let total: u64 = colors
+        .iter()
+        .chain(&basis)
+        .chain(&material)
+        .map(|x| x.file_len)
+        .sum();
     if t.bytes != Some(total) {
         return bad(format!(
             "textures are {total} bytes, the manifest says {:?}",
@@ -1060,12 +1128,17 @@ fn load_ktx2_textures(
             .collect::<Vec<_>>(),
         false,
     )?;
-    let compressed = [color_format, basis_format]
-        .iter()
+    let material_format = material
+        .as_ref()
+        .map(|x| same_format("material", &[(x.name.as_str(), &x.header)], false))
+        .transpose()?;
+    let compressed = [Some(color_format), Some(basis_format), material_format]
+        .into_iter()
+        .flatten()
         .any(|e| matches!(e, Encoding::Astc { .. }));
     let decode = compressed && !keep_astc;
     let start = Instant::now();
-    let mut all: Vec<Texture> = colors.into_iter().chain(basis).collect();
+    let mut all: Vec<Texture> = colors.into_iter().chain(basis).chain(material).collect();
     if decode {
         decode_textures(&mut all)?;
     }
@@ -1078,18 +1151,30 @@ fn load_ktx2_textures(
     } else {
         TexturePath::Rgba
     };
-    let basis = all.split_off(2);
+    let mut basis = all.split_off(2);
+    let material = basis.split_off(BASIS);
     let array = |size: u32, encoding: Encoding, textures: Vec<Texture>| TextureArray {
         size,
         encoding: if decode { Encoding::Rgba8 } else { encoding },
         layers: textures.into_iter().map(|x| x.levels).collect(),
     };
+    let material = material_format.map(|format| array(set.material_size(), format, material));
     Ok((
         array(size, color_format, all),
         array(basis_size, basis_format, basis),
+        material,
         path,
     ))
 }
+
+/// A set's textures as loaded: house and dark, the basis, the material (if
+/// it has one) and how they got to the GPU's form.
+type LoadedTextures = (
+    TextureArray,
+    TextureArray,
+    Option<TextureArray>,
+    TexturePath,
+);
 
 /// Decodes every ASTC texture in `textures` to RGBA8, level by level, spread
 /// over the available cores.
@@ -1219,7 +1304,11 @@ fn preflight_ktx2(dir: &Path, set: Set<'_>) -> Result<(), PackError> {
         File::open(&path)
             .and_then(|f| f.take(ktx2::HEAD_BYTES as u64).read_to_end(&mut head))
             .map_err(|e| io("texture", &path, &e))?;
-        let size = if i < 2 { t.size } else { set.basis_size() };
+        let size = match i {
+            0 | 1 => t.size,
+            n if n < 2 + BASIS => set.basis_size(),
+            _ => set.material_size(),
+        };
         let header =
             ktx2::parse(&head, len, size).map_err(|e| PackError(format!("texture {name} {e}")))?;
         headers.push((name.as_str(), header));
@@ -1238,7 +1327,10 @@ fn preflight_ktx2(dir: &Path, set: Set<'_>) -> Result<(), PackError> {
             .collect::<Vec<_>>()
     };
     same_format("house and dark", &refs(0..2), true)?;
-    same_format("basis", &refs(2..headers.len()), false)?;
+    same_format("basis", &refs(2..2 + BASIS), false)?;
+    if headers.len() > 2 + BASIS {
+        same_format("material", &refs(2 + BASIS..headers.len()), false)?;
+    }
     Ok(())
 }
 
@@ -2392,6 +2484,156 @@ mod tests {
         let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         edit(&mut json);
         Manifest::parse(&serde_json::to_vec(&json).unwrap())
+    }
+
+    /// The middle seat's material texture added to a format 3 fixture: a
+    /// file of `size` texels, one colour, ASTC 4 x 4 (sRGB when `srgb`, which
+    /// a material texture must not be); the manifest names it and counts its
+    /// bytes. Returns the file's length.
+    fn add_material(dir: &Path, size: u32, rgba: [u8; 4], srgb: bool) -> u64 {
+        let file = solid(size, Some(((4, 4), srgb)), 0, rgba);
+        let len = file.len() as u64;
+        std::fs::write(dir.join("middle-material.ktx2"), file).unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        let t = &mut json["seat_sets"]["middle"]["textures"];
+        t["material"] = "middle-material.ktx2".into();
+        t["bytes"] = (t["bytes"].as_u64().unwrap() + len).into();
+        if size != BASIS_SIZE {
+            t["material_size"] = size.into();
+        }
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec(&json).unwrap(),
+        )
+        .unwrap();
+        len
+    }
+
+    const MATERIAL: [u8; 4] = [60, 230, 0, 255];
+
+    #[test]
+    fn a_set_may_carry_a_material_texture_and_one_without_has_none() {
+        let dir = fixture3("f3material");
+        let plain = load_seat_with(&dir, Some(SeatName::Middle), false).unwrap();
+        assert!(plain.baked.material.is_none());
+        add_material(&dir, BASIS_SIZE, MATERIAL, false);
+        // Its own size when it says so.
+        let other = fixture3("f3material-size");
+        add_material(&other, COLOR_SIZE, MATERIAL, false);
+        for (dir, edge) in [(&dir, BASIS_SIZE), (&other, COLOR_SIZE)] {
+            // Decoded on the CPU, and as the blocks the GPU takes.
+            for keep in [false, true] {
+                let pack = load_seat_with(dir, Some(SeatName::Middle), keep).unwrap();
+                let m = pack.baked.material.as_ref().expect("a material texture");
+                assert_eq!((m.size, m.layers.len()), (edge, 1));
+                assert_eq!(m.levels(), ktx2::full_chain(edge) as usize);
+                assert_eq!(pack.baked.is_astc(), keep);
+                let top = match m.encoding {
+                    Encoding::Rgba8 => m.layers[0][0].clone(),
+                    Encoding::Astc { block } => {
+                        ktx2::decode_astc(&m.layers[0][0], edge, edge, block)
+                            .unwrap()
+                            .0
+                    }
+                };
+                assert_eq!(&top[..4], &MATERIAL, "the file's own texels");
+            }
+            // The other seats are as they were.
+            let front = load_seat_with(dir, Some(SeatName::Front), false).unwrap();
+            assert!(front.baked.material.is_none());
+        }
+        // Decoding later keeps it.
+        let kept = load_seat_with(&dir, Some(SeatName::Middle), true).unwrap();
+        let later = kept.baked.decoded().unwrap().expect("it was ASTC");
+        let m = later.material.expect("still there");
+        assert_eq!(m.encoding, Encoding::Rgba8);
+        assert_eq!(&m.layers[0][0][..4], &MATERIAL);
+    }
+
+    #[test]
+    fn a_material_texture_is_counted_checked_and_scanned_like_the_others() {
+        // The manifest's byte count has to include it.
+        let dir = fixture3("f3material-bytes");
+        let len = add_material(&dir, BASIS_SIZE, MATERIAL, false);
+        let wrong = edited3(&dir, |j| {
+            let t = &mut j["seat_sets"]["middle"]["textures"];
+            t["bytes"] = (t["bytes"].as_u64().unwrap() - len).into();
+        })
+        .unwrap();
+        let err = preflight(&dir, &wrong).unwrap_err().to_string();
+        assert!(err.contains("bytes"), "{err}");
+        // It is a UNORM texture, not an sRGB one.
+        let dir = fixture3("f3material-srgb");
+        add_material(&dir, BASIS_SIZE, MATERIAL, true);
+        let m = read_manifest(&dir).unwrap();
+        let err = preflight(&dir, &m).unwrap_err().to_string();
+        assert!(err.contains("material") && err.contains("sRGB"), "{err}");
+        let err = load_seat_with(&dir, Some(SeatName::Middle), false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("material") && err.contains("sRGB"), "{err}");
+        // Missing, or the wrong size for what the manifest says.
+        let dir = fixture3("f3material-missing");
+        add_material(&dir, BASIS_SIZE, MATERIAL, false);
+        let m = read_manifest(&dir).unwrap();
+        assert!(preflight(&dir, &m).is_ok());
+        let edge = edited3(&dir, |j| {
+            j["seat_sets"]["middle"]["textures"]["material_size"] = (BASIS_SIZE / 2).into();
+        })
+        .unwrap();
+        assert!(preflight(&dir, &edge).is_err());
+        std::fs::remove_file(dir.join("middle-material.ktx2")).unwrap();
+        assert!(preflight(&dir, &m).is_err());
+        assert!(load_seat_with(&dir, Some(SeatName::Middle), false).is_err());
+    }
+
+    #[test]
+    fn the_material_fields_are_format_3_and_sensible() {
+        let dir = fixture3("f3material-fields");
+        add_material(&dir, BASIS_SIZE, MATERIAL, false);
+        let set = |j: &mut serde_json::Value, key: &str, v: serde_json::Value| {
+            j["seat_sets"]["middle"]["textures"][key] = v;
+        };
+        assert!(edited3(&dir, |_| {}).is_ok());
+        for size in [0, 3, 6, 32] {
+            let e = edited3(&dir, |j| set(j, "material_size", size.into()));
+            assert!(e.is_err(), "material_size {size}");
+        }
+        assert!(edited3(&dir, |j| set(j, "material_size", COLOR_SIZE.into())).is_ok());
+        // A file name that leaves the folder.
+        for name in ["../x.ktx2", "a/b.ktx2", ""] {
+            assert!(edited3(&dir, |j| set(j, "material", name.into())).is_err());
+        }
+        // A size with no texture to have it.
+        let no_file = fixture3("f3material-nofile");
+        let e = edited3(&no_file, |j| set(j, "material_size", 4.into()));
+        assert!(e.unwrap_err().to_string().contains("material_size"));
+        // Formats 1 and 2 have no such field.
+        let two = temp("f2material");
+        write_fixture2(&two, "cinema-v2");
+        let e = edited3(&two, |j| {
+            j["textures"]["material"] = "house.ktx2".into();
+        });
+        assert!(e.unwrap_err().to_string().contains("needs format 3"));
+    }
+
+    #[test]
+    fn a_pack_without_the_field_reads_as_it_always_did() {
+        // The old fixtures' manifests carry no material at all.
+        for m in [
+            read_manifest(&fixture3("f3nomaterial")).unwrap(),
+            read_manifest(&fixture2("f2nomaterial")).unwrap(),
+        ] {
+            let spec = m.set_keys().into_iter().map(|k| m.set(k).unwrap());
+            for set in spec {
+                assert!(set.textures.material.is_none());
+                assert_eq!(set.texture_files().count(), 2 + BASIS);
+            }
+        }
+        assert_eq!(DEFAULT_MATERIAL[3], 255);
+        // Weak and rough: a high roughness and a low specular mask.
+        assert!(DEFAULT_MATERIAL[0] > 180 && DEFAULT_MATERIAL[1] < 100);
     }
 
     #[test]

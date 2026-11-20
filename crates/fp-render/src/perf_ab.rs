@@ -10,6 +10,9 @@
 //! - `FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT=0|1|2|3|4`: how many levels down the
 //!   basis textures' chain that one texture starts (0, the default: as big as
 //!   they are; 1: a quarter of the texels), for places loaded from then on.
+//! - `FRAMEPLAYERX_PLACE_SHINE=0`: a baked place leaves out the highlight the
+//!   picture's rectangle makes on its glossy surfaces (one material read and
+//!   some arithmetic a pixel).
 //! - `FRAMEPLAYERX_PLACE_SORT=0`: a baked place is drawn in the order its
 //!   pack was written, not nearest first.
 //! - `FRAMEPLAYERX_BASIS_ANISO=1`: the basis textures are read with the
@@ -47,6 +50,8 @@ pub(crate) struct Variant {
     pub aniso: bool,
     /// The picture's light read from one collapsed texture, not eight.
     pub collapse: bool,
+    /// The picture's highlight on a baked place's glossy surfaces.
+    pub shine: bool,
 }
 
 impl Variant {
@@ -56,12 +61,13 @@ impl Variant {
             bits => bits.to_string(),
         };
         format!(
-            "msaa{} basis={} sort={} z={depth} aniso={} collapse={}",
+            "msaa{} basis={} sort={} z={depth} aniso={} collapse={} shine={}",
             self.samples,
             on(self.basis),
             on(self.sort),
             on(self.aniso),
-            on(self.collapse)
+            on(self.collapse),
+            on(self.shine)
         )
     }
 }
@@ -71,7 +77,8 @@ fn on(b: bool) -> &'static str {
 }
 
 /// What the app does without any knob: the light on, sorted, 4x, the
-/// device's own depth format, anisotropic colours, the light collapsed.
+/// device's own depth format, anisotropic colours, the light collapsed, the
+/// highlight on.
 const DEFAULT: Variant = Variant {
     samples: 4,
     basis: true,
@@ -79,17 +86,22 @@ const DEFAULT: Variant = Variant {
     depth: 0,
     aniso: true,
     collapse: true,
+    shine: true,
 };
 
 /// What the cycle steps through, most informative first. The first is the
 /// default, so every other line is read against it; then each knob alone
 /// (the light read from eight textures, what beta.10 did, the light off, a 16-
-/// and a 24-bit depth buffer, colours read trilinear), then the sample
-/// counts. Eleven variants, ten seconds each: 110 seconds.
-pub(crate) const VARIANTS: [Variant; 11] = [
+/// and a 24-bit depth buffer, colours read trilinear, the highlight off),
+/// then the sample counts. Twelve variants, ten seconds each: 120 seconds.
+pub(crate) const VARIANTS: [Variant; 12] = [
     DEFAULT,
     Variant {
         collapse: false,
+        ..DEFAULT
+    },
+    Variant {
+        shine: false,
         ..DEFAULT
     },
     Variant {
@@ -152,6 +164,8 @@ pub(crate) struct Knobs {
     pub collapse_shift: Option<u32>,
     /// The place's colour textures read anisotropically (the default).
     pub place_aniso: bool,
+    /// A baked place's highlight from the picture (the default).
+    pub shine: bool,
     /// Bits of the eye passes' depth buffer asked for, if any.
     pub depth: Option<u32>,
     pub ab: bool,
@@ -183,6 +197,7 @@ impl Knobs {
                 .and_then(|v| v.parse::<u32>().ok())
                 .filter(|&n| n <= 4),
             place_aniso: default_on("FRAMEPLAYERX_PLACE_ANISO"),
+            shine: default_on("FRAMEPLAYERX_PLACE_SHINE"),
             depth: value("FRAMEPLAYERX_DEPTH").and_then(|v| match v.as_str() {
                 "16" => Some(16),
                 "24" => Some(24),
@@ -213,6 +228,9 @@ impl Knobs {
         }
         if !self.place_aniso {
             set.push("FRAMEPLAYERX_PLACE_ANISO=0".to_string());
+        }
+        if !self.shine {
+            set.push("FRAMEPLAYERX_PLACE_SHINE=0".to_string());
         }
         if let Some(bits) = self.depth {
             set.push(format!("FRAMEPLAYERX_DEPTH={bits}"));
@@ -379,6 +397,7 @@ mod tests {
                 collapse: true,
                 collapse_shift: None,
                 place_aniso: true,
+                shine: true,
                 depth: None,
                 ab: false
             }
@@ -433,6 +452,15 @@ mod tests {
     }
 
     #[test]
+    fn the_highlight_is_on_unless_turned_off() {
+        assert!(Knobs::parse(env(&[])).shine);
+        assert!(Knobs::parse(env(&[("FRAMEPLAYERX_PLACE_SHINE", "1")])).shine);
+        let k = Knobs::parse(env(&[("FRAMEPLAYERX_PLACE_SHINE", "0")]));
+        assert!(!k.shine);
+        assert_eq!(k.describe(), "FRAMEPLAYERX_PLACE_SHINE=0");
+    }
+
+    #[test]
     fn the_depth_size_is_16_24_or_32_and_nothing_else() {
         let depth = |v: &str| Knobs::parse(env(&[("FRAMEPLAYERX_DEPTH", v)])).depth;
         assert_eq!(depth("16"), Some(16));
@@ -457,7 +485,8 @@ mod tests {
                 sort: true,
                 depth: 0,
                 aniso: true,
-                collapse: true
+                collapse: true,
+                shine: true
             }
         );
         // Each knob changed alone, the rest as the default.
@@ -471,6 +500,7 @@ mod tests {
             Variant { depth: 16, ..d },
             Variant { depth: 24, ..d },
             Variant { aniso: false, ..d },
+            Variant { shine: false, ..d },
             Variant { samples: 2, ..d },
             Variant { samples: 1, ..d },
         ];
@@ -490,8 +520,8 @@ mod tests {
                 );
             }
         }
-        // No variant twice, and no more than eleven (110 seconds).
-        assert!(VARIANTS.len() <= 11);
+        // No variant twice, and no more than twelve (120 seconds).
+        assert!(VARIANTS.len() <= 12);
         for (i, a) in VARIANTS.iter().enumerate() {
             assert!(!VARIANTS[i + 1..].contains(a));
         }
@@ -581,7 +611,7 @@ mod tests {
         };
         let line = m.line();
         assert!(
-            line.contains("msaa4 basis=off sort=on z=auto aniso=on collapse=on"),
+            line.contains("msaa4 basis=off sort=on z=auto aniso=on collapse=on shine=on"),
             "{line}"
         );
         assert!(line.contains("8.50/11.20"), "{line}");

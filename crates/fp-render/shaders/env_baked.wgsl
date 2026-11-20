@@ -16,6 +16,11 @@
 // every place. Opaque, depth tested and written like env.wgsl. build.rs joins
 // dither.wgsl and envcommon.wgsl in front.
 //
+// On top of that, the picture is a lamp the glossy surfaces reflect (see
+// `shine_light`): an analytic highlight from the rectangle of the screen that
+// moves with the head, weighted by the pack's material texture. Skipped
+// whole when the picture's light is off or FRAMEPLAYERX_PLACE_SHINE=0.
+//
 // Two fragment entries: `fs_main` reads the eight basis textures; `fs_lit`
 // reads the second line as one texture that env_collapse.wgsl made from them
 // (FRAMEPLAYERX_PLACE_COLLAPSE, on by default).
@@ -33,6 +38,11 @@
 // eight patch textures by env_collapse.wgsl whenever the patches' colours have
 // moved: what `fs_lit` reads in place of the eight reads of `fs_main`.
 @group(0) @binding(5) var lightmap: texture_2d<f32>;
+
+// The pack's material texture: R roughness, G specular mask (0 matte,
+// 1 a glossy dielectric), B and A reserved. A pack without one gets a 1 x 1
+// weak, rough one (src/env/pack.rs `DEFAULT_MATERIAL`).
+@group(0) @binding(6) var material: texture_2d<f32>;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -90,6 +100,99 @@ fn finish(lit_color: vec3<f32>, in: VsOut) -> vec4<f32> {
     return vec4<f32>(dither_linear(col, in.clip.xy), 1.0);
 }
 
+// The weakest Fresnel reflectance there is (a dielectric facing the viewer).
+const F0: f32 = 0.04;
+
+// Half the width of the reflection's lobe, radians, from the surface's alpha
+// (roughness squared): twice alpha, as the lobe doubles on reflection, but
+// never past about 70 degrees, and a floor so a mirror stays finite.
+const LOBE_SCALE: f32 = 2.0;
+const LOBE_MAX: f32 = 1.2;
+const LOBE_MIN: f32 = 0.004;
+
+// How much of a Gaussian of width `s` centred `c` from the middle of a span of
+// half size `h` lies inside it, 0 to 1 (tanh in place of erf: the same S).
+fn span_cover(c: f32, h: f32, s: f32) -> f32 {
+    let a = clamp((h - c) / s, -8.0, 8.0);
+    let b = clamp((h + c) / s, -8.0, 8.0);
+    return 0.5 * (tanh(a) + tanh(b));
+}
+
+// The picture's highlight on this surface: the view ray reflected in the
+// surface lands on the screen's plane; the reflection's lobe (wider for a
+// rougher surface, wider for a farther screen) covers some share of the
+// rectangle of the picture, and what it covers is the picture's colour
+// there. Times Fresnel and the pack's specular mask. Representative-point
+// style, no pass of its own: one material read and a few dozen operations.
+//
+// The surface's normal is the triangle's (from the screen-space derivatives
+// of its position: a baked room is flat panels and the pack keeps no
+// normals), turned to face the viewer. The texture read and the derivatives
+// come first, in uniform control flow; everything after is arithmetic that
+// may differ from pixel to pixel.
+fn shine_light(in: VsOut) -> vec3<f32> {
+    let m = textureSample(material, basis_sampler, in.uv).rg;
+    let slope = cross(dpdx(in.rpos), dpdy(in.rpos));
+
+    let to_eye = env.eye_pos[pc.eye].xyz - in.rpos;
+    let dist = max(length(to_eye), 0.0001);
+    let v = to_eye / dist;
+    let flat_len = length(slope);
+    var n = slope / max(flat_len, 1e-20);
+    n = select(n, -n, dot(n, v) < 0.0);
+    let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+    let r = reflect(-v, n);
+
+    // Where the reflected ray meets the screen's plane (which faces +screen_n
+    // towards the audience): it has to be heading for its face.
+    let sn = env.screen_n.xyz;
+    let heading = dot(r, sn);
+    let t = dot(env.screen_c.xyz - in.rpos, sn) / min(heading, -0.001);
+    let hit = in.rpos + r * t - env.screen_c.xyz;
+    let right = env.screen_r.xyz;
+    let up = cross(sn, right);
+    let x = dot(hit, right);
+    let y = dot(hit, up);
+    let half_w = env.screen_c.w;
+    let half_h = env.screen_r.w;
+
+    let rough = clamp(m.x, 0.05, 1.0);
+    let alpha = rough * rough;
+    // The lobe's footprint on the screen's plane, metres, stretched where the
+    // ray meets the plane at a slant.
+    let lobe = clamp(LOBE_SCALE * alpha, LOBE_MIN, LOBE_MAX);
+    let sigma = t * tan(lobe) / max(-heading, 0.2);
+    let s = max(1.18 * sigma, 0.02);
+    let cover = span_cover(x, half_w, s) * span_cover(y, half_h, s);
+
+    // The picture's colour where the lobe is centred: the patches' centres
+    // are at 1/8, 3/8, 5/8, 7/8 of the width (4 across) and 1/4 and 3/4 of
+    // the height (2 down, row 0 the top), blended between.
+    let u = 0.5 + 0.5 * clamp(x / half_w, -1.0, 1.0);
+    let w = 0.5 - 0.5 * clamp(y / half_h, -1.0, 1.0);
+    let fx = clamp(u * 4.0 - 0.5, 0.0, 3.0);
+    let fy = clamp(w * 2.0 - 0.5, 0.0, 1.0);
+    let ix = min(u32(fx), 2u);
+    let tx = fx - f32(ix);
+    let top = mix(env.patch_rgb[ix].rgb, env.patch_rgb[ix + 1u].rgb, tx);
+    let bottom = mix(env.patch_rgb[ix + 4u].rgb, env.patch_rgb[ix + 5u].rgb, tx);
+    let colour = mix(top, bottom, fy);
+
+    // Schlick's Fresnel, rising towards grazing less on a rougher surface.
+    let edge = pow(1.0 - n_dot_v, 5.0);
+    let fresnel = F0 + (max(1.0 - rough, F0) - F0) * edge;
+
+    let valid = flat_len > 1e-20 && heading < -0.001 && t > 0.0;
+    let strength = env.shine.y * env.screen_n.w * clamp(m.y, 0.0, 1.0) * fresnel * cover;
+    return select(vec3<f32>(0.0), colour * strength, valid);
+}
+
+// Whether the highlight is drawn at all: a uniform, so the whole draw takes
+// the same side and the texture read stays in uniform control flow.
+fn shine_on() -> bool {
+    return env.shine.x > 0.5 && env.screen_n.w > 0.0 && env.screen_c.w > 0.0;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var col = base_color(in.uv);
@@ -118,6 +221,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
         col += lit * strength;
     }
+    if (shine_on()) {
+        col += shine_light(in);
+    }
     return finish(col, in);
 }
 
@@ -129,6 +235,9 @@ fn fs_lit(in: VsOut) -> @location(0) vec4<f32> {
     let strength = env.baked.x * env.screen_n.w;
     if (env.baked.y > 0.5 && strength > 0.0) {
         col += textureSample(lightmap, basis_sampler, in.uv).rgb;
+    }
+    if (shine_on()) {
+        col += shine_light(in);
     }
     return finish(col, in);
 }

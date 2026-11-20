@@ -10,7 +10,7 @@
 //! slots; replaced ones go to a slot's garbage). Made on the first frame that
 //! shows a place, so users who never pick one pay nothing.
 
-use crate::env::light::PATCHES;
+use crate::env::light::{PATCHES, screen_rect};
 use crate::env::pack::BakedVertex;
 use crate::env::{Lighting, Pattern, Place, PlaceData, PlaceKind, SeatName, Sky, Vertex};
 use crate::env_baked::{self, BakedGpu, LIGHT_FORMAT};
@@ -52,7 +52,19 @@ pub(crate) struct EnvUniform {
     /// (0), z the basis read anisotropically, w the colours read
     /// anisotropically.
     pub baked: Vec4,
+    /// The picture as a rectangle, for the highlight of a baked place: xyz
+    /// its middle, w half its width.
+    pub screen_c: Vec4,
+    /// xyz the unit vector along its width, w half its height.
+    pub screen_r: Vec4,
+    /// x: the highlight on (1) or off (0), y: its strength (`SHINE_GAIN`).
+    pub shine: Vec4,
 }
+
+/// How strongly a baked place's highlight is drawn (`shine.y`): 1 is the
+/// Fresnel reflectance of the picture's colour times what the material map
+/// lets through, which is already faint (a dielectric reflects 4% facing it).
+pub(crate) const SHINE_GAIN: f32 = 1.0;
 
 /// What the collapse draws the picture's light with: each patch's colour
 /// times the light's strength (`env_collapse.wgsl`).
@@ -201,6 +213,10 @@ impl Look {
             }
             // w: how strongly the picture's light lands here; 0 is off.
             u.screen_n = s.normal.extend(s.gain);
+            if let Some(rect) = screen_rect(&s.patches) {
+                u.screen_c = rect.centre.extend(rect.half.x);
+                u.screen_r = rect.right.extend(rect.half.y);
+            }
         }
         u.fog_range.z = input.floor_drop;
         u.fog_range.w = (input.time % 3600.0) as f32;
@@ -282,6 +298,8 @@ pub(crate) struct EnvPass {
     basis_aniso: bool,
     /// A baked place's colour textures read anisotropically (the default).
     place_aniso: bool,
+    /// A baked place's highlight from the picture drawn (the default).
+    shine: bool,
     sort: bool,
     /// Whether the order is made at all (it is when the knob or the A/B
     /// cycle can want it).
@@ -366,6 +384,7 @@ impl EnvPass {
             basis: true,
             basis_aniso: false,
             place_aniso: true,
+            shine: true,
             sort: true,
             sort_work: true,
             sorter: None,
@@ -604,6 +623,7 @@ impl EnvPass {
         self.basis = knobs.basis;
         self.basis_aniso = knobs.basis_aniso;
         self.place_aniso = knobs.place_aniso;
+        self.shine = knobs.shine;
         self.sort = knobs.sort;
         // The order is worth making when something can want it.
         self.sort_work = knobs.sort || knobs.ab;
@@ -707,6 +727,12 @@ impl EnvPass {
     /// (the A/B cycle).
     pub fn set_place_aniso(&mut self, on: bool) {
         self.place_aniso = on;
+    }
+
+    /// A baked place's highlight from the picture, on or off (the A/B
+    /// cycle, `FRAMEPLAYERX_PLACE_SHINE`).
+    pub fn set_shine(&mut self, on: bool) {
+        self.shine = on;
     }
 
     /// A baked place drawn nearest first, or in its pack's order (the A/B
@@ -922,6 +948,7 @@ impl EnvPass {
                 u.baked.y = f32::from(self.basis);
                 u.baked.z = f32::from(self.basis_aniso);
                 u.baked.w = f32::from(self.place_aniso);
+                u.shine = Vec4::new(f32::from(self.shine), SHINE_GAIN, 0.0, 0.0);
             }
             u
         })
@@ -1064,7 +1091,10 @@ mod tests {
         assert_eq!(offset_of!(EnvUniform, palette), 672);
         assert_eq!(offset_of!(EnvUniform, palette2), 928);
         assert_eq!(offset_of!(EnvUniform, baked), 1184);
-        assert_eq!(size_of::<EnvUniform>(), 1200);
+        assert_eq!(offset_of!(EnvUniform, screen_c), 1200);
+        assert_eq!(offset_of!(EnvUniform, screen_r), 1216);
+        assert_eq!(offset_of!(EnvUniform, shine), 1232);
+        assert_eq!(size_of::<EnvUniform>(), 1248);
     }
 
     #[test]
@@ -1099,6 +1129,7 @@ mod tests {
             indices: Vec::new(),
             colors: none(),
             basis: none(),
+            material: None,
             basis_gain: 2.5,
             seat: None,
         };

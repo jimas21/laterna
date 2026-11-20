@@ -2627,6 +2627,17 @@ impl Renderer {
         self.env.as_ref().map_or(0, EnvPass::collapse_runs)
     }
 
+    /// Draws a baked place's highlight from the picture (the default) or
+    /// leaves it out from now on (`FRAMEPLAYERX_PLACE_SHINE=0` sets it when
+    /// the renderer is made; this is for tests).
+    #[doc(hidden)]
+    pub fn set_place_shine(&mut self, on: bool) {
+        self.knobs.shine = on;
+        if let Some(e) = self.env.as_mut() {
+            e.set_shine(on);
+        }
+    }
+
     /// Reads a baked place's colour textures anisotropically (the default)
     /// or trilinear from now on (`FRAMEPLAYERX_PLACE_ANISO=0` sets it when
     /// the renderer is made; this is for tests).
@@ -2758,6 +2769,7 @@ impl Renderer {
                     e.set_sort(variant.sort);
                     e.set_collapse(variant.collapse);
                     e.set_place_aniso(variant.aniso);
+                    e.set_shine(variant.shine);
                 }
                 log::info!(
                     "perf-ab: now {} (drawing at {n}x, {format:?} depth)",

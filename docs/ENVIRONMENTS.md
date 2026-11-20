@@ -292,6 +292,34 @@ other packs are copied by hand.
   for the built-in room as well. An app that reads formats up to 2 does not use
   a format 3 pack. `tools/pack-seats.py` makes one from three format 2 packs,
   each baked at one seat.
+- **A material texture (optional, format 3).** The baked textures hold each
+  surface's final colour, so by themselves they look painted on: a glossy floor
+  shows the same shine from every spot. A set may add `textures.material`, one
+  more KTX2 file, which says how glossy each surface is, so the app can draw
+  the film's reflection on it for the viewer's eye (below). It is a 2D
+  picture laid out like the room pictures (same UV atlas) with a full set of
+  smaller sizes, stored as it is (UNORM, never sRGB; ASTC of any block size, or
+  RGBA8), and it is counted in `textures.bytes` and checked like the others.
+  Red is the surface's roughness (0 a mirror, 1 chalk), green its specular mask
+  (0 matte, 1 a glossy, non-metal surface, which reflects about 4% of the
+  picture facing it and more at a slant); blue and alpha are reserved, leave
+  them 0 and 255. `textures.material_size` (a power of two up to `size`) is its
+  side, the basis size when it is left out. A set without one is drawn as if it
+  had a single texel of weak, rough material (roughness 0.85, mask 0.25), so a
+  pack made before this existed looks the same as before for all practical
+  purposes. Formats 1 and 2 may not name a material texture. An app that does
+  not know the field ignores it.
+- **The picture's highlight.** In a baked place the film's screen is a lamp the
+  glossy surfaces reflect. The shader intersects each surface's reflected view
+  ray with the picture's rectangle and adds the picture's colour there, widened
+  by the surface's roughness and the distance, times Fresnel and the specular
+  mask, so the highlight slides over the floor, the rails and the walls as the
+  head moves. The surface's normal comes from the triangle itself (a pack has
+  no normals). It costs one material read and some arithmetic in the place's
+  fragment shader, with no pass of its own, and is skipped when the Screen
+  light is off. `FRAMEPLAYERX_PLACE_SHINE=0` leaves it out; the PERF_AB cycle
+  has a variant with it off. `tests/shine.rs` checks it on software Vulkan
+  (set `FRAMEPLAYERX_SHINE_PREVIEW_DIR` to also get the pictures as PNG files).
 - **How it reaches the screen.** If the device can sample ASTC, the blocks go
   to the GPU as they are. If not (the desktop preview on software Vulkan, for
   instance) the app decodes them to plain pixels once, while it builds the
@@ -400,17 +428,20 @@ about it is **not measured on a headset yet**, so treat the jitter as open:
   log line "lazily allocated memory, type N" shows when it did engage.
 - To get the numbers in one session, start the app with
   `FRAMEPLAYERX_PERF_AB=1`, sit in the Cinema and leave it for about 110
-  seconds. It steps through eleven variants, ten seconds each, and logs
+  seconds. It steps through twelve variants, ten seconds each, and logs
   `perf-ab: ...` per variant and a `perf-ab table:` at the end with the median
   and worst GPU time of each. The first is the default, so read every other
   line against it. In order: the default (4x MSAA, the light on, sorted, the
   device's own depth format, anisotropic colours, the picture's light read
-  from one collapsed texture); the light read from eight textures; pack order
+  from one collapsed texture); the light read from eight textures; the
+  highlight off; pack order
   instead of sorted (what beta.10 did); the picture's light off; a 16-bit depth buffer; a
   24-bit one; the colours read trilinear; 2x MSAA; 2x with the light off; 1x;
   1x with the light off. The `now ...` line of each variant also says the
   depth format the device really gave. Single knobs: `FRAMEPLAYERX_MSAA=1|2`,
   `FRAMEPLAYERX_PLACE_SORT=0`, `FRAMEPLAYERX_PLACE_BASIS=0`,
+  `FRAMEPLAYERX_PLACE_SHINE=0` (no highlight from the picture on glossy
+  surfaces; the cycle's third variant),
   `FRAMEPLAYERX_PLACE_COLLAPSE=0` (the old path: the light from eight
   textures a fragment), `FRAMEPLAYERX_PLACE_COLLAPSE_SHIFT=0|1|2|3` (the size
   of the collapsed texture, below), `FRAMEPLAYERX_BASIS_ANISO=1`, `FRAMEPLAYERX_PLACE_ANISO=0` (the house and
