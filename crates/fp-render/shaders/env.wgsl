@@ -224,6 +224,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
+    col *= screen_mask(in.rpos);
+
     let span = max(env.fog_range.y - env.fog_range.x, 0.001);
     let fog = clamp((dist - env.fog_range.x) / span, 0.0, 1.0) * env.fog.w;
     col = mix(col, env.fog.rgb, fog);

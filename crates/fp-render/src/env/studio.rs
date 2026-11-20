@@ -36,6 +36,7 @@ pub fn layout() -> Layout {
         screen: None,
         floor_y: FLOOR_Y,
         acoustics: None,
+        ambience: None,
     }
 }
 

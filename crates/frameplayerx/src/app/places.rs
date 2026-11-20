@@ -14,11 +14,16 @@ use glam::{Mat4, Vec2, Vec3};
 /// undo the eye pass changes that make places possible.
 pub const KILL_SWITCH: &str = "FRAMEPLAYERX_PLACES";
 
-/// How long the house lights take to dim while a video plays, and to come
-/// back up when it pauses or ends: the time constants of an exponential
-/// ease, seconds. About 2 s to reach the playing level, 1 s to come up.
-const DIM_TAU: f32 = 0.6;
-const RAISE_TAU: f32 = 0.3;
+/// How long the house lights take to go down when a video plays, and to come
+/// back up when it pauses or ends, seconds: a steady slide of the ease (see
+/// [`house_level`], which shapes it like a cinema's dimmer, slow at both
+/// ends).
+const DIM_SECONDS: f32 = 1.5;
+const RAISE_SECONDS: f32 = 0.8;
+/// The ease the house lights come up to on a pause: about 30% of full light
+/// (smoothstep of it, see [`house_level`]), not the full house of a film's
+/// end, so the picture stays the thing in the room.
+pub const PAUSE_EASE: f32 = 0.36;
 
 /// Whether places are on, given a lookup of environment variables. They are,
 /// unless the kill switch is set to 0 (or off, false or no).
@@ -60,8 +65,10 @@ pub fn active_place(
 /// Where the house lights are heading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HouseTarget {
-    /// Come up: paused, ended, failed, or no video.
+    /// Come all the way up: ended, failed, or no video.
     Up,
+    /// Come up part way, to about 30%: paused.
+    Pause,
     /// Dim: playing.
     Down,
     /// Stay as they are: a rebuffer in mid-film must not flash them.
@@ -73,6 +80,7 @@ impl HouseTarget {
     pub fn goal(self) -> Option<f32> {
         match self {
             HouseTarget::Up => Some(1.0),
+            HouseTarget::Pause => Some(PAUSE_EASE),
             HouseTarget::Down => Some(0.0),
             HouseTarget::Hold => None,
         }
@@ -84,13 +92,14 @@ pub fn house_target(state: Option<PlayerState>) -> HouseTarget {
     match state {
         Some(PlayerState::Playing) => HouseTarget::Down,
         Some(PlayerState::Buffering) => HouseTarget::Hold,
+        Some(PlayerState::Paused) => HouseTarget::Pause,
         _ => HouseTarget::Up,
     }
 }
 
 /// `level` (the ease, 1 up and 0 down) moved `dt` seconds towards `target`:
-/// exponentially, slowly when dimming and faster when coming up. A `dt` that
-/// is not a positive number leaves it where it is.
+/// at a steady rate, 1.5 s for the whole way down and 0.8 s for the whole way
+/// up. A `dt` that is not a positive number leaves it where it is.
 pub fn house_step(level: f32, target: f32, dt: f32) -> f32 {
     let target = if target.is_finite() {
         target.clamp(0.0, 1.0)
@@ -105,12 +114,22 @@ pub fn house_step(level: f32, target: f32, dt: f32) -> f32 {
     if !dt.is_finite() || dt <= 0.0 {
         return level;
     }
-    let tau = if target < level { DIM_TAU } else { RAISE_TAU };
-    level + (target - level) * (1.0 - (-dt / tau).exp())
+    let step = dt
+        / if target < level {
+            DIM_SECONDS
+        } else {
+            RAISE_SECONDS
+        };
+    if target < level {
+        (level - step).max(target)
+    } else {
+        (level + step).min(target)
+    }
 }
 
 /// The brightness of the house lights, 0 dark to 1 full: `playing_level`
-/// (Settings, clamped to the levels offered) at ease 0, full at ease 1.
+/// (Settings, clamped to the levels offered) at ease 0, full at ease 1, and a
+/// smoothstep between so the dimmer starts and ends gently.
 pub fn house_level(ease: f32, playing_level: f32) -> f32 {
     let ease = if ease.is_finite() {
         ease.clamp(0.0, 1.0)
@@ -123,7 +142,19 @@ pub fn house_level(ease: f32, playing_level: f32) -> f32 {
         HOUSE_PLAYING_START
     };
     let low = playing.clamp(*HOUSE_PLAYING.start(), *HOUSE_PLAYING.end());
-    low * (1.0 - ease) + ease
+    let shaped = ease * ease * (3.0 - 2.0 * ease);
+    low * (1.0 - shaped) + shaped
+}
+
+/// How far the screen's masking is open, 0 closed to the picture's own shape
+/// (the film is playing) to 1 open to the room's whole screen: it follows
+/// the house lights, so the curtains close as they go down.
+pub fn mask_open(ease: f32) -> f32 {
+    if !ease.is_finite() {
+        return 1.0;
+    }
+    let e = ease.clamp(0.0, 1.0);
+    e * e * (3.0 - 2.0 * e)
 }
 
 /// [`house_level`] for the ease the player's state gives, or for `forced`
@@ -162,14 +193,14 @@ pub fn ambience_wants(place: Option<Place>, ease: f32, level: f32) -> Vec<(Sound
     };
     place
         .ambience()
-        .iter()
+        .into_iter()
         .map(|l| {
             let follow = if l.with_house_lights {
                 lights_up(ease)
             } else {
                 1.0
             };
-            (l.sound, level * follow)
+            (l.sound, level * follow * l.level.clamp(0.0, 1.0))
         })
         .filter(|&(_, gain)| gain > 0.0)
         .collect()
@@ -326,8 +357,41 @@ mod tests {
         for _ in 0..72 {
             ease = house_step(ease, up, dt);
         }
-        assert!(ease >= 0.95, "1 s of Paused: {ease}");
+        assert!((ease - PAUSE_EASE).abs() < 1e-4, "1 s of Paused: {ease}");
         assert!(held < ease);
+        // About 30% of full light, not the whole house.
+        let shown = house_level(ease, 0.0);
+        assert!((0.25..=0.35).contains(&shown), "{shown}");
+        // And the end of the film brings them all the way up.
+        let up = house_target(Some(PlayerState::Ended)).goal().unwrap();
+        for _ in 0..72 {
+            ease = house_step(ease, up, dt);
+        }
+        assert!(ease >= 0.99, "{ease}");
+    }
+
+    #[test]
+    fn the_house_lights_take_one_and_a_half_seconds_to_go_down_like_a_dimmer() {
+        let dt = 1.0 / 72.0;
+        let mut ease = 1.0;
+        let mut half = 0.0;
+        for i in 1..=108 {
+            ease = house_step(ease, 0.0, dt);
+            if i == 54 {
+                half = ease;
+            }
+        }
+        assert!(ease < 1e-3, "1.5 s: {ease}");
+        assert!((half - 0.5).abs() < 0.02, "steady: {half}");
+        // Slow at the start and end of the slide, not an abrupt cut.
+        assert!(house_level(0.95, 0.04) > 0.98);
+        assert!(house_level(0.05, 0.04) < 0.06);
+        assert!((house_level(0.5, 0.0) - 0.5).abs() < 1e-6);
+        // The masking closes as the lights go down.
+        assert_eq!(mask_open(0.0), 0.0);
+        assert_eq!(mask_open(1.0), 1.0);
+        assert_eq!(mask_open(f32::NAN), 1.0);
+        assert!(mask_open(0.2) < mask_open(0.8));
     }
 
     #[test]
@@ -380,9 +444,10 @@ mod tests {
 
     #[test]
     fn the_lights_come_up_unless_a_video_is_playing_or_buffering() {
-        for state in [PlayerState::Paused, PlayerState::Ended, PlayerState::Failed] {
+        for state in [PlayerState::Ended, PlayerState::Failed] {
             assert_eq!(house_target(Some(state)), HouseTarget::Up, "{state:?}");
         }
+        assert_eq!(house_target(Some(PlayerState::Paused)), HouseTarget::Pause);
         assert_eq!(house_target(None), HouseTarget::Up);
         assert_eq!(house_target(Some(PlayerState::Playing)), HouseTarget::Down);
         assert_eq!(HouseTarget::Up.goal(), Some(1.0));

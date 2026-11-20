@@ -21,7 +21,7 @@ use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::place_sort::{self, PlaceSorter};
 use crate::{Result, VkContext};
 use ash::vk;
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use gpu_allocator::MemoryLocation;
 use std::sync::Arc;
 
@@ -59,6 +59,53 @@ pub(crate) struct EnvUniform {
     pub screen_r: Vec4,
     /// x: the highlight on (1) or off (0), y: its strength (`SHINE_GAIN`).
     pub shine: Vec4,
+    /// The screen's masking: xyz the frame's middle and w on (1) or off (0);
+    /// xy the frame's half size, zw the half size of the opening in it.
+    pub mask_c: Vec4,
+    pub mask_h: Vec4,
+}
+
+/// The black masking round a film on a room's screen: the screen frame (the
+/// largest picture the room shows) with an opening that is the film's own
+/// shape when closed and the whole frame when open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScreenMask {
+    /// The frame's middle, room space.
+    pub centre: Vec3,
+    pub frame_half: Vec2,
+    pub hole_half: Vec2,
+}
+
+/// The masking for a flat screen of `frame_max` centred at `centre` showing a
+/// picture of `picture` (width and height, metres), `open` of the way from
+/// the picture's shape (0) to the whole frame (1). The picture is never made
+/// smaller by it: the opening is never smaller than the picture, and the
+/// picture's size is the room's own fit. `None` for a curved screen, no
+/// picture, or sizes that are not numbers.
+pub(crate) fn screen_mask(
+    centre: Vec3,
+    frame_max: Vec2,
+    curvature: f32,
+    picture: Vec2,
+    open: f32,
+) -> Option<ScreenMask> {
+    let ok = |v: Vec2| v.is_finite() && v.x > 0.0 && v.y > 0.0;
+    if curvature > 1e-4 || !ok(frame_max) || !ok(picture) || !centre.is_finite() {
+        return None;
+    }
+    let open = if open.is_finite() {
+        open.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let frame_half = frame_max / 2.0;
+    let picture_half = picture / 2.0;
+    let hole_half = picture_half + (frame_half - picture_half).max(Vec2::ZERO) * open;
+    Some(ScreenMask {
+        centre,
+        frame_half,
+        hole_half,
+    })
 }
 
 /// How strongly a baked place's highlight is drawn (`shine.y`): 1 is the
@@ -136,6 +183,8 @@ pub(crate) struct EnvInput {
     pub floor_drop: f32,
     /// Seconds.
     pub time: f64,
+    /// The masking round the film, if it is drawn.
+    pub mask: Option<ScreenMask>,
     /// The picture's light, if it lights the place.
     pub screen: Option<LitScreen>,
 }
@@ -226,6 +275,10 @@ impl Look {
         if let Sky::Gradient { zenith, horizon } = self.sky {
             u.sky_zenith = vec4(zenith.map(|c| c * dim), 1.0);
             u.sky_horizon = vec4(horizon.map(|c| c * dim), 1.0);
+        }
+        if let Some(m) = input.mask {
+            u.mask_c = m.centre.extend(1.0);
+            u.mask_h = vec4(m.frame_half.x, m.frame_half.y, m.hole_half.x, m.hole_half.y);
         }
         u.palette = self.palette;
         u.palette2 = self.palette2;
@@ -966,7 +1019,12 @@ impl EnvPass {
                 u.baked.y = f32::from(self.basis);
                 u.baked.z = f32::from(self.basis_aniso);
                 u.baked.w = f32::from(self.place_aniso);
-                u.shine = Vec4::new(f32::from(self.shine), SHINE_GAIN, 0.0, 0.0);
+                let accent = if input.accent.is_finite() {
+                    input.accent.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                u.shine = Vec4::new(f32::from(self.shine), SHINE_GAIN, accent, 0.0);
             }
             u
         })
@@ -1091,6 +1149,7 @@ mod tests {
             accent: 1.0,
             floor_drop: 0.0,
             time: 12.5,
+            mask: None,
             screen: None,
         }
     }
@@ -1113,7 +1172,9 @@ mod tests {
         assert_eq!(offset_of!(EnvUniform, screen_c), 1200);
         assert_eq!(offset_of!(EnvUniform, screen_r), 1216);
         assert_eq!(offset_of!(EnvUniform, shine), 1232);
-        assert_eq!(size_of::<EnvUniform>(), 1248);
+        assert_eq!(offset_of!(EnvUniform, mask_c), 1248);
+        assert_eq!(offset_of!(EnvUniform, mask_h), 1264);
+        assert_eq!(size_of::<EnvUniform>(), 1280);
     }
 
     #[test]
@@ -1233,6 +1294,49 @@ mod tests {
         assert_eq!(
             collapse_weights(&u).expect("read")[3],
             Vec3::new(0.05, 0.1, 0.15)
+        );
+    }
+
+    #[test]
+    fn the_masking_closes_to_the_films_shape_and_never_shrinks_the_picture() {
+        let frame = Vec2::new(14.0, 7.2);
+        let at = |picture: Vec2, open: f32| {
+            screen_mask(Vec3::new(0.0, 4.0, 0.0), frame, 0.0, picture, open).unwrap()
+        };
+        // 2.39, 1.85 and 16:9 films, as the room fits them (by width, or by
+        // height when the film is taller than the frame).
+        for picture in [
+            Vec2::new(14.0, 14.0 / 2.39),
+            Vec2::new(7.2 * 1.85, 7.2),
+            Vec2::new(7.2 * 16.0 / 9.0, 7.2),
+        ] {
+            let closed = at(picture, 0.0);
+            assert_eq!(
+                closed.hole_half,
+                picture / 2.0,
+                "closed is the film's shape"
+            );
+            assert_eq!(closed.frame_half, frame / 2.0);
+            let open = at(picture, 1.0);
+            assert_eq!(open.hole_half, frame / 2.0, "open is the whole screen");
+            let mid = at(picture, 0.5);
+            assert!(mid.hole_half.cmpge(picture / 2.0).all());
+            assert!(mid.hole_half.cmple(frame / 2.0).all());
+        }
+        // A picture that somehow overfills the frame is not cut.
+        let big = at(Vec2::new(20.0, 10.0), 0.0);
+        assert_eq!(big.hole_half, Vec2::new(10.0, 5.0));
+        assert_eq!(at(Vec2::new(20.0, 10.0), 1.0).hole_half, big.hole_half);
+        // Curved screens, nothing to show and nonsense get no masking.
+        let c = Vec3::ZERO;
+        assert!(screen_mask(c, frame, 0.3, Vec2::ONE, 0.0).is_none());
+        assert!(screen_mask(c, frame, 0.0, Vec2::ZERO, 0.0).is_none());
+        assert!(screen_mask(c, frame, 0.0, Vec2::new(f32::NAN, 1.0), 0.0).is_none());
+        assert_eq!(
+            screen_mask(c, frame, 0.0, Vec2::ONE, f32::NAN)
+                .unwrap()
+                .hole_half,
+            frame / 2.0
         );
     }
 

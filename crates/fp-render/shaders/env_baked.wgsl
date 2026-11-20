@@ -40,7 +40,8 @@
 @group(0) @binding(5) var lightmap: texture_2d<f32>;
 
 // The pack's material texture: R roughness, G specular mask (0 matte,
-// 1 a glossy dielectric), B and A reserved. A pack without one gets a 1 x 1
+// 1 a glossy dielectric), B the accent mask (1 an exit sign, step or other
+// accent light, dimmed with Minimal lighting; 0 default), A reserved. A pack without one gets a 1 x 1
 // weak, rough one (src/env/pack.rs `DEFAULT_MATERIAL`).
 @group(0) @binding(6) var material: texture_2d<f32>;
 
@@ -92,7 +93,16 @@ fn base_color(uv: vec2<f32>) -> vec3<f32> {
 }
 
 // Fog and dither: the end of every place's fragment.
-fn finish(lit_color: vec3<f32>, in: VsOut) -> vec4<f32> {
+fn finish(colour: vec3<f32>, in: VsOut) -> vec4<f32> {
+    var lit_color = colour * screen_mask(in.rpos);
+    // The pack's accent texels (material B: exit signs, step lights) glow as
+    // baked, or less when Minimal lighting dims them for the film. env.shine.z
+    // is a uniform, so the read is skipped (and stays in uniform control
+    // flow) when they are as baked.
+    if (env.shine.z < 1.0) {
+        let accent = clamp(textureSample(material, basis_sampler, in.uv).b, 0.0, 1.0);
+        lit_color *= 1.0 - accent * (1.0 - clamp(env.shine.z, 0.0, 1.0));
+    }
     let dist = length(env.eye_pos[pc.eye].xyz - in.rpos);
     let span = max(env.fog_range.y - env.fog_range.x, 0.001);
     let fog = clamp((dist - env.fog_range.x) / span, 0.0, 1.0) * env.fog.w;
