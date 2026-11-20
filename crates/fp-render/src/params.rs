@@ -38,6 +38,41 @@ pub(crate) struct SceneParams {
     pub hdr: Vec4,
     pub tp10: Vec4,
     pub tp10_uv: Vec4,
+    /// The booth glass (flat screens in a place whose pack has one), in world
+    /// space: xyz its bottom left corner, w the film's opacity on it (0: no
+    /// glass); then xyz the vector to its bottom right corner and the one to
+    /// its top left.
+    pub booth_o: Vec4,
+    pub booth_u: Vec4,
+    pub booth_v: Vec4,
+}
+
+/// The glass of a place's projection booth for this frame, as the shader's
+/// `booth_*` take it: `Vec4::ZERO`s where there is none.
+fn booth_glass(video: &VideoParams) -> [Vec4; 3] {
+    let none = [Vec4::ZERO; 3];
+    if video.format.projection != Projection::Flat {
+        return none;
+    }
+    let Some(env) = video.env else {
+        return none;
+    };
+    let Some(glass) = env.place.layout().booth_glass else {
+        return none;
+    };
+    if !(glass.opacity > 0.0 && glass.opacity.is_finite()) {
+        return none;
+    }
+    let [bl, br, _, tl] = glass.corners.map(|c| env.room_to_world.transform_point3(c));
+    [
+        bl.extend(
+            glass
+                .opacity
+                .clamp(0.0, crate::env::BoothGlass::MAX_OPACITY),
+        ),
+        (br - bl).extend(0.0),
+        (tl - bl).extend(0.0),
+    ]
 }
 
 /// Which of the scene shader's quality features are on; all are by default.
@@ -438,6 +473,7 @@ pub(crate) fn build(
         ),
         None => (0.0, 0.0),
     };
+    let [booth_o, booth_u, booth_v] = booth_glass(video);
     SceneParams {
         inv_view_proj,
         correction,
@@ -480,6 +516,9 @@ pub(crate) fn build(
         hdr: hdr_levels(crate::hdr::DEFAULT_PEAK),
         tp10: Vec4::ZERO,
         tp10_uv: Vec4::ZERO,
+        booth_o,
+        booth_u,
+        booth_v,
     }
 }
 

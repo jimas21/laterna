@@ -1592,6 +1592,7 @@ place-more-failed-network = The download did not finish. Check the connection an
 place-more-failed-mismatch = What arrived was not the file expected, so it was thrown away. Try again later.
 place-more-failed-unusable = The download could not be used, so it was thrown away.
 place-more-failed-disk = It could not be saved. Check there is room on this device.
+place-more-failed-taken = A folder of yours already has this name, so it was left alone. Rename your folder to install this one.
 # Settings > Places: the person's own places and pack sources.
 place-yours = Yours
 place-yours-heading = Your places

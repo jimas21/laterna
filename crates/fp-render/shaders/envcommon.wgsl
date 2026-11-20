@@ -47,7 +47,15 @@ struct Env {
     screen_c: vec4<f32>,
     screen_r: vec4<f32>,
     // x: the highlight on (1) or off (0), y: its strength.
+    // x: the highlight on (1) or off (0), y: its strength, z (a baked place):
+    // how strongly the pack's accent texels (material B) glow, 1 as baked.
     shine: vec4<f32>,
+    // The screen's masking: xyz the screen frame's middle (room space) and w
+    // 1 when the masking is drawn; xy the frame's half width and height, zw
+    // the half width and height of the opening left in it (the film's own
+    // shape when closed).
+    mask_c: vec4<f32>,
+    mask_h: vec4<f32>,
 };
 
 struct PushConstants {
@@ -56,3 +64,16 @@ struct PushConstants {
 
 @group(0) @binding(0) var<uniform> env: Env;
 var<immediate> pc: PushConstants;
+
+// How much of what is drawn at room position `p` shows: 0 for the black
+// masking round the film, 1 everywhere else. The masking is the screen's
+// plane (the panel, and a wall just behind it) inside the screen frame and
+// outside the opening; the picture itself is drawn over the opening.
+fn screen_mask(p: vec3<f32>) -> f32 {
+    if (env.mask_c.w < 0.5) { return 1.0; }
+    let d = p - env.mask_c.xyz;
+    let in_plane = abs(d.z) < 0.08;
+    let in_frame = abs(d.x) <= env.mask_h.x + 0.02 && abs(d.y) <= env.mask_h.y + 0.02;
+    let in_hole = abs(d.x) <= env.mask_h.z && abs(d.y) <= env.mask_h.w;
+    return select(1.0, 0.0, in_plane && in_frame && !in_hole);
+}

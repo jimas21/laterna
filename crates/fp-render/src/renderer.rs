@@ -355,6 +355,9 @@ pub struct Renderer {
     /// How strongly a place's own lights (exit signs, step lights) glow,
     /// 0 off to 1 as built (see [`Renderer::set_accent_lights`]).
     accent_lights: f32,
+    /// How open the screen's masking is, if it is drawn (see
+    /// [`Renderer::set_screen_mask`]).
+    screen_mask: Option<f32>,
     ab: Option<AbCycle>,
     /// A place was drawn in the last eye passes.
     env_shown: bool,
@@ -615,6 +618,7 @@ impl Renderer {
                 msaa: None,
                 knobs,
                 accent_lights: 1.0,
+                screen_mask: None,
                 ab: None,
                 env_shown: false,
                 fragments: None,
@@ -2334,6 +2338,19 @@ impl Renderer {
             eye_pos,
             house: frame.house,
             accent: self.accent_lights,
+            mask: self
+                .screen_mask
+                .filter(|_| p.screen.w >= 0.5)
+                .and_then(|open| {
+                    let screen = frame.place.layout().screen?;
+                    crate::env_pass::screen_mask(
+                        screen.centre,
+                        screen.max,
+                        screen.curvature,
+                        Vec2::new(p.screen.x, p.screen.y),
+                        open,
+                    )
+                }),
             floor_drop,
             time: frame.time,
             screen,
@@ -2597,6 +2614,15 @@ impl Renderer {
         } else {
             1.0
         };
+    }
+
+    /// Draws black masking round the film on a room's screen: `Some(open)`
+    /// closes the room's screen down to the picture's own shape (the film's
+    /// aspect: 2.39, 1.85, 16:9) as `open` goes from 1 (the whole screen) to
+    /// 0, and `None` leaves the screen as the room has it. The picture is
+    /// never made smaller by it. The app eases it with the house lights.
+    pub fn set_screen_mask(&mut self, open: Option<f32>) {
+        self.screen_mask = open.filter(|o| o.is_finite()).map(|o| o.clamp(0.0, 1.0));
     }
 
     /// Turns the place knobs (perf_ab.rs) on or off for what is drawn from

@@ -418,6 +418,10 @@ impl App {
             self.settings.minimal_lighting,
             ease,
         ));
+        // A room's screen is masked down to the film's shape as the lights
+        // go down for it, and opened again with them.
+        let masked = place.is_some_and(|p| p.kind() == fp_render::env::PlaceKind::Room);
+        renderer.set_screen_mask(masked.then(|| places::mask_open(ease)));
         let wants = if self.headset_paused || !crate::settings::AMBIENCE_ENABLED {
             Vec::new()
         } else {

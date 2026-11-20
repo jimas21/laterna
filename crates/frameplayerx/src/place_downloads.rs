@@ -95,6 +95,9 @@ pub enum Failure {
     Unusable,
     /// This device could not store it.
     Disk,
+    /// A folder of the person's own already has the pack's name (one this app
+    /// did not install), so nothing was downloaded over it.
+    Taken,
 }
 
 impl Failure {
@@ -238,8 +241,9 @@ fn scan(dir: &Path) -> HashMap<String, Option<String>> {
         .collect()
 }
 
-/// The packs in the person's folder (those with a manifest) and the version
-/// each names.
+/// The packs this app installed in the person's folder (a manifest and the
+/// install marker) and the version each names. A folder of their own, made or
+/// copied by hand, is not in it: it is never offered an update or a Remove.
 fn scan_user(dir: &Path) -> HashMap<String, Option<String>> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return HashMap::new();
@@ -249,10 +253,12 @@ fn scan_user(dir: &Path) -> HashMap<String, Option<String>> {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            places::is_installed(dir, &name).then(|| {
-                let version = fp_render::env::pack::installed_version(&e.path());
-                (name, version)
-            })
+            (places::is_installed(dir, &name) && places::is_installed_by_app(dir, &name)).then(
+                || {
+                    let version = fp_render::env::pack::installed_version(&e.path());
+                    (name, version)
+                },
+            )
         })
         .collect()
 }
@@ -279,8 +285,13 @@ impl PlaceDownloads {
             return Row::Failed(*f);
         }
         let installed = if user {
-            s.user_installed
-                .get_or_insert_with(|| scan_user(&fp_render::env::user::dir()))
+            let dir = fp_render::env::user::dir();
+            let mine = s.user_installed.get_or_insert_with(|| scan_user(&dir));
+            // A folder of theirs in the way is told, not offered.
+            if !mine.contains_key(&entry.id) && places::is_taken_by_other(&dir, &entry.id) {
+                return Row::Failed(Failure::Taken);
+            }
+            mine
         } else {
             s.installed
                 .get_or_insert_with(|| scan(&fp_render::env::pack::places_dir()))
@@ -391,7 +402,13 @@ impl PlaceDownloads {
         if self.busy() {
             return;
         }
-        match places::remove_pack(dir, id) {
+        // In the person's own folder only what the app installed goes.
+        let removed = if user {
+            places::remove_installed_pack(dir, id)
+        } else {
+            places::remove_pack(dir, id)
+        };
+        match removed {
             Ok(()) => log::info!("place pack {id} removed"),
             Err(e) => log::warn!("cannot remove place pack {id}: {e}"),
         }
@@ -491,6 +508,15 @@ fn run(
     cancel: &AtomicBool,
     user: bool,
 ) -> Result<(), Option<Failure>> {
+    // A folder of theirs with this name is left alone, before any download.
+    if user && places::is_taken_by_other(dir, &entry.id) {
+        log::warn!(
+            "place pack {} not installed: {} is a folder of yours",
+            entry.id,
+            entry.id
+        );
+        return Err(Some(Failure::Taken));
+    }
     places::clean_up(dir);
     // https only, unless the catalog file names this machine and nothing
     // else; a person's own source is always https only.
@@ -519,7 +545,7 @@ fn run(
             .map(|version| log::info!("place pack {id} {version} passed its checks"))
             .map_err(|e| e.to_string())
     };
-    match places::install_pack(&agent, entry, dir, validate, progress, cancel) {
+    match places::install_pack_in(&agent, entry, dir, user, validate, progress, cancel) {
         Ok(path) => {
             log::info!("place pack {} installed at {}", entry.id, path.display());
             Ok(())
@@ -745,10 +771,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("campsite")).unwrap();
         std::fs::write(tmp.join("campsite/manifest.json"), b"{}").unwrap();
+        std::fs::write(tmp.join("campsite").join(places::INSTALLED_MARKER), b"1").unwrap();
         assert!(scan_user(&tmp).contains_key("campsite"));
         std::fs::create_dir_all(tmp.join(".half.part")).unwrap();
         std::fs::write(tmp.join(".half.part/manifest.json"), b"{}").unwrap();
         assert_eq!(scan_user(&tmp).len(), 1);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_pack_the_person_made_by_hand_is_not_installed_updated_or_removed() {
+        let d = PlaceDownloads::default();
+        let tmp = std::env::temp_dir().join(format!("laterna-user-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Theirs, under the id an offer has, and one the app installed.
+        std::fs::create_dir_all(tmp.join("campsite")).unwrap();
+        std::fs::write(tmp.join("campsite/manifest.json"), b"{}").unwrap();
+        std::fs::create_dir_all(tmp.join("lodge")).unwrap();
+        std::fs::write(tmp.join("lodge/manifest.json"), b"{}").unwrap();
+        std::fs::write(tmp.join("lodge").join(places::INSTALLED_MARKER), b"1").unwrap();
+        let found = scan_user(&tmp);
+        assert!(
+            !found.contains_key("campsite"),
+            "their folder shows as installed"
+        );
+        assert!(found.contains_key("lodge"));
+        // Remove leaves theirs and takes the app's.
+        d.remove_in("campsite", &tmp, true);
+        assert!(tmp.join("campsite/manifest.json").is_file());
+        d.remove_in("lodge", &tmp, true);
+        assert!(!tmp.join("lodge").exists());
+        // An install over theirs is refused before any download.
+        let ctx = egui::Context::default();
+        let r = run(
+            &d.shared,
+            &ctx,
+            &entry("campsite"),
+            &tmp,
+            &AtomicBool::new(false),
+            true,
+        );
+        assert_eq!(r, Err(Some(Failure::Taken)));
+        assert!(tmp.join("campsite/manifest.json").is_file());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

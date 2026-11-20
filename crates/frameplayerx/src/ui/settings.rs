@@ -671,6 +671,7 @@ fn catalog_rows(
                         Failure::Mismatch => tr!("place-more-failed-mismatch"),
                         Failure::Unusable => tr!("place-more-failed-unusable"),
                         Failure::Disk => tr!("place-more-failed-disk"),
+                        Failure::Taken => tr!("place-more-failed-taken"),
                     };
                     r.row(&entry.title, Some(text), |ui| {
                         ui.add_enabled_ui(!busy, |ui| {

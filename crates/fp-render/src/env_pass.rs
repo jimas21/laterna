@@ -21,7 +21,7 @@ use crate::pipeline::{self, Depth, PipelineDesc};
 use crate::place_sort::{self, PlaceSorter};
 use crate::{Result, VkContext};
 use ash::vk;
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use gpu_allocator::MemoryLocation;
 use std::sync::Arc;
 
@@ -59,12 +59,86 @@ pub(crate) struct EnvUniform {
     pub screen_r: Vec4,
     /// x: the highlight on (1) or off (0), y: its strength (`SHINE_GAIN`).
     pub shine: Vec4,
+    /// The screen's masking: xyz the frame's middle and w on (1) or off (0);
+    /// xy the frame's half size, zw the half size of the opening in it.
+    pub mask_c: Vec4,
+    pub mask_h: Vec4,
+}
+
+/// The black masking round a film on a room's screen: the screen frame (the
+/// largest picture the room shows) with an opening that is the film's own
+/// shape when closed and the whole frame when open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScreenMask {
+    /// The frame's middle, room space.
+    pub centre: Vec3,
+    pub frame_half: Vec2,
+    pub hole_half: Vec2,
+}
+
+/// The masking for a flat screen of `frame_max` centred at `centre` showing a
+/// picture of `picture` (width and height, metres), `open` of the way from
+/// the picture's shape (0) to the whole frame (1). The picture is never made
+/// smaller by it: the opening is never smaller than the picture, and the
+/// picture's size is the room's own fit. `None` for a curved screen, no
+/// picture, or sizes that are not numbers.
+pub(crate) fn screen_mask(
+    centre: Vec3,
+    frame_max: Vec2,
+    curvature: f32,
+    picture: Vec2,
+    open: f32,
+) -> Option<ScreenMask> {
+    let ok = |v: Vec2| v.is_finite() && v.x > 0.0 && v.y > 0.0;
+    if curvature > 1e-4 || !ok(frame_max) || !ok(picture) || !centre.is_finite() {
+        return None;
+    }
+    let open = if open.is_finite() {
+        open.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let frame_half = frame_max / 2.0;
+    let picture_half = picture / 2.0;
+    let hole_half = picture_half + (frame_half - picture_half).max(Vec2::ZERO) * open;
+    Some(ScreenMask {
+        centre,
+        frame_half,
+        hole_half,
+    })
 }
 
 /// How strongly a baked place's highlight is drawn (`shine.y`): 1 is the
 /// Fresnel reflectance of the picture's colour times what the material map
 /// lets through, which is already faint (a dielectric reflects 4% facing it).
 pub(crate) const SHINE_GAIN: f32 = 1.0;
+
+/// How bright, at the Screen light slider's start, the brightest texel of a
+/// pack's basis light is for a white picture (linear): what the Cinema pack's
+/// own `basis_gain` gives, and so what the other packs are brought to.
+///
+/// A pack's `basis_gain` undoes the bake's 8-bit packing (the basis textures
+/// are scaled up to use their range), so a big dark room, whose light at any
+/// surface is small, is stored with a small gain, and nothing in the format
+/// says how much light that is on screen. The Multiplex pack's is 1/128:
+/// the picture's light there came to at most 0.8% of white, 2 codes of 255
+/// for an ordinary scene even at the slider's top, and moving the slider
+/// changed nothing anyone could see.
+pub(crate) const LIGHT_PEAK: f32 = 0.0625;
+/// The most [`light_boost`] lifts a pack's light.
+pub(crate) const LIGHT_BOOST_MAX: f32 = 16.0;
+
+/// What a pack's `basis_gain` is multiplied by so that the picture's light on
+/// its brightest texel is [`LIGHT_PEAK`] at the slider's start: 1 for a gain
+/// that is there already (or above), up to [`LIGHT_BOOST_MAX`] for a tiny one,
+/// and 1 for a gain that is not a positive number (the light is off then).
+pub(crate) fn light_boost(basis_gain: f32) -> f32 {
+    if basis_gain.is_finite() && basis_gain > 0.0 {
+        (LIGHT_PEAK / basis_gain).clamp(1.0, LIGHT_BOOST_MAX)
+    } else {
+        1.0
+    }
+}
 
 /// What the collapse draws the picture's light with: each patch's colour
 /// times the light's strength (`env_collapse.wgsl`).
@@ -136,6 +210,8 @@ pub(crate) struct EnvInput {
     pub floor_drop: f32,
     /// Seconds.
     pub time: f64,
+    /// The masking round the film, if it is drawn.
+    pub mask: Option<ScreenMask>,
     /// The picture's light, if it lights the place.
     pub screen: Option<LitScreen>,
 }
@@ -189,7 +265,10 @@ impl Look {
             palette2,
             lighting: data.lighting,
             sky: data.sky,
-            baked_gain: data.baked.as_ref().map_or(0.0, |b| b.basis_gain),
+            baked_gain: data
+                .baked
+                .as_ref()
+                .map_or(0.0, |b| b.basis_gain * light_boost(b.basis_gain)),
         }
     }
 
@@ -226,6 +305,10 @@ impl Look {
         if let Sky::Gradient { zenith, horizon } = self.sky {
             u.sky_zenith = vec4(zenith.map(|c| c * dim), 1.0);
             u.sky_horizon = vec4(horizon.map(|c| c * dim), 1.0);
+        }
+        if let Some(m) = input.mask {
+            u.mask_c = m.centre.extend(1.0);
+            u.mask_h = Vec4::new(m.frame_half.x, m.frame_half.y, m.hole_half.x, m.hole_half.y);
         }
         u.palette = self.palette;
         u.palette2 = self.palette2;
@@ -966,7 +1049,12 @@ impl EnvPass {
                 u.baked.y = f32::from(self.basis);
                 u.baked.z = f32::from(self.basis_aniso);
                 u.baked.w = f32::from(self.place_aniso);
-                u.shine = Vec4::new(f32::from(self.shine), SHINE_GAIN, 0.0, 0.0);
+                let accent = if input.accent.is_finite() {
+                    input.accent.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                u.shine = Vec4::new(f32::from(self.shine), SHINE_GAIN, accent, 0.0);
             }
             u
         })
@@ -1091,6 +1179,7 @@ mod tests {
             accent: 1.0,
             floor_drop: 0.0,
             time: 12.5,
+            mask: None,
             screen: None,
         }
     }
@@ -1113,7 +1202,9 @@ mod tests {
         assert_eq!(offset_of!(EnvUniform, screen_c), 1200);
         assert_eq!(offset_of!(EnvUniform, screen_r), 1216);
         assert_eq!(offset_of!(EnvUniform, shine), 1232);
-        assert_eq!(size_of::<EnvUniform>(), 1248);
+        assert_eq!(offset_of!(EnvUniform, mask_c), 1248);
+        assert_eq!(offset_of!(EnvUniform, mask_h), 1264);
+        assert_eq!(size_of::<EnvUniform>(), 1280);
     }
 
     #[test]
@@ -1132,6 +1223,25 @@ mod tests {
         assert_eq!([a[1].location, a[1].offset], [1, 12]);
         // mesh.bin's vertices are these 20 bytes.
         assert_eq!(size_of::<BakedVertex>(), 20);
+    }
+
+    #[test]
+    fn a_dim_packs_light_is_brought_up_to_the_cinemas_and_a_bright_ones_is_left() {
+        // The Multiplex's gains (1/128 and 1/256): lifted so that the picture's
+        // light on its brightest texel is the Cinema pack's.
+        for gain in [1.0 / 128.0, 1.0 / 256.0] {
+            let got = gain * light_boost(gain);
+            assert!((got - LIGHT_PEAK).abs() < 1e-6, "{gain}: {got}");
+        }
+        // The Cinema's own, and anything brighter, as baked.
+        for gain in [0.0625, 0.125, 1.0, 2.5] {
+            assert_eq!(light_boost(gain), 1.0, "{gain}");
+        }
+        // A tiny gain is lifted only so far; nonsense is left alone.
+        assert_eq!(light_boost(1e-6), LIGHT_BOOST_MAX);
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(light_boost(bad), 1.0);
+        }
     }
 
     #[test]
@@ -1156,6 +1266,19 @@ mod tests {
         data.baked = Some(Arc::new(baked));
         let u = Look::new(&data).uniform(&input(1.0));
         assert_eq!(u.baked.x, 2.5);
+        // A dim pack's reaches it brought up (see `light_boost`).
+        let dim = crate::env::pack::Baked {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            colors: none(),
+            basis: none(),
+            material: None,
+            basis_gain: 1.0 / 128.0,
+            seat: None,
+        };
+        data.baked = Some(Arc::new(dim));
+        let u = Look::new(&data).uniform(&input(1.0));
+        assert!((u.baked.x - LIGHT_PEAK).abs() < 1e-6, "{}", u.baked.x);
     }
 
     #[test]
@@ -1233,6 +1356,49 @@ mod tests {
         assert_eq!(
             collapse_weights(&u).expect("read")[3],
             Vec3::new(0.05, 0.1, 0.15)
+        );
+    }
+
+    #[test]
+    fn the_masking_closes_to_the_films_shape_and_never_shrinks_the_picture() {
+        let frame = Vec2::new(14.0, 7.2);
+        let at = |picture: Vec2, open: f32| {
+            screen_mask(Vec3::new(0.0, 4.0, 0.0), frame, 0.0, picture, open).unwrap()
+        };
+        // 2.39, 1.85 and 16:9 films, as the room fits them (by width, or by
+        // height when the film is taller than the frame).
+        for picture in [
+            Vec2::new(14.0, 14.0 / 2.39),
+            Vec2::new(7.2 * 1.85, 7.2),
+            Vec2::new(7.2 * 16.0 / 9.0, 7.2),
+        ] {
+            let closed = at(picture, 0.0);
+            assert_eq!(
+                closed.hole_half,
+                picture / 2.0,
+                "closed is the film's shape"
+            );
+            assert_eq!(closed.frame_half, frame / 2.0);
+            let open = at(picture, 1.0);
+            assert_eq!(open.hole_half, frame / 2.0, "open is the whole screen");
+            let mid = at(picture, 0.5);
+            assert!(mid.hole_half.cmpge(picture / 2.0).all());
+            assert!(mid.hole_half.cmple(frame / 2.0).all());
+        }
+        // A picture that somehow overfills the frame is not cut.
+        let big = at(Vec2::new(20.0, 10.0), 0.0);
+        assert_eq!(big.hole_half, Vec2::new(10.0, 5.0));
+        assert_eq!(at(Vec2::new(20.0, 10.0), 1.0).hole_half, big.hole_half);
+        // Curved screens, nothing to show and nonsense get no masking.
+        let c = Vec3::ZERO;
+        assert!(screen_mask(c, frame, 0.3, Vec2::ONE, 0.0).is_none());
+        assert!(screen_mask(c, frame, 0.0, Vec2::ZERO, 0.0).is_none());
+        assert!(screen_mask(c, frame, 0.0, Vec2::new(f32::NAN, 1.0), 0.0).is_none());
+        assert_eq!(
+            screen_mask(c, frame, 0.0, Vec2::ONE, f32::NAN)
+                .unwrap()
+                .hole_half,
+            frame / 2.0
         );
     }
 

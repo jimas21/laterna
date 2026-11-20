@@ -239,6 +239,17 @@ other packs are copied by hand.
   `"room"` or `"hall"`, sets the echo that the video's sound carries in this
   place (see Sound from the screen in the user guide). Left out, the place's
   own: the Cinema is a hall, a sky has none. Anything else is refused.
+- **What it sounds like.** An optional `"ambience"` in the manifest lists the
+  soft sounds the room makes while it is shown, at the level of the Room
+  ambience slider times each sound's own level: `"murmur"` (a crowd before
+  the film), `"crackle"` (a camp fire) and `"crickets"` (a summer night).
+  Each entry is a name, or `{ "sound": "crickets", "level": 0.4,
+  "with_house_lights": false }`: `level` is 0 to 1 (1 when left out), and
+  `with_house_lights` says whether the sound fades out as the lights go down
+  for the film (true for a murmur, false for the others when left out). At
+  most 4, none twice; an unknown name, a level outside 0 to 1 or a malformed
+  entry refuses the pack. `[]` is a quiet room; leaving the field out gives
+  the place's own (the Cinema's murmur).
 - **What is in it.** A manifest (`manifest.json`: the id, the screen, the
   seats), a mesh (`mesh.bin`), and PNG textures that are all the same size:
   the room with the house lights up, the room with them off, and eight
@@ -252,6 +263,37 @@ other packs are copied by hand.
   made for: a white picture of radiance 1.0 over a patch; its top is four
   times that), and the house lights fade the same way. The seats and
   the screen come from the manifest, so Size still picks Front, Middle or Back.
+- **A dim bake is brought up.** `basis_gain` undoes the bake's 8-bit packing
+  (the light pictures are stored scaled up to use their range), so a big dark
+  room is stored with a small gain, and the number says nothing about how much
+  light that is on screen. The Multiplex's 1/128 left the film's light at most
+  0.8% of white, invisible for an ordinary scene whatever the Screen light
+  slider said. The app lifts a gain below 0.0625 (the Cinema pack's) to 0.0625,
+  by up to 16 times, so the brightest texel's light from a white picture is the
+  same in every pack at the slider's start; a gain at or above 0.0625 is used
+  as baked. Screen light 0 turns the picture's light and its highlight off
+  completely, in a pack of your own too.
+- **The film in the glossy surfaces.** Where the material texture's G (specular
+  mask) is above 0, the playing film is reflected: its colour and strength
+  follow the film, the slider scales them, and it goes with Screen light 0. A
+  texel the pack marks as an accent light (B) is a lamp, not a mirror, and gets
+  none of it. A room's own lights baked into `house.ktx2` and `dark.ktx2`
+  (blue rail lines and the pools they leave) are static: only Minimal lighting
+  dims the texels B marks, so a pack that wants its reflections to follow the
+  film bakes them neutral and dim, or as film-driven highlights with G.
+- **Booth glass (optional).** A top-level `"booth_glass": { "corners":
+  [[x,y,z], [x,y,z], [x,y,z], [x,y,z]], "opacity": 0.06 }` makes the playing
+  film show, mirrored left to right, on the projection booth's window. The
+  corners are place coordinates (the same frame as `screen`), in the order
+  bottom left, bottom right, top right, top left as seen from the seats looking
+  at the glass; they must make a flat rectangle (the fourth within 5 cm of the
+  other three), 0.1 to 30 m a side. `opacity` is 0 to 0.15: how much of the
+  film's light is added, so 0.04 to 0.08 is a reflection you notice only when
+  you turn round and look. It is drawn only while a video plays on a flat
+  screen, over the room with no depth test (nothing stands in front of it), and
+  with the film's own picture settings. A pack without the field is unchanged.
+  Builds from before the field read the manifest without it (unknown fields are
+  ignored), so a pack can carry it today.
 - **Limits.** At most 100,000 triangles and 200,000 vertices; textures a power
   of two up to 4096 pixels across; every number a real number; every file the
   size its counts say. A pack that breaks one is not used: the app writes a
@@ -302,13 +344,27 @@ other packs are copied by hand.
   RGBA8), and it is counted in `textures.bytes` and checked like the others.
   Red is the surface's roughness (0 a mirror, 1 chalk), green its specular mask
   (0 matte, 1 a glossy, non-metal surface, which reflects about 4% of the
-  picture facing it and more at a slant); blue and alpha are reserved, leave
-  them 0 and 255. `textures.material_size` (a power of two up to `size`) is its
+  picture facing it and more at a slant); blue is the accent mask (1 on a
+  texel that is an exit sign, a step light or another accent light, 0
+  everywhere else: with Minimal lighting on, those texels are dimmed to
+  black while the film plays and come back when it pauses; a set without a
+  material texture, or with blue at 0, is never touched); alpha is reserved,
+  leave it 255. `textures.material_size` (a power of two up to `size`) is its
   side, the basis size when it is left out. A set without one is drawn as if it
   had a single texel of weak, rough material (roughness 0.85, mask 0.25), so a
   pack made before this existed looks the same as before for all practical
   purposes. Formats 1 and 2 may not name a material texture. An app that does
   not know the field ignores it.
+- **The Play moment.** When a film starts in a place the house lights go
+  down over 1.5 seconds, like a cinema's dimmer, and the screen's black
+  masking closes to the film's own shape (2.39, 1.85 or 16:9: the picture
+  is never made smaller, only the lit screen around it is blacked out).
+  When it pauses the lights come up to about 30%, the masking half opens,
+  and at the end they come all the way up. A baked pack gets the masking
+  from the manifest's `screen` (its centre and largest size): whatever the
+  mesh has on the screen's plane inside that frame and outside the film is
+  drawn black, so a pack should keep its screen surface and any wall just
+  behind it on that plane (within 8 cm) and nothing else there.
 - **The picture's highlight.** In a baked place the film's screen is a lamp the
   glossy surfaces reflect. The shader intersects each surface's reflected view
   ray with the picture's rectangle and adds the picture's colour there, widened
@@ -399,6 +455,14 @@ Settings > Places. The app downloads nothing else and nothing on its own.
   renamed to `<places dir>/<id>/`, an older copy being replaced in one rename.
   A failure or a Cancel removes everything it made; nothing is resumed.
   Remove deletes the pack's folder.
+- **Your own sources never touch your own folders.** A pack installed from a
+  source the person added goes to `<environments>/<id>`, where their own packs
+  live too. Every pack the app installs gets a `.laterna-installed` file; only
+  a folder with it is shown as Installed, offered Update, replaced or removed.
+  A folder of the person's with the same name (no marker) is left alone: the
+  row says so, nothing is downloaded over it, and Remove never deletes it.
+  (A pack installed from a source by beta 18 has no marker; reinstall it after
+  moving or deleting the old folder.)
 - **Tests and preview.** `LATERNA_PLACES_CATALOG=<file>` replaces the built-in
   catalog with a file of the same format and allows plain http to this machine,
   so tests and the desktop preview can use a local fixture server. It is not

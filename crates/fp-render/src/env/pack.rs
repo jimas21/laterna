@@ -28,8 +28,10 @@
 
 use super::ktx2::{self, Encoding};
 use super::{
-    Acoustics, Layout, Lighting, Place, PlaceData, PlaceKind, ScreenFrame, Seat, SeatName, Sky,
+    Acoustics, AmbienceLoop, BoothGlass, Layout, Lighting, Place, PlaceData, PlaceKind,
+    ScreenFrame, Seat, SeatName, Sky,
 };
+use fp_media::audio::ambience::Sound;
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -185,6 +187,114 @@ pub struct Manifest {
     /// own (a cinema is a hall).
     #[serde(default)]
     pub acoustics: Option<String>,
+    /// The sounds the room makes while it is shown: each a name ("murmur",
+    /// "crackle" or "crickets") or `{ "sound": name, "level": 0 to 1,
+    /// "with_house_lights": true | false }`. An empty list is a quiet room;
+    /// left out, the place's own.
+    #[serde(default)]
+    pub ambience: Option<Vec<AmbienceSpec>>,
+    /// The projection booth's window, for the film's reflection.
+    #[serde(default)]
+    pub booth_glass: Option<BoothGlassSpec>,
+}
+
+/// The most sounds a pack's room makes at once.
+pub const MAX_AMBIENCE: usize = 4;
+
+/// The glass of the pack's projection booth, as the manifest writes it: the
+/// playing film is drawn mirrored on it, faintly. A top-level, optional
+/// field: a build that does not know it ignores it.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BoothGlassSpec {
+    /// Place coordinates (the screen's frame), bottom left, bottom right, top
+    /// right and top left as seen from the seats.
+    pub corners: [[f32; 3]; 4],
+    /// 0 to [`BoothGlass::MAX_OPACITY`]; 0 draws nothing.
+    pub opacity: f32,
+}
+
+impl BoothGlassSpec {
+    /// How far the fourth corner may be from where the other three put it,
+    /// metres: the glass is a flat rectangle, and the film is drawn on the
+    /// parallelogram of the first three.
+    const CORNER_SLACK: f32 = 0.05;
+    /// The shortest and longest an edge may be, metres.
+    const EDGE: std::ops::RangeInclusive<f32> = 0.1..=30.0;
+
+    fn check(&self) -> Result<BoothGlass, PackError> {
+        if !self
+            .corners
+            .iter()
+            .all(|c| finite3(*c) && c.iter().all(|v| v.abs() <= 1000.0))
+        {
+            return bad("booth_glass has a corner that is not a number, or too far away");
+        }
+        if !(self.opacity.is_finite() && (0.0..=BoothGlass::MAX_OPACITY).contains(&self.opacity)) {
+            return bad(format!(
+                "booth_glass opacity {} is not 0 to {}",
+                self.opacity,
+                BoothGlass::MAX_OPACITY
+            ));
+        }
+        let [bl, br, tr, tl] = self.corners.map(Vec3::from);
+        let (across, up) = (br - bl, tl - bl);
+        if !Self::EDGE.contains(&across.length()) || !Self::EDGE.contains(&up.length()) {
+            return bad("booth_glass is too small or too large (0.1 to 30 m a side)");
+        }
+        if across.cross(up).length() < 0.25 * across.length() * up.length() {
+            return bad("booth_glass corners are in a line, not a rectangle");
+        }
+        if tr.distance(br + up) > Self::CORNER_SLACK {
+            return bad("booth_glass corners do not make a rectangle");
+        }
+        Ok(BoothGlass {
+            corners: [bl, br, tr, tl],
+            opacity: self.opacity,
+        })
+    }
+}
+
+/// One of a pack's ambience sounds, as the manifest writes it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum AmbienceSpec {
+    Name(String),
+    Full {
+        sound: String,
+        #[serde(default = "one")]
+        level: f32,
+        #[serde(default)]
+        with_house_lights: Option<bool>,
+    },
+}
+
+impl AmbienceSpec {
+    /// The sound it asks for and how, or why that is not usable.
+    fn resolve(&self) -> Result<AmbienceLoop, PackError> {
+        let (name, level, lights) = match self {
+            AmbienceSpec::Name(n) => (n, 1.0, None),
+            AmbienceSpec::Full {
+                sound,
+                level,
+                with_house_lights,
+            } => (sound, *level, *with_house_lights),
+        };
+        let Some(sound) = Sound::from_id(name) else {
+            return bad(format!(
+                "ambience {name:?} is not murmur, crackle or crickets"
+            ));
+        };
+        if !(level.is_finite() && (0.0..=1.0).contains(&level)) {
+            return bad(format!("ambience {name:?} level {level} is not 0 to 1"));
+        }
+        Ok(AmbienceLoop {
+            sound,
+            // A crowd's murmur goes with the house lights; the outdoors does
+            // not.
+            with_house_lights: lights.unwrap_or(sound == Sound::Murmur),
+            level,
+        })
+    }
 }
 
 /// A file name that stays inside the pack folder.
@@ -298,6 +408,10 @@ impl Manifest {
         {
             return bad(format!("acoustics {a:?} is not dry, room or hall"));
         }
+        self.ambience_loops()?;
+        if let Some(glass) = &self.booth_glass {
+            glass.check()?;
+        }
         let seat_gains = self.seat_sets.values().filter_map(|s| s.basis_gain);
         for gain in std::iter::once(self.basis_gain).chain(seat_gains) {
             if !(gain.is_finite() && (0.0..=1000.0).contains(&gain)) {
@@ -305,6 +419,30 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+
+    /// The sounds the manifest asks for, checked: `None` when it says
+    /// nothing (the place's own), an empty list for a quiet room.
+    fn ambience_loops(&self) -> Result<Option<Vec<AmbienceLoop>>, PackError> {
+        let Some(specs) = &self.ambience else {
+            return Ok(None);
+        };
+        if specs.len() > MAX_AMBIENCE {
+            return bad(format!(
+                "{} ambience sounds ({MAX_AMBIENCE} at most)",
+                specs.len()
+            ));
+        }
+        let loops = specs
+            .iter()
+            .map(AmbienceSpec::resolve)
+            .collect::<Result<Vec<_>, _>>()?;
+        for (i, l) in loops.iter().enumerate() {
+            if loops[..i].iter().any(|o| o.sound == l.sound) {
+                return bad(format!("ambience {:?} twice", l.sound.id()));
+            }
+        }
+        Ok(Some(loops))
     }
 
     /// The seats and screen. The floor is the stage floor, y = 0.
@@ -329,6 +467,12 @@ impl Manifest {
             }),
             floor_y: 0.0,
             acoustics: self.acoustics.as_deref().and_then(Acoustics::from_id),
+            ambience: self.ambience_loops().ok().flatten(),
+            booth_glass: self
+                .booth_glass
+                .as_ref()
+                .and_then(|g| g.check().ok())
+                .filter(|g| g.opacity > 0.0),
         }
     }
 
@@ -2692,6 +2836,119 @@ mod tests {
             assert_eq!(m.layout().acoustics, Some(want));
         }
         assert!(edited3(&dir, |j| j["acoustics"] = "cathedral".into()).is_err());
+    }
+
+    #[test]
+    fn a_pack_names_its_own_ambience_or_leaves_it_to_the_place() {
+        use fp_media::audio::ambience::Sound;
+        let dir = fixture3("f3ambience");
+        assert_eq!(edited3(&dir, |_| {}).unwrap().layout().ambience, None);
+        // A quiet room says so with an empty list.
+        let quiet = edited3(&dir, |j| j["ambience"] = serde_json::json!([])).unwrap();
+        assert_eq!(quiet.layout().ambience, Some(Vec::new()));
+        // Names, and names with levels.
+        let m = edited3(&dir, |j| {
+            j["ambience"] = serde_json::json!([
+                "crackle",
+                { "sound": "crickets", "level": 0.4 },
+                { "sound": "murmur", "level": 0.5, "with_house_lights": false },
+            ]);
+        })
+        .unwrap();
+        let loops = m.layout().ambience.unwrap();
+        assert_eq!(loops.len(), 3);
+        assert_eq!((loops[0].sound, loops[0].level), (Sound::Crackle, 1.0));
+        assert!(!loops[0].with_house_lights);
+        assert_eq!((loops[1].sound, loops[1].level), (Sound::Crickets, 0.4));
+        assert_eq!(loops[2].sound, Sound::Murmur);
+        assert!(!loops[2].with_house_lights);
+        let murmur = edited3(&dir, |j| j["ambience"] = serde_json::json!(["murmur"])).unwrap();
+        assert!(murmur.layout().ambience.unwrap()[0].with_house_lights);
+        // Everything else is refused.
+        for bad in [
+            serde_json::json!(["rain"]),
+            serde_json::json!(["murmur", "murmur"]),
+            serde_json::json!([{ "sound": "murmur", "level": 1.5 }]),
+            serde_json::json!([{ "sound": "murmur", "level": -0.1 }]),
+            serde_json::json!([{ "level": 0.5 }]),
+            serde_json::json!(["murmur", "crackle", "crickets", "murmur", "crackle"]),
+            serde_json::json!("murmur"),
+            serde_json::json!([3]),
+        ] {
+            assert!(
+                edited3(&dir, |j| j["ambience"] = bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// A booth window 2 m wide and 1 m high on the back wall, as seen from
+    /// the seats, at `opacity`.
+    fn booth(opacity: f32) -> serde_json::Value {
+        serde_json::json!({
+            "corners": [[1.0, 5.0, 24.0], [-1.0, 5.0, 24.0], [-1.0, 6.0, 24.0], [1.0, 6.0, 24.0]],
+            "opacity": opacity
+        })
+    }
+
+    #[test]
+    fn a_pack_may_have_a_booth_glass_and_a_build_without_the_field_ignores_it() {
+        let dir = fixture3("f3booth");
+        // None by default, and a pack without it is as it was.
+        assert_eq!(edited3(&dir, |_| {}).unwrap().layout().booth_glass, None);
+        let m = edited3(&dir, |j| j["booth_glass"] = booth(0.06)).unwrap();
+        let glass = m.layout().booth_glass.expect("the glass");
+        assert_eq!(glass.opacity, 0.06);
+        assert_eq!(glass.corners[0], Vec3::new(1.0, 5.0, 24.0));
+        assert_eq!(glass.corners[2], Vec3::new(-1.0, 6.0, 24.0));
+        // An opacity of 0 is a glass that is not drawn.
+        let off = edited3(&dir, |j| j["booth_glass"] = booth(0.0)).unwrap();
+        assert_eq!(off.layout().booth_glass, None);
+        // Builds from before the field read a manifest with it as one
+        // without: no manifest field is refused for being unknown.
+        let text = std::fs::read_to_string(dir.join("manifest.json")).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        json["booth_glass"] = booth(0.05);
+        json["some_future_field"] = serde_json::json!({ "x": 1 });
+        assert!(Manifest::parse(&serde_json::to_vec(&json).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn a_booth_glass_that_is_not_a_faint_flat_rectangle_is_refused() {
+        let dir = fixture3("f3booth-bad");
+        let mut cases = vec![
+            ("opacity too high", booth(0.16)),
+            ("opacity negative", booth(-0.01)),
+            ("opacity not a number", booth(f32::NAN)),
+            ("no corners", serde_json::json!({ "opacity": 0.05 })),
+            (
+                "three corners",
+                serde_json::json!({ "corners": [[0, 0, 0], [1, 0, 0], [1, 1, 0]], "opacity": 0.05 }),
+            ),
+            ("not an object", serde_json::json!(0.05)),
+        ];
+        let mut skew = booth(0.05);
+        skew["corners"][2] = serde_json::json!([-1.0, 7.0, 24.0]);
+        cases.push(("not a rectangle", skew));
+        let mut line = booth(0.05);
+        line["corners"] = serde_json::json!([[0, 5, 24], [1, 5, 24], [2, 5, 24], [1, 5, 24]]);
+        cases.push(("corners in a line", line));
+        let mut tiny = booth(0.05);
+        tiny["corners"] = serde_json::json!([
+            [0.01, 5.0, 24.0],
+            [0.0, 5.0, 24.0],
+            [0.0, 5.01, 24.0],
+            [0.01, 5.01, 24.0]
+        ]);
+        cases.push(("too small", tiny));
+        let mut far = booth(0.05);
+        far["corners"][0] = serde_json::json!([1.0e9, 5.0, 24.0]);
+        cases.push(("too far", far));
+        for (what, glass) in cases {
+            // serde_json writes NaN as null, which is not a number either.
+            let why = edited3(&dir, |j| j["booth_glass"] = glass.clone());
+            assert!(why.is_err(), "{what} was accepted");
+        }
     }
 
     #[test]

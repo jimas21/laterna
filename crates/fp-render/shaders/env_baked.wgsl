@@ -40,7 +40,8 @@
 @group(0) @binding(5) var lightmap: texture_2d<f32>;
 
 // The pack's material texture: R roughness, G specular mask (0 matte,
-// 1 a glossy dielectric), B and A reserved. A pack without one gets a 1 x 1
+// 1 a glossy dielectric), B the accent mask (1 an exit sign, step or other
+// accent light, dimmed with Minimal lighting; 0 default), A reserved. A pack without one gets a 1 x 1
 // weak, rough one (src/env/pack.rs `DEFAULT_MATERIAL`).
 @group(0) @binding(6) var material: texture_2d<f32>;
 
@@ -92,7 +93,16 @@ fn base_color(uv: vec2<f32>) -> vec3<f32> {
 }
 
 // Fog and dither: the end of every place's fragment.
-fn finish(lit_color: vec3<f32>, in: VsOut) -> vec4<f32> {
+fn finish(colour: vec3<f32>, in: VsOut) -> vec4<f32> {
+    var lit_color = colour * screen_mask(in.rpos);
+    // The pack's accent texels (material B: exit signs, step lights) glow as
+    // baked, or less when Minimal lighting dims them for the film. env.shine.z
+    // is a uniform, so the read is skipped (and stays in uniform control
+    // flow) when they are as baked.
+    if (env.shine.z < 1.0) {
+        let accent = clamp(textureSample(material, basis_sampler, in.uv).b, 0.0, 1.0);
+        lit_color *= 1.0 - accent * (1.0 - clamp(env.shine.z, 0.0, 1.0));
+    }
     let dist = length(env.eye_pos[pc.eye].xyz - in.rpos);
     let span = max(env.fog_range.y - env.fog_range.x, 0.001);
     let fog = clamp((dist - env.fog_range.x) / span, 0.0, 1.0) * env.fog.w;
@@ -131,7 +141,7 @@ fn span_cover(c: f32, h: f32, s: f32) -> f32 {
 // come first, in uniform control flow; everything after is arithmetic that
 // may differ from pixel to pixel.
 fn shine_light(in: VsOut) -> vec3<f32> {
-    let m = textureSample(material, basis_sampler, in.uv).rg;
+    let m = textureSample(material, basis_sampler, in.uv).rgb;
     let slope = cross(dpdx(in.rpos), dpdy(in.rpos));
 
     let to_eye = env.eye_pos[pc.eye].xyz - in.rpos;
@@ -183,7 +193,11 @@ fn shine_light(in: VsOut) -> vec3<f32> {
     let fresnel = F0 + (max(1.0 - rough, F0) - F0) * edge;
 
     let valid = flat_len > 1e-20 && heading < -0.001 && t > 0.0;
-    let strength = env.shine.y * env.screen_n.w * clamp(m.y, 0.0, 1.0) * fresnel * cover;
+    // The pack's accent lights (material B: rails, exit signs, step lights)
+    // are lamps, not mirrors: the film is not reflected in them, so nothing
+    // of the highlight is added where the pack marks one.
+    let mirror = clamp(m.y, 0.0, 1.0) * (1.0 - clamp(m.z, 0.0, 1.0));
+    let strength = env.shine.y * env.screen_n.w * mirror * fresnel * cover;
     return select(vec3<f32>(0.0), colour * strength, valid);
 }
 
