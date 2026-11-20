@@ -27,8 +27,11 @@ use crate::url::{check_download_url, is_loopback_host, parse_url};
 
 /// The most a pack's zip may be, and so the most the app will download.
 pub const MAX_PACK_BYTES: u64 = 40 << 20;
-/// The most a pack may hold once unpacked (its textures are at most 32 MiB).
-pub const MAX_UNPACKED_BYTES: u64 = 64 << 20;
+/// The most a pack may hold once unpacked. A format 3 pack has a set for each
+/// of its three seats, each with up to 32 MiB of textures (the renderer's
+/// `MAX_TEXTURE_BYTES`) and a mesh of up to about 5.2 MB, plus its manifest:
+/// 3 x 32 MiB and 16 MiB for the rest.
+pub const MAX_UNPACKED_BYTES: u64 = 112 << 20;
 /// The most files a pack's zip may hold.
 const MAX_ENTRIES: usize = 64;
 
@@ -857,6 +860,46 @@ mod tests {
         let path = tmp.path().join("p.zip");
         fs::write(&path, &zip).unwrap();
         let err = extract_zip_capped(&path, &tmp.path().join("out"), 1 << 20).unwrap_err();
+        assert!(matches!(err, Error::ArchiveTooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_three_seat_pack_fits_the_unpacked_cap_and_a_bigger_one_does_not() {
+        // A format 3 pack with three full sets (32 MiB of textures each, and a
+        // mesh) must install; anything past the cap is refused before unpacking.
+        let tmp = tempfile::tempdir().unwrap();
+        let set = vec![0u8; 32 << 20];
+        let mesh = vec![0u8; 5 << 20];
+        let fits = zip_bytes(
+            tmp.path(),
+            &[
+                Item::File("multiplex/manifest.json", b"{}", 0o644),
+                Item::File("multiplex/front-house.ktx2", &set, 0o644),
+                Item::File("multiplex/middle-house.ktx2", &set, 0o644),
+                Item::File("multiplex/back-house.ktx2", &set, 0o644),
+                Item::File("multiplex/front-mesh.bin", &mesh, 0o644),
+                Item::File("multiplex/middle-mesh.bin", &mesh, 0o644),
+                Item::File("multiplex/back-mesh.bin", &mesh, 0o644),
+            ],
+        );
+        let path = tmp.path().join("fits.zip");
+        fs::write(&path, &fits).unwrap();
+        inspect(&path, "multiplex").unwrap();
+
+        let over = vec![0u8; (MAX_UNPACKED_BYTES - (96 << 20)) as usize + 1];
+        let too_big = zip_bytes(
+            tmp.path(),
+            &[
+                Item::File("multiplex/manifest.json", b"{}", 0o644),
+                Item::File("multiplex/front-house.ktx2", &set, 0o644),
+                Item::File("multiplex/middle-house.ktx2", &set, 0o644),
+                Item::File("multiplex/back-house.ktx2", &set, 0o644),
+                Item::File("multiplex/extra.bin", &over, 0o644),
+            ],
+        );
+        let path = tmp.path().join("over.zip");
+        fs::write(&path, &too_big).unwrap();
+        let err = inspect(&path, "multiplex").unwrap_err();
         assert!(matches!(err, Error::ArchiveTooLarge(_)), "{err}");
     }
 
