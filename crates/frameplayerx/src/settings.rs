@@ -812,16 +812,15 @@ mod tests {
         let p = Settings::load(&path);
         assert_eq!(p.ambience_level, AMBIENCE_START);
         assert!(!p.minimal_lighting);
-        std::fs::write(
-            &path,
-            r#"{"ambience_level": 9.0, "minimal_lighting": true}"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"{"room_ambience": 9.0, "minimal_lighting": true}"#).unwrap();
         let p = Settings::load(&path);
         assert_eq!(p.ambience_level, 1.0);
         assert!(p.minimal_lighting);
-        std::fs::write(&path, r#"{"ambience_level": -2.0}"#).unwrap();
+        std::fs::write(&path, r#"{"room_ambience": -2.0}"#).unwrap();
         assert_eq!(Settings::load(&path).ambience_level, 0.0);
+        // beta.18 saved 0.5 under the old name: it is dropped, not kept.
+        std::fs::write(&path, r#"{"ambience_level": 0.5}"#).unwrap();
+        assert_eq!(Settings::load(&path).ambience_level, AMBIENCE_START);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
