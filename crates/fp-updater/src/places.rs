@@ -212,10 +212,32 @@ pub fn clean_up(places_dir: &Path) {
     }
 }
 
+/// The file the app writes into every pack folder it installs. A folder in
+/// the person's own `environments` folder without it is theirs (made or
+/// copied by hand): the app never replaces it, removes it or offers an update
+/// for it.
+pub const INSTALLED_MARKER: &str = ".laterna-installed";
+
 /// Whether the pack `id` is installed in `places_dir` (a folder with a
 /// `manifest.json`; whether it still loads is the app's business).
 pub fn is_installed(places_dir: &Path, id: &str) -> bool {
     id_ok(id) && places_dir.join(id).join("manifest.json").is_file()
+}
+
+/// Whether the folder `id` in `places_dir` is a pack this app installed (it
+/// holds the marker, a plain file, not a link).
+pub fn is_installed_by_app(places_dir: &Path, id: &str) -> bool {
+    id_ok(id)
+        && fs::symlink_metadata(places_dir.join(id).join(INSTALLED_MARKER))
+            .is_ok_and(|m| m.file_type().is_file())
+}
+
+/// Whether something is in the way of installing the pack `id`: a folder (or
+/// file, or link) of that name that this app did not install.
+pub fn is_taken_by_other(places_dir: &Path, id: &str) -> bool {
+    id_ok(id)
+        && fs::symlink_metadata(places_dir.join(id)).is_ok()
+        && !is_installed_by_app(places_dir, id)
 }
 
 /// Deletes the installed pack `id`. Nothing installed is not an error.
@@ -224,6 +246,18 @@ pub fn remove_pack(places_dir: &Path, id: &str) -> Result<()> {
         return Err(Error::InvalidPack(format!("{id:?} is not a pack id")));
     }
     remove_tree(&places_dir.join(id))
+}
+
+/// [`remove_pack`] for a folder the person also keeps their own packs in:
+/// only a pack this app installed is deleted; anything else of that name is
+/// left alone and is an error.
+pub fn remove_installed_pack(places_dir: &Path, id: &str) -> Result<()> {
+    if is_taken_by_other(places_dir, id) {
+        return Err(Error::InvalidPack(format!(
+            "{id} is a folder of yours, not one this app installed"
+        )));
+    }
+    remove_pack(places_dir, id)
 }
 
 /// Checks a downloaded zip before anything is unpacked: not too many files,
@@ -297,28 +331,62 @@ pub fn install_pack(
     progress: impl FnMut(u64, u64),
     cancel: &AtomicBool,
 ) -> Result<PathBuf> {
+    install_pack_in(agent, entry, places_dir, false, validate, progress, cancel)
+}
+
+/// [`install_pack`], for a folder that may hold packs of the person's own.
+/// `keep_others` refuses (before anything is downloaded, and again before
+/// anything is replaced) to touch a folder of that name that this app did not
+/// install. Every pack this installs gets [`INSTALLED_MARKER`].
+pub fn install_pack_in(
+    agent: &ureq::Agent,
+    entry: &CatalogEntry,
+    places_dir: &Path,
+    keep_others: bool,
+    validate: impl FnOnce(&Path) -> std::result::Result<(), String>,
+    progress: impl FnMut(u64, u64),
+    cancel: &AtomicBool,
+) -> Result<PathBuf> {
     // The catalog text is checked when it is parsed; this stops a hand-made
     // entry from naming a folder outside places_dir, or an endless download.
     // A plain http address is the caller's agent to refuse (the app's is
     // https-only); loopback http is allowed by the URL rule for tests.
     check_entry(entry, true).map_err(Error::InvalidPack)?;
+    if keep_others && is_taken_by_other(places_dir, &entry.id) {
+        return Err(taken_error(&entry.id));
+    }
     fs::create_dir_all(places_dir).ctx("cannot create", places_dir)?;
     let staging = staging_dir(places_dir, &entry.id);
     remove_tree(&staging)?;
     fs::create_dir(&staging).ctx("cannot create", &staging)?;
     let result = fetch_and_place(
-        agent, entry, places_dir, &staging, validate, progress, cancel,
+        agent,
+        entry,
+        places_dir,
+        &staging,
+        keep_others,
+        validate,
+        progress,
+        cancel,
     );
     // The zip, the unpacked copy: gone, whether it worked or not.
     let _ = remove_tree(&staging);
     result
 }
 
+fn taken_error(id: &str) -> Error {
+    Error::InvalidPack(format!(
+        "{id} is a folder of yours, not one this app installed, so it was left alone"
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn fetch_and_place(
     agent: &ureq::Agent,
     entry: &CatalogEntry,
     places_dir: &Path,
     staging: &Path,
+    keep_others: bool,
     validate: impl FnOnce(&Path) -> std::result::Result<(), String>,
     progress: impl FnMut(u64, u64),
     cancel: &AtomicBool,
@@ -338,8 +406,17 @@ fn fetch_and_place(
     extract_zip_capped(&zip, &unpacked, MAX_UNPACKED_BYTES)?;
     only_plain_files(&unpacked)?;
     validate(&unpacked).map_err(Error::InvalidPack)?;
+    // What marks it as this app's, written before it is moved in so a pack
+    // is never in the folder without it.
+    let marker = unpacked.join(INSTALLED_MARKER);
+    fs::write(&marker, entry.version.as_bytes()).ctx("cannot write", &marker)?;
 
     let dest = places_dir.join(&entry.id);
+    // Checked again right before the replace: the download took a while, and
+    // the person may have put a folder there since.
+    if keep_others && is_taken_by_other(places_dir, &entry.id) {
+        return Err(taken_error(&entry.id));
+    }
     let old = old_dir(places_dir, &entry.id);
     remove_tree(&old)?;
     let replacing = fs::symlink_metadata(&dest).is_ok();
@@ -771,6 +848,62 @@ mod tests {
             run(&entry, &places, accept).unwrap();
             assert!(is_installed(&places, "campsite"), "{name}");
         }
+    }
+
+    #[test]
+    fn a_folder_of_the_persons_own_is_never_replaced_or_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = Server::start();
+        let zip = good_zip(tmp.path(), "campsite");
+        server.route("/campsite.zip", Route::Bytes(zip.clone()));
+        let entry = entry_for(&server, "campsite", &zip);
+        let places = tmp.path().join("environments");
+        // Their own pack, made by hand under the name the entry has.
+        let own = places.join("campsite");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("manifest.json"), b"{\"id\":\"mine\"}").unwrap();
+        fs::write(own.join("mesh.bin"), b"theirs").unwrap();
+        assert!(is_installed(&places, "campsite"));
+        assert!(!is_installed_by_app(&places, "campsite"));
+        assert!(is_taken_by_other(&places, "campsite"));
+
+        // Refused before anything is downloaded, and nothing is touched.
+        let r = install_pack_in(
+            &crate::default_agent(),
+            &entry,
+            &places,
+            true,
+            accept,
+            |_, _| {},
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(r, Err(Error::InvalidPack(_))), "{r:?}");
+        assert_eq!(server.hits(), 0, "it downloaded over their folder");
+        assert_eq!(fs::read(own.join("mesh.bin")).unwrap(), b"theirs");
+        // Nor is it removed.
+        assert!(remove_installed_pack(&places, "campsite").is_err());
+        assert_eq!(fs::read(own.join("mesh.bin")).unwrap(), b"theirs");
+
+        // Where nothing is in the way it installs, marked, and a second
+        // install (an update) replaces it, and Remove deletes it.
+        fs::remove_dir_all(&own).unwrap();
+        for _ in 0..2 {
+            install_pack_in(
+                &crate::default_agent(),
+                &entry,
+                &places,
+                true,
+                accept,
+                |_, _| {},
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert!(is_installed_by_app(&places, "campsite"));
+            assert!(!is_taken_by_other(&places, "campsite"));
+        }
+        remove_installed_pack(&places, "campsite").unwrap();
+        assert!(!is_installed(&places, "campsite"));
+        assert_nothing_left(&places);
     }
 
     #[test]
