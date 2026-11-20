@@ -43,7 +43,7 @@ pub enum Place {
 
 /// One of the sounds a place makes while it is shown (see
 /// [`Place::ambience`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AmbienceLoop {
     pub sound: fp_media::audio::ambience::Sound,
     /// Whether the sound goes with the house lights: heard while they are up

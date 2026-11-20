@@ -278,7 +278,7 @@ impl Look {
         }
         if let Some(m) = input.mask {
             u.mask_c = m.centre.extend(1.0);
-            u.mask_h = vec4(m.frame_half.x, m.frame_half.y, m.hole_half.x, m.hole_half.y);
+            u.mask_h = Vec4::new(m.frame_half.x, m.frame_half.y, m.hole_half.x, m.hole_half.y);
         }
         u.palette = self.palette;
         u.palette2 = self.palette2;
