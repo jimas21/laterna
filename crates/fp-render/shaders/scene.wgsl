@@ -62,6 +62,11 @@ struct Params {
     // chroma: x first-row step, y rows, z the plane's rows, w count
     tp10: vec4<f32>,
     tp10_uv: vec4<f32>,
+    // The booth glass, world space: xyz its bottom left corner, w the film's
+    // opacity on it (0: none); the vectors to its bottom right and top left.
+    booth_o: vec4<f32>,
+    booth_u: vec4<f32>,
+    booth_v: vec4<f32>,
 };
 
 struct PushConstants {
@@ -254,6 +259,21 @@ fn flat_uv(origin: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
     }
     let v = 0.5 - p.y / h;
     return vec3<f32>(u, v, 1.0);
+}
+
+// Where a ray meets the booth glass: xy its coordinates on it (0..1, across
+// from the bottom left and up), z 1 when it meets the glass's plane in front
+// of the eye and facing it. Not clamped, so derivatives are good at its edge.
+fn glass_at(origin: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
+    let u = params.booth_u.xyz;
+    let v = params.booth_v.xyz;
+    let n = normalize(cross(u, v));
+    let denom = dot(d, n);
+    if (abs(denom) < 1e-5) { return vec3<f32>(INVALID, 0.0); }
+    let t = dot(params.booth_o.xyz - origin, n) / denom;
+    if (t <= 0.0) { return vec3<f32>(INVALID, 0.0); }
+    let q = origin + t * d - params.booth_o.xyz;
+    return vec3<f32>(dot(q, u) / dot(u, u), dot(q, v) / dot(v, v), 1.0);
 }
 
 fn to_eye_rect(uv: vec2<f32>, eye: u32) -> vec2<f32> {
@@ -455,6 +475,32 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
+    // The booth glass, for a flat screen in a place that has one. The branch
+    // is on uniforms, so the derivatives are taken in uniform control flow.
+    var glass_uv = INVALID;
+    var glass_hit = false;
+    if (params.mode.x == 0u && params.booth_o.w > 0.0) {
+        let g = glass_at(origin, world_dir);
+        glass_uv = g.xy;
+        glass_hit = g.z > 0.5;
+    }
+    let glass_dx = dpdx(glass_uv);
+    let glass_dy = dpdy(glass_uv);
+    // The film seen in it: the picture as a mirror shows it (its left on the
+    // viewer's right), faint, added to the room (alpha 0 in the premultiplied
+    // output). Its edge fades over a few percent of the glass.
+    var glass = vec3<f32>(0.0);
+    if (glass_hit) {
+        let edge = clamp(min(glass_uv, vec2<f32>(1.0) - glass_uv) / 0.04, vec2<f32>(0.0), vec2<f32>(1.0));
+        let fade = edge.x * edge.y;
+        if (fade > 0.0) {
+            // Mirrored left to right; the picture's top is the glass's top.
+            let film = vec2<f32>(1.0 - glass_uv.x, 1.0 - glass_uv.y);
+            let rgb = sample_yuv_aa(film, -glass_dx, -glass_dy, eye);
+            glass = display_linear(rgb) * (params.booth_o.w * fade);
+        }
+    }
+
     var uv: vec2<f32>;
     // False where the ray misses the picture outright (nothing to blend).
     var hit = true;
@@ -525,7 +571,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     // Also false for NaN.
     if (!hit || !(cov > 0.0)) {
-        return vec4<f32>(0.0);
+        return vec4<f32>(glass, 0.0);
     }
 
     // Edge pixels centred just outside the picture read its border texel,
@@ -617,7 +663,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // the picture does not cover, and keyed-out ones, return less than full
     // alpha so that shows through; a partly covered edge pixel is a plain mix
     // towards it.
-    return vec4<f32>(col * alpha * cov, alpha * cov);
+    return vec4<f32>(col * alpha * cov + glass, alpha * cov);
 }
 
 // The light the picture gives its place: a 4x2 image, each pixel the mean of

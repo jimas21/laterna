@@ -327,6 +327,27 @@ pub struct Layout {
     /// The sounds the place makes, when a pack says (an empty list: a quiet
     /// room); the place's own otherwise (see [`Place::ambience`]).
     pub ambience: Option<Vec<AmbienceLoop>>,
+    /// The projection booth's window, when a pack has one: the film is
+    /// reflected in it, faintly and mirrored, while a video plays.
+    pub booth_glass: Option<BoothGlass>,
+}
+
+/// The glass a room's projection booth looks through, in room space (the same
+/// frame as the screen): a rectangle the playing film is drawn on, mirrored
+/// left to right as a reflection is, and added to the room at `opacity`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoothGlass {
+    /// Bottom left, bottom right, top right and top left, as seen from the
+    /// seats (looking at the glass).
+    pub corners: [Vec3; 4],
+    /// How much of the film's light is added: 0 to [`BoothGlass::MAX_OPACITY`].
+    pub opacity: f32,
+}
+
+impl BoothGlass {
+    /// The most a pack may ask for: the glass is a faint thing to notice
+    /// when looked at, never a second screen.
+    pub const MAX_OPACITY: f32 = 0.15;
 }
 
 impl Layout {

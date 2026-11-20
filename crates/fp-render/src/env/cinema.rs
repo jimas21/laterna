@@ -145,6 +145,7 @@ pub fn layout() -> Layout {
         floor_y: 0.0,
         acoustics: None,
         ambience: None,
+        booth_glass: None,
     }
 }
 
