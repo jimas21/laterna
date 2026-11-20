@@ -30,6 +30,20 @@ pub enum Sound {
 impl Sound {
     /// Every sound.
     pub const ALL: &'static [Sound] = &[Sound::Murmur, Sound::Crackle, Sound::Crickets];
+
+    /// The name a pack's manifest calls the sound by.
+    pub fn id(self) -> &'static str {
+        match self {
+            Sound::Murmur => "murmur",
+            Sound::Crackle => "crackle",
+            Sound::Crickets => "crickets",
+        }
+    }
+
+    /// The sound a manifest's name stands for.
+    pub fn from_id(id: &str) -> Option<Sound> {
+        Sound::ALL.iter().copied().find(|s| s.id() == id)
+    }
 }
 
 /// How long a sound takes to fade (the time constant of its gain), seconds.

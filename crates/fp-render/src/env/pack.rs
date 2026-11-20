@@ -28,8 +28,10 @@
 
 use super::ktx2::{self, Encoding};
 use super::{
-    Acoustics, Layout, Lighting, Place, PlaceData, PlaceKind, ScreenFrame, Seat, SeatName, Sky,
+    Acoustics, AmbienceLoop, Layout, Lighting, Place, PlaceData, PlaceKind, ScreenFrame, Seat,
+    SeatName, Sky,
 };
+use fp_media::audio::ambience::Sound;
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -185,6 +187,58 @@ pub struct Manifest {
     /// own (a cinema is a hall).
     #[serde(default)]
     pub acoustics: Option<String>,
+    /// The sounds the room makes while it is shown: each a name ("murmur",
+    /// "crackle" or "crickets") or `{ "sound": name, "level": 0 to 1,
+    /// "with_house_lights": true | false }`. An empty list is a quiet room;
+    /// left out, the place's own.
+    #[serde(default)]
+    pub ambience: Option<Vec<AmbienceSpec>>,
+}
+
+/// The most sounds a pack's room makes at once.
+pub const MAX_AMBIENCE: usize = 4;
+
+/// One of a pack's ambience sounds, as the manifest writes it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum AmbienceSpec {
+    Name(String),
+    Full {
+        sound: String,
+        #[serde(default = "one")]
+        level: f32,
+        #[serde(default)]
+        with_house_lights: Option<bool>,
+    },
+}
+
+impl AmbienceSpec {
+    /// The sound it asks for and how, or why that is not usable.
+    fn resolve(&self) -> Result<AmbienceLoop, PackError> {
+        let (name, level, lights) = match self {
+            AmbienceSpec::Name(n) => (n, 1.0, None),
+            AmbienceSpec::Full {
+                sound,
+                level,
+                with_house_lights,
+            } => (sound, *level, *with_house_lights),
+        };
+        let Some(sound) = Sound::from_id(name) else {
+            return bad(format!(
+                "ambience {name:?} is not murmur, crackle or crickets"
+            ));
+        };
+        if !(level.is_finite() && (0.0..=1.0).contains(&level)) {
+            return bad(format!("ambience {name:?} level {level} is not 0 to 1"));
+        }
+        Ok(AmbienceLoop {
+            sound,
+            // A crowd's murmur goes with the house lights; the outdoors does
+            // not.
+            with_house_lights: lights.unwrap_or(sound == Sound::Murmur),
+            level,
+        })
+    }
 }
 
 /// A file name that stays inside the pack folder.
@@ -298,6 +352,7 @@ impl Manifest {
         {
             return bad(format!("acoustics {a:?} is not dry, room or hall"));
         }
+        self.ambience_loops()?;
         let seat_gains = self.seat_sets.values().filter_map(|s| s.basis_gain);
         for gain in std::iter::once(self.basis_gain).chain(seat_gains) {
             if !(gain.is_finite() && (0.0..=1000.0).contains(&gain)) {
@@ -305,6 +360,30 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+
+    /// The sounds the manifest asks for, checked: `None` when it says
+    /// nothing (the place's own), an empty list for a quiet room.
+    fn ambience_loops(&self) -> Result<Option<Vec<AmbienceLoop>>, PackError> {
+        let Some(specs) = &self.ambience else {
+            return Ok(None);
+        };
+        if specs.len() > MAX_AMBIENCE {
+            return bad(format!(
+                "{} ambience sounds ({MAX_AMBIENCE} at most)",
+                specs.len()
+            ));
+        }
+        let loops = specs
+            .iter()
+            .map(AmbienceSpec::resolve)
+            .collect::<Result<Vec<_>, _>>()?;
+        for (i, l) in loops.iter().enumerate() {
+            if loops[..i].iter().any(|o| o.sound == l.sound) {
+                return bad(format!("ambience {:?} twice", l.sound.id()));
+            }
+        }
+        Ok(Some(loops))
     }
 
     /// The seats and screen. The floor is the stage floor, y = 0.
@@ -329,6 +408,7 @@ impl Manifest {
             }),
             floor_y: 0.0,
             acoustics: self.acoustics.as_deref().and_then(Acoustics::from_id),
+            ambience: self.ambience_loops().ok().flatten(),
         }
     }
 
@@ -2692,6 +2772,50 @@ mod tests {
             assert_eq!(m.layout().acoustics, Some(want));
         }
         assert!(edited3(&dir, |j| j["acoustics"] = "cathedral".into()).is_err());
+    }
+
+    #[test]
+    fn a_pack_names_its_own_ambience_or_leaves_it_to_the_place() {
+        use fp_media::audio::ambience::Sound;
+        let dir = fixture3("f3ambience");
+        assert_eq!(edited3(&dir, |_| {}).unwrap().layout().ambience, None);
+        // A quiet room says so with an empty list.
+        let quiet = edited3(&dir, |j| j["ambience"] = serde_json::json!([])).unwrap();
+        assert_eq!(quiet.layout().ambience, Some(Vec::new()));
+        // Names, and names with levels.
+        let m = edited3(&dir, |j| {
+            j["ambience"] = serde_json::json!([
+                "crackle",
+                { "sound": "crickets", "level": 0.4 },
+                { "sound": "murmur", "level": 0.5, "with_house_lights": false },
+            ]);
+        })
+        .unwrap();
+        let loops = m.layout().ambience.unwrap();
+        assert_eq!(loops.len(), 3);
+        assert_eq!((loops[0].sound, loops[0].level), (Sound::Crackle, 1.0));
+        assert!(!loops[0].with_house_lights);
+        assert_eq!((loops[1].sound, loops[1].level), (Sound::Crickets, 0.4));
+        assert_eq!(loops[2].sound, Sound::Murmur);
+        assert!(!loops[2].with_house_lights);
+        let murmur = edited3(&dir, |j| j["ambience"] = serde_json::json!(["murmur"])).unwrap();
+        assert!(murmur.layout().ambience.unwrap()[0].with_house_lights);
+        // Everything else is refused.
+        for bad in [
+            serde_json::json!(["rain"]),
+            serde_json::json!(["murmur", "murmur"]),
+            serde_json::json!([{ "sound": "murmur", "level": 1.5 }]),
+            serde_json::json!([{ "sound": "murmur", "level": -0.1 }]),
+            serde_json::json!([{ "level": 0.5 }]),
+            serde_json::json!(["murmur", "crackle", "crickets", "murmur", "crackle"]),
+            serde_json::json!("murmur"),
+            serde_json::json!([3]),
+        ] {
+            assert!(
+                edited3(&dir, |j| j["ambience"] = bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

@@ -43,13 +43,15 @@ pub enum Place {
 
 /// One of the sounds a place makes while it is shown (see
 /// [`Place::ambience`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AmbienceLoop {
     pub sound: fp_media::audio::ambience::Sound,
     /// Whether the sound goes with the house lights: heard while they are up
     /// and gone once they are down for the film. A sound without this is
     /// heard whenever the place is (a camp fire, crickets).
     pub with_house_lights: bool,
+    /// How loud it is next to the Room ambience slider's own level, 0 to 1.
+    pub level: f32,
 }
 
 /// Whether a place is a room around the screen or a backdrop around the
@@ -131,16 +133,24 @@ impl Place {
 
     /// The sounds the place makes, mixed on their own and set with the
     /// Room ambience slider. A place with none is quiet.
-    pub fn ambience(self) -> &'static [AmbienceLoop] {
+    ///
+    /// A pack or a place of the person's says its own in its manifest's
+    /// `"ambience"` (an empty list is a quiet room); otherwise a cinema has
+    /// the murmur of its audience and the rest are quiet.
+    pub fn ambience(self) -> Vec<AmbienceLoop> {
         use fp_media::audio::ambience::Sound;
+        if let Some(own) = self.layout().ambience {
+            return own;
+        }
         match self {
             // The audience before the film: a soft murmur that goes as the
             // house lights go down.
-            Place::Cinema => &[AmbienceLoop {
+            Place::Cinema => vec![AmbienceLoop {
                 sound: Sound::Murmur,
                 with_house_lights: true,
+                level: 1.0,
             }],
-            Place::Studio | Place::User(_) => &[],
+            Place::Studio | Place::User(_) => Vec::new(),
         }
     }
 
@@ -314,6 +324,9 @@ pub struct Layout {
     /// How the place sounds, when a pack says; the place's own otherwise
     /// (see [`Place::acoustics`]).
     pub acoustics: Option<Acoustics>,
+    /// The sounds the place makes, when a pack says (an empty list: a quiet
+    /// room); the place's own otherwise (see [`Place::ambience`]).
+    pub ambience: Option<Vec<AmbienceLoop>>,
 }
 
 impl Layout {
@@ -486,6 +499,7 @@ mod tests {
         assert_eq!(cinema[0].sound, Sound::Murmur);
         assert!(cinema[0].with_house_lights);
         assert!(Place::Studio.ambience().is_empty());
+        assert_eq!(cinema[0].level, 1.0);
     }
 
     #[test]
