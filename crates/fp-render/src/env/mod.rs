@@ -25,6 +25,7 @@ pub mod ktx2;
 pub mod light;
 pub mod pack;
 pub mod studio;
+pub mod user;
 
 use glam::{Mat4, Vec2, Vec3};
 use std::sync::Arc;
@@ -34,6 +35,10 @@ use std::sync::Arc;
 pub enum Place {
     Cinema,
     Studio,
+    /// One of the person's own (see [`user`]): the index into
+    /// [`user::registry`]. The place list is read once, so an index stays
+    /// the same place for as long as the app runs.
+    User(u8),
 }
 
 /// One of the sounds a place makes while it is shown (see
@@ -66,24 +71,52 @@ impl Place {
     /// offered for now; a stored choice of it still works.
     pub const PICKER: &'static [Place] = &[Place::Cinema];
 
+    /// The person's own places, in the order the picker lists them.
+    pub fn yours() -> Vec<Place> {
+        (0..user::registry().len())
+            .filter_map(|i| u8::try_from(i).ok().map(Place::User))
+            .collect()
+    }
+
     /// The stable id stored in settings: lowercase words joined by hyphens.
     pub fn id(self) -> &'static str {
         match self {
             Place::Cinema => "cinema",
             Place::Studio => "studio",
+            Place::User(i) => user::registry()
+                .get(usize::from(i))
+                .map_or("user", |p| p.id.as_str()),
         }
     }
 
     /// The place with this id, or `None` for an id this build does not know
-    /// (a settings file from a newer build), which shows as Plain.
+    /// (a settings file from a newer build, or a file of the person's that
+    /// has since gone), which shows as Plain.
     pub fn from_id(id: &str) -> Option<Place> {
+        if id.starts_with(user::ID_PREFIX) {
+            return user::index_of(id).map(Place::User);
+        }
         Place::ALL.iter().copied().find(|p| p.id() == id)
+    }
+
+    /// The name shown for one of the person's own places (the file's name);
+    /// `None` for a built-in.
+    pub fn your_name(self) -> Option<&'static str> {
+        match self {
+            Place::User(i) => user::registry()
+                .get(usize::from(i))
+                .map(|p| p.name.as_str()),
+            _ => None,
+        }
     }
 
     pub fn kind(self) -> PlaceKind {
         match self {
             Place::Cinema => PlaceKind::Room,
             Place::Studio => PlaceKind::Sky,
+            Place::User(i) => user::registry()
+                .get(usize::from(i))
+                .map_or(PlaceKind::Sky, user::UserPlace::kind),
         }
     }
 
@@ -92,7 +125,7 @@ impl Place {
     pub fn acoustics(self) -> Acoustics {
         self.layout().acoustics.unwrap_or(match self {
             Place::Cinema => Acoustics::Hall,
-            Place::Studio => Acoustics::Dry,
+            Place::Studio | Place::User(_) => Acoustics::Dry,
         })
     }
 
@@ -116,12 +149,17 @@ impl Place {
     /// A place with an installed pack (see [`pack`]) has the pack's seats and
     /// screen.
     pub fn layout(self) -> Layout {
+        if let Place::User(i) = self {
+            return user::registry()
+                .get(usize::from(i))
+                .map_or_else(studio::layout, user::UserPlace::layout);
+        }
         if let Some(pack) = pack::replacement(self) {
             return pack.layout.clone();
         }
         match self {
             Place::Cinema => cinema::layout(),
-            Place::Studio => studio::layout(),
+            Place::Studio | Place::User(_) => studio::layout(),
         }
     }
 
@@ -137,6 +175,19 @@ impl Place {
     /// pack's default seat's, and all there is for a place whose pack has one
     /// set for everybody, and for the built-in rooms).
     pub fn build_set(self, set: Option<SeatName>) -> PlaceData {
+        if let Place::User(i) = self {
+            let built = user::registry()
+                .get(usize::from(i))
+                .map(|p| p.build(set).map_err(|e| format!("{}: {e}", p.id)));
+            return match built {
+                Some(Ok(data)) => data,
+                Some(Err(e)) => {
+                    log::warn!("your place {e}; showing the studio instead");
+                    self.build_builtin()
+                }
+                None => self.build_builtin(),
+            };
+        }
         if let Some(data) = pack::load_replacement_for(self, set) {
             return data;
         }
@@ -147,6 +198,11 @@ impl Place {
     /// seat it was baked for: only a pack with a mesh and textures for each
     /// seat has one to choose (see [`pack::seat_set`]); `None` otherwise.
     pub fn seat_set(self, seat: SeatName) -> Option<SeatName> {
+        if let Place::User(i) = self {
+            return user::registry()
+                .get(usize::from(i))
+                .and_then(|p| p.seat_set(seat));
+        }
         pack::seat_set(self, seat)
     }
 
@@ -154,7 +210,7 @@ impl Place {
     pub fn build_builtin(self) -> PlaceData {
         match self {
             Place::Cinema => cinema::build(),
-            Place::Studio => studio::build(),
+            Place::Studio | Place::User(_) => studio::build(),
         }
     }
 }

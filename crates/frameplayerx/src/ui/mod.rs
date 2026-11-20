@@ -855,6 +855,10 @@ pub struct UiState {
     /// The pack the person pressed Download on before they have said yes to
     /// downloading places: its row asks first.
     pub place_confirm: Option<String>,
+    /// The address being typed in Settings > Places > Pack sources, and why
+    /// the last one was refused.
+    pub place_source_input: String,
+    pub place_source_error: Option<crate::place_downloads::AddError>,
     /// What Tragus last reported (the app owns the link).
     pub earbuds: fp_earbuds::EarbudsState,
     /// The controller input whose choices are open in Settings > Controller.
@@ -979,6 +983,8 @@ impl Default for UiState {
             tragus: crate::tragus::Tragus::default(),
             place_downloads: crate::place_downloads::PlaceDownloads::default(),
             place_confirm: None,
+            place_source_input: String::new(),
+            place_source_error: None,
             earbuds: fp_earbuds::EarbudsState::default(),
             remap_open: None,
             remap_grip: false,

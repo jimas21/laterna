@@ -968,6 +968,7 @@ dependencies = [
  "fp-media",
  "glam",
  "gpu-allocator",
+ "image",
  "log",
  "naga",
  "png",

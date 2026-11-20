@@ -260,6 +260,12 @@ pub struct Settings {
     /// (Settings > Places asks once, before the first download). False until
     /// then.
     pub places_download_ok: bool,
+    /// Addresses of pack indexes the person added in Settings > Places
+    /// (same format as the app's own catalog). Not from Laterna: what they
+    /// offer is checked like any pack but vouched for by nobody. Left out of
+    /// the file when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub place_sources: Vec<String>,
     /// How bright a place's house lights stay while a video plays, in
     /// [`HOUSE_PLAYING`].
     pub house_lights_playing: f32,
@@ -419,6 +425,7 @@ impl Default for Settings {
             place_seats: Default::default(),
             place_height: Default::default(),
             places_download_ok: false,
+            place_sources: Vec::new(),
             house_lights_playing: HOUSE_PLAYING_START,
             screen_light_level: SCREEN_LIGHT_START,
             sound_from_screen: true,
@@ -632,6 +639,7 @@ mod tests {
         assert!(p.place_seats.is_empty());
         assert!(p.place_height.is_empty());
         assert!(!p.places_download_ok);
+        assert!(p.place_sources.is_empty());
         assert_eq!(p.house_lights_playing, HOUSE_PLAYING_START);
         assert_eq!(HOUSE_PLAYING_START, 0.04);
         assert_eq!(p.screen_light_level, SCREEN_LIGHT_START);
@@ -710,6 +718,7 @@ mod tests {
         assert!(text.contains(r#""environment": "void""#), "{text}");
         assert!(!text.contains("place_seats"), "{text}");
         assert!(!text.contains("place_height"), "{text}");
+        assert!(!text.contains("place_sources"), "{text}");
         let mut s = Settings {
             environment: "cinema".into(),
             house_lights_playing: 0.1,
@@ -719,6 +728,8 @@ mod tests {
         s.place_seats.insert("cinema".into(), 2);
         s.place_height.insert("cinema".into(), -15);
         s.places_download_ok = true;
+        s.place_sources
+            .push("https://example.com/places.lock".into());
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         // A place this build lacks (from a newer one) loads with every other

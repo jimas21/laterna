@@ -749,22 +749,28 @@ impl Pack {
     /// What the renderer takes: no per-vertex lighting or materials (the
     /// textures carry the light), nothing dark behind it.
     pub fn into_place_data(self) -> PlaceData {
-        let dark = [0.0; 3];
-        PlaceData {
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            palette: Vec::new(),
-            lighting: Lighting {
-                ambient_up: dark,
-                ambient_down: dark,
-                house_rgb: dark,
-                // The picture's own light is the basis textures' to give.
-                spill: 1.0,
-                fog: None,
-            },
-            sky: Sky::None,
-            baked: Some(Arc::new(self.baked)),
-        }
+        sky_place_data(self.baked)
+    }
+}
+
+/// [`Pack::into_place_data`] for any baked mesh and textures: a pack's, or
+/// the sphere a person's own picture makes (see [`super::user`]).
+pub fn sky_place_data(baked: Baked) -> PlaceData {
+    let dark = [0.0; 3];
+    PlaceData {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        palette: Vec::new(),
+        lighting: Lighting {
+            ambient_up: dark,
+            ambient_down: dark,
+            house_rgb: dark,
+            // The picture's own light is the basis textures' to give.
+            spill: 1.0,
+            fog: None,
+        },
+        sky: Sky::None,
+        baked: Some(Arc::new(baked)),
     }
 }
 
@@ -938,6 +944,21 @@ pub fn validate_download(dir: &Path, id: &str) -> Result<String, PackError> {
         load_seat_with(dir, key, true)?;
     }
     Ok(manifest.version)
+}
+
+/// Reads and checks the pack in `dir` as [`scan`] does for each folder of
+/// packs (the manifest and every file's presence and size, without decoding
+/// a texture), whatever id it names: for a folder the person put among their
+/// own places, which replaces no built-in place.
+pub fn check_folder(dir: &Path) -> Result<Replacement, PackError> {
+    let manifest = read_manifest(dir)?;
+    preflight(dir, &manifest)?;
+    let layout = manifest.layout();
+    Ok(Replacement {
+        dir: dir.to_path_buf(),
+        manifest,
+        layout,
+    })
 }
 
 /// The version an installed pack's manifest names, if it has a readable one.
@@ -1624,6 +1645,27 @@ mod tests {
             Ok(_) => panic!("the pack was accepted"),
             Err(e) => e.0,
         }
+    }
+
+    #[test]
+    fn a_pack_folder_among_the_persons_own_places_is_offered_under_its_name() {
+        let root = temp("userpack");
+        write_fixture(&root.join("My Cinema"), "whatever-id");
+        // A pack with a missing file is left out.
+        write_fixture(&root.join("Broken"), "other");
+        std::fs::remove_file(root.join("Broken/dark.png")).unwrap();
+        let found = super::super::user::scan_dir(&root);
+        assert_eq!(found.len(), 1, "{found:?}");
+        // The manifest's own name ("Test") wins over the folder's.
+        assert_eq!(found[0].name, "Test");
+        assert_eq!(found[0].id, "user-my-cinema");
+        assert_eq!(found[0].kind(), PlaceKind::Room);
+        assert_eq!(found[0].layout().seats.len(), 3);
+        assert!(found[0].layout().screen.is_some());
+        // It builds, from its own folder, and replaces nothing.
+        assert!(found[0].build(None).unwrap().baked.is_some());
+        assert!(replaces("whatever-id").is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
