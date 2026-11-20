@@ -120,6 +120,12 @@ pub const ROOM_ECHO_START: f32 = 0.5;
 /// until it is changed: modest, a share of the sound's own soft level.
 pub const AMBIENCE_START: f32 = 0.0;
 
+/// Whether the room ambience plays at all. Off: the sounds are synthesised
+/// from noise, and on the headset the cinema's murmur sounded harsh, nothing
+/// like a real room. It stays off, with its slider hidden, until a real
+/// recording replaces it.
+pub const AMBIENCE_ENABLED: bool = false;
+
 /// What the top of the Screen light slider asks of the renderer, as a
 /// multiple of the places' own strength: two stops of headroom, for a viewer
 /// who wants the room to follow the picture more than a real cinema's does.

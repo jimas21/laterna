@@ -418,7 +418,7 @@ impl App {
             self.settings.minimal_lighting,
             ease,
         ));
-        let wants = if self.headset_paused {
+        let wants = if self.headset_paused || !crate::settings::AMBIENCE_ENABLED {
             Vec::new()
         } else {
             places::ambience_wants(place, ease, self.settings.ambience_level)

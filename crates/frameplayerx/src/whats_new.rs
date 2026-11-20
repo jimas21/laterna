@@ -13,6 +13,15 @@ pub struct Entry {
 /// Newest first.
 pub const ENTRIES: &[Entry] = &[
     Entry {
+        version: "0.18.0-beta.19",
+        bullets: &[
+            "The cinema's room murmur is gone: it sounded harsh. Room sound comes back once it is a real recording.",
+            "Shine on a place now needs the place to ask for it, so older places look as before.",
+            "Plain is now called Just the screen.",
+            "Bigger place packs with a view from several seats can be downloaded.",
+        ],
+    },
+    Entry {
         version: "0.18.0-beta.18",
         bullets: &[
             "Glossy surfaces in a place now catch the film's light and the shine moves as you move your head.",
