@@ -55,8 +55,8 @@ const AIM_MOVED_DEG: f32 = 1.5;
 
 /// The stretch of the screen the handles are found by, as shares of its
 /// height measured up from its middle: the lower part and a little below
-/// it. A laser coming near them shows them even when it holds still, so
-/// they can be found with the player's controls hidden.
+/// it. A laser moving there shows them, so they can be found with the
+/// player's controls hidden.
 const NEAR_HANDLES: std::ops::RangeInclusive<f32> = -0.8..=-0.25;
 
 /// The window controls' panels and what is held.
@@ -273,11 +273,14 @@ impl App {
                 continue;
             };
             let hit = drag::on_plane_ray(picture, pos, dir, -distance);
-            seen |= match hit.map_or(Pointing::Off, |hit| pointing(hit, shape)) {
-                Pointing::Off => false,
-                Pointing::On => moved,
-                Pointing::Near => true,
-            };
+            // A laser that is on one of the player's own panels (the control
+            // bar hangs under the screen's middle) is pointing at that, not
+            // at the screen behind it.
+            let on_panel = self.pointer.aims[i]
+                .and_then(|a| a.hit)
+                .is_some_and(|(panel, _, _)| !matches!(panel, WINDOW_BAR | WINDOW_CORNER));
+            let at = hit.map_or(Pointing::Off, |hit| pointing(hit, shape));
+            seen |= counts_as_pointing(at, moved, on_panel);
         }
         if seen {
             self.chrome.pointed_at = Some(Instant::now());
@@ -582,6 +585,13 @@ enum Pointing {
     Near,
 }
 
+/// Whether a laser pointing as `at` keeps the window controls up: only
+/// while it moves (one that rests, as after pressing Play, does not), and
+/// never while it is on a panel in front of the screen.
+fn counts_as_pointing(at: Pointing, moved: bool, on_panel: bool) -> bool {
+    !on_panel && matches!(at, Pointing::On | Pointing::Near) && moved
+}
+
 /// How the laser meeting the screen's plane at `hit` (right and up from
 /// its middle, metres) is pointing at the flat screen of `shape` (a curved
 /// one is taken as the plane through its middle).
@@ -638,6 +648,24 @@ mod tests {
         assert_eq!(at(0.0, 0.4), Pointing::On);
         assert_eq!(at(0.0, -1.2), Pointing::Off);
         assert_eq!(at(3.0, -0.5), Pointing::Off);
+    }
+
+    #[test]
+    fn a_laser_resting_on_the_bar_after_play_lets_the_controls_fade() {
+        // The control bar hangs in the screen's lower part: Near.
+        let mut seen = None;
+        let dir = Vec3::NEG_Z;
+        assert!(!aim_moved(&mut seen, dir));
+        for _ in 0..10 {
+            let moved = aim_moved(&mut seen, dir);
+            assert!(!counts_as_pointing(Pointing::Near, moved, true));
+            assert!(!counts_as_pointing(Pointing::Near, moved, false));
+            assert!(!counts_as_pointing(Pointing::On, moved, false));
+        }
+        // Moving near the handles still shows them, but not over a panel.
+        assert!(counts_as_pointing(Pointing::Near, true, false));
+        assert!(!counts_as_pointing(Pointing::Near, true, true));
+        assert!(!counts_as_pointing(Pointing::Off, true, false));
     }
 
     #[test]

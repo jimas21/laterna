@@ -58,8 +58,8 @@ pub const FORMAT: u32 = 3;
 /// The first format with a mesh and textures for each seat.
 pub const PER_SEAT_FORMAT: u32 = 3;
 /// What a set without a material texture is given: R roughness 0.85, G
-/// specular mask 0, B and A reserved: no highlight at all, so a pack made
-/// before the material map existed looks exactly as it was baked.
+/// specular mask 0, B accent 0 (no emissive glow), A reserved: no highlight
+/// at all, so a pack made before the material map existed looks exactly as it was baked.
 pub const DEFAULT_MATERIAL: [u8; 4] = [217, 0, 0, 255];
 /// The most bytes one set of a format 2 or 3 pack's texture files may add up
 /// to (a format 3 pack has a set for each seat, so the whole pack may be more).
@@ -129,8 +129,8 @@ pub struct TextureSpec {
     #[serde(default)]
     pub bytes: Option<u64>,
     /// The set's material texture, a KTX2 file (format 3 only): R roughness,
-    /// G specular mask, B and A reserved, stored as they are (UNORM, not
-    /// sRGB). Left out, the set gets [`DEFAULT_MATERIAL`].
+    /// G specular mask, B accent (emissive) mask, A reserved, stored as they
+    /// are (UNORM, not sRGB). Left out, the set gets [`DEFAULT_MATERIAL`].
     #[serde(default)]
     pub material: Option<String>,
     /// Side of the material texture, a power of two up to `size`; the basis
@@ -193,9 +193,26 @@ pub struct Manifest {
     /// left out, the place's own.
     #[serde(default)]
     pub ambience: Option<Vec<AmbienceSpec>>,
-    /// The projection booth's window, for the film's reflection.
-    #[serde(default)]
+    /// The projection booth's window, for the film's reflection. A field
+    /// that is not a usable glass is dropped, never a reason to refuse the
+    /// pack (see [`lenient_glass`]).
+    #[serde(default, deserialize_with = "lenient_glass")]
     pub booth_glass: Option<BoothGlassSpec>,
+}
+
+/// Reads `booth_glass`, or `None` (with a warning) when it is not the shape
+/// of one: the glass is a nicety, so a mistake in it costs only the glass.
+fn lenient_glass<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<BoothGlassSpec>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value.and_then(|v| match serde_json::from_value(v) {
+        Ok(spec) => Some(spec),
+        Err(e) => {
+            log::warn!("booth_glass is not used: {e}");
+            None
+        }
+    }))
 }
 
 /// The most sounds a pack's room makes at once.
@@ -409,8 +426,12 @@ impl Manifest {
             return bad(format!("acoustics {a:?} is not dry, room or hall"));
         }
         self.ambience_loops()?;
-        if let Some(glass) = &self.booth_glass {
-            glass.check()?;
+        // A glass that fails its checks is left out of the layout, not a
+        // reason to refuse the pack.
+        if let Some(glass) = &self.booth_glass
+            && let Err(e) = glass.check()
+        {
+            log::warn!("booth_glass is not used: {e}");
         }
         let seat_gains = self.seat_sets.values().filter_map(|s| s.basis_gain);
         for gain in std::iter::once(self.basis_gain).chain(seat_gains) {
@@ -739,8 +760,8 @@ pub struct Baked {
     /// The light of each patch of the screen, [`BASIS`] textures, as stored:
     /// square-root coded.
     pub basis: TextureArray,
-    /// The material texture (one layer: R roughness, G specular mask, B and A
-    /// reserved, as stored), when the set has one; the renderer uses
+    /// The material texture (one layer: R roughness, G specular mask, B accent
+    /// (emissive) mask, A reserved, as stored), when the set has one; the renderer uses
     /// [`DEFAULT_MATERIAL`] otherwise.
     pub material: Option<TextureArray>,
     pub basis_gain: f32,
@@ -1108,6 +1129,16 @@ pub fn check_folder(dir: &Path) -> Result<Replacement, PackError> {
 /// The version an installed pack's manifest names, if it has a readable one.
 pub fn installed_version(dir: &Path) -> Option<String> {
     read_manifest(dir).ok().map(|m| m.version)
+}
+
+/// The id and version an unpacked pack's manifest names, read without
+/// checking the rest of it (a pack that no longer loads is still the pack it
+/// says it is).
+pub fn installed_identity(dir: &Path) -> Option<(String, String)> {
+    let bytes = read_capped(&dir.join("manifest.json"), MAX_MANIFEST_FILE, "manifest").ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let field = |k: &str| v.get(k)?.as_str().map(str::to_string);
+    Some((field("id")?, field("version")?))
 }
 
 /// Reads the whole pack in `dir`, or says what is wrong with it. Takes a
@@ -2914,7 +2945,7 @@ mod tests {
     }
 
     #[test]
-    fn a_booth_glass_that_is_not_a_faint_flat_rectangle_is_refused() {
+    fn a_booth_glass_that_is_not_a_faint_flat_rectangle_is_dropped_and_the_pack_loads() {
         let dir = fixture3("f3booth-bad");
         let mut cases = vec![
             ("opacity too high", booth(0.16)),
@@ -2946,8 +2977,9 @@ mod tests {
         cases.push(("too far", far));
         for (what, glass) in cases {
             // serde_json writes NaN as null, which is not a number either.
-            let why = edited3(&dir, |j| j["booth_glass"] = glass.clone());
-            assert!(why.is_err(), "{what} was accepted");
+            let m = edited3(&dir, |j| j["booth_glass"] = glass.clone())
+                .unwrap_or_else(|e| panic!("{what} failed the pack: {e}"));
+            assert_eq!(m.layout().booth_glass, None, "{what} was used");
         }
     }
 

@@ -461,8 +461,10 @@ Settings > Places. The app downloads nothing else and nothing on its own.
   a folder with it is shown as Installed, offered Update, replaced or removed.
   A folder of the person's with the same name (no marker) is left alone: the
   row says so, nothing is downloaded over it, and Remove never deletes it.
-  (A pack installed from a source by beta 18 has no marker; reinstall it after
-  moving or deleting the old folder.)
+  (A pack installed from a source by beta 19 has no marker. Its folder is
+  adopted, and given the marker, when its manifest names exactly the id and
+  version the source is offering; a folder of any other id or version stays
+  yours.)
 - **Tests and preview.** `LATERNA_PLACES_CATALOG=<file>` replaces the built-in
   catalog with a file of the same format and allows plain http to this machine,
   so tests and the desktop preview can use a local fixture server. It is not

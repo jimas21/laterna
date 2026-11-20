@@ -60,19 +60,27 @@ fn booth_glass(video: &VideoParams) -> [Vec4; 3] {
     let Some(glass) = env.place.layout().booth_glass else {
         return none;
     };
-    if !(glass.opacity > 0.0 && glass.opacity.is_finite()) {
+    // It shows only while the film plays with the lights down: it fades out
+    // as the house lights come up.
+    let opacity = glass_opacity(glass.opacity, env.house);
+    if opacity <= 0.0 {
         return none;
     }
     let [bl, br, _, tl] = glass.corners.map(|c| env.room_to_world.transform_point3(c));
     [
-        bl.extend(
-            glass
-                .opacity
-                .clamp(0.0, crate::env::BoothGlass::MAX_OPACITY),
-        ),
+        bl.extend(opacity),
         (br - bl).extend(0.0),
         (tl - bl).extend(0.0),
     ]
+}
+
+/// How strongly the booth glass shows: its own `opacity` times how far down
+/// the house lights are (`house`: 0 dark, 1 full).
+fn glass_opacity(opacity: f32, house: f32) -> f32 {
+    if !(opacity > 0.0 && opacity.is_finite() && house.is_finite()) {
+        return 0.0;
+    }
+    opacity.clamp(0.0, crate::env::BoothGlass::MAX_OPACITY) * (1.0 - house.clamp(0.0, 1.0))
 }
 
 /// Which of the scene shader's quality features are on; all are by default.
@@ -535,6 +543,15 @@ pub(crate) fn chroma(rgb: [f32; 3]) -> Vec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_booth_glass_fades_out_as_the_house_lights_come_up() {
+        assert_eq!(glass_opacity(0.1, 0.0), 0.1);
+        assert!((glass_opacity(0.1, 0.5) - 0.05).abs() < 1e-6);
+        assert_eq!(glass_opacity(0.1, 1.0), 0.0);
+        assert_eq!(glass_opacity(0.0, 0.0), 0.0);
+        assert_eq!(glass_opacity(0.1, f32::NAN), 0.0);
+    }
 
     fn apply(rows: &[Vec4; 3], off: Vec4, yuv: [f32; 3]) -> [f32; 3] {
         let v = Vec3::new(yuv[0], yuv[1], yuv[2]) * off.w - off.truncate();

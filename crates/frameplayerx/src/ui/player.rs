@@ -267,16 +267,16 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
         );
         widgets::well(&mut left, |ui| volume_key(ui, pb, v.state, v.actions));
         transport(ui, row, pb, v.settings, v.queue, v.actions);
-        let dropped = Dropped::for_room(room);
+        // The place picker and its settings are a press away while a flat
+        // video plays in a room or on a plain screen.
+        let place_key = v.places_enabled && pb.format.projection == Projection::Flat;
+        let dropped = Dropped::for_room(room, place_key);
         v.state.bar_dropped = dropped;
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
                 .layout(Layout::right_to_left(Align::Center)),
         );
-        // The place picker and its settings are a press away while a flat
-        // video plays in a room or on a plain screen.
-        let place_key = v.places_enabled && pb.format.projection == Projection::Flat;
         widgets::well(&mut right, |ui| {
             right_keys(ui, v.state, dropped, place_key, v.actions);
         });
@@ -317,11 +317,13 @@ pub struct Dropped {
 impl Dropped {
     /// What does not fit in `room`: the group is Place, Adjust, More, Hide and
     /// Close; Hide goes first, then Place (the More list has it too), then
-    /// Adjust. More and Close always stay.
-    fn for_room(room: f32) -> Dropped {
+    /// Adjust. More and Close always stay. Without the Place key (`place_key`
+    /// false) the group is a key shorter, so Hide holds on longer and Place is
+    /// never dropped.
+    fn for_room(room: f32, place_key: bool) -> Dropped {
         Dropped {
-            hide: group_width(5) > room,
-            place: group_width(4) > room,
+            hide: group_width(4 + usize::from(place_key)) > room,
+            place: place_key && group_width(4) > room,
             adjust: group_width(3) > room,
         }
     }
@@ -3295,7 +3297,7 @@ mod tests {
         // From a bar far too narrow to a very wide one.
         for width in (0..3000).step_by(10) {
             let room = side_room(width as f32);
-            let dropped = Dropped::for_room(room);
+            let dropped = Dropped::for_room(room, true);
             let keys = 2
                 + usize::from(!dropped.adjust)
                 + usize::from(!dropped.place)
@@ -3311,8 +3313,16 @@ mod tests {
             last = dropped;
         }
         // The bar as it is built keeps all five.
-        assert_eq!(Dropped::for_room(side_room(1444.0)), Dropped::default());
-        assert!(Dropped::for_room(side_room(600.0)).adjust);
+        assert_eq!(
+            Dropped::for_room(side_room(1444.0), true),
+            Dropped::default()
+        );
+        assert!(Dropped::for_room(side_room(600.0), true).adjust);
+        // Without a Place key the four keys left keep Hide a step longer.
+        let room = group_width(4);
+        assert!(Dropped::for_room(room, true).hide);
+        assert_eq!(Dropped::for_room(room, false), Dropped::default());
+        assert!(!Dropped::for_room(0.0, false).place);
     }
 
     fn watching(flat: bool) -> MoreState {

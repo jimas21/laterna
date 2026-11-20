@@ -1620,8 +1620,6 @@ place-sources-invalid = That is not a usable address. It has to start with https
 place-sources-duplicate = That address is already in the list.
 place-sources-too-many = That is as many addresses as can be added. Remove one first.
 place-source-confirm = Download { $title } from { $host }? It is { $size }. This pack is not from Laterna: it is checked to be a safe place, but not vouched for.
-# A tooltip: opens the place picker.
-player-place = Place
 # A tooltip: puts the library beside the playing video, so you can pick another
 # while it plays; press again to put it back.
 player-multitask = Browse beside the video

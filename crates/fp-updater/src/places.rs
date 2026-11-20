@@ -189,7 +189,10 @@ fn remove_tree(path: &Path) -> Result<()> {
 /// Clears what an install that was cut off (the app closed, the machine
 /// died) left in `places_dir`: half-made `.<id>.part` folders go, and a pack
 /// that was being replaced (`.<id>.old`) goes back if its new one never
-/// arrived. Call it when no install is running.
+/// arrived. Only what this app made is touched: a `.part` folder holds just
+/// the download and the unpacked copy, and a `.old` one holds
+/// [`INSTALLED_MARKER`]; any other hidden folder is the person's and is left
+/// alone. Call it when no install is running.
 pub fn clean_up(places_dir: &Path) {
     let Ok(entries) = fs::read_dir(places_dir) else {
         return;
@@ -199,17 +202,43 @@ pub fn clean_up(places_dir: &Path) {
         let Some(rest) = name.strip_prefix('.') else {
             continue;
         };
-        if rest.ends_with(".part") {
-            let _ = remove_tree(&entry.path());
+        let path = entry.path();
+        if let Some(id) = rest.strip_suffix(".part") {
+            if id_ok(id) && is_staging(&path) {
+                let _ = remove_tree(&path);
+            }
         } else if let Some(id) = rest.strip_suffix(".old") {
+            if !id_ok(id) || !has_marker(&path) {
+                continue;
+            }
             let dest = places_dir.join(id);
-            if fs::symlink_metadata(&dest).is_ok() || !id_ok(id) {
-                let _ = remove_tree(&entry.path());
+            if fs::symlink_metadata(&dest).is_ok() {
+                let _ = remove_tree(&path);
             } else {
-                let _ = fs::rename(entry.path(), dest);
+                let _ = fs::rename(path, dest);
             }
         }
     }
+}
+
+/// Whether `dir` is a real folder (not a link) holding [`INSTALLED_MARKER`].
+fn has_marker(dir: &Path) -> bool {
+    fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir())
+        && fs::symlink_metadata(dir.join(INSTALLED_MARKER)).is_ok_and(|m| m.file_type().is_file())
+}
+
+/// Whether `dir` is a real folder shaped like what an install leaves while
+/// it works: only the download (`dl`) and the unpacked copy (`pack`).
+fn is_staging(dir: &Path) -> bool {
+    if !fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir()) {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .all(|e| matches!(e.file_name().to_str(), Some("dl" | "pack")))
 }
 
 /// The file the app writes into every pack folder it installs. A folder in
@@ -1130,13 +1159,15 @@ mod tests {
     fn clean_up_removes_cut_off_installs_and_restores_a_replaced_pack() {
         let tmp = tempfile::tempdir().unwrap();
         let places = tmp.path();
-        fs::create_dir_all(places.join(".a.part/unpacked")).unwrap();
-        fs::write(places.join(".a.part/x.zip"), b"half").unwrap();
+        fs::create_dir_all(places.join(".a.part/pack")).unwrap();
+        fs::write(places.join(".a.part/dl"), b"half").unwrap();
         // b was moved aside and its new copy never arrived: it comes back.
         fs::create_dir_all(places.join(".b.old")).unwrap();
         fs::write(places.join(".b.old/manifest.json"), b"{}").unwrap();
+        fs::write(places.join(".b.old").join(INSTALLED_MARKER), b"1").unwrap();
         // c has its new copy: the old one is just removed.
         fs::create_dir_all(places.join(".c.old")).unwrap();
+        fs::write(places.join(".c.old").join(INSTALLED_MARKER), b"1").unwrap();
         fs::create_dir_all(places.join("c")).unwrap();
         // An unrelated folder and an ordinary pack are untouched.
         fs::create_dir_all(places.join("d")).unwrap();
@@ -1149,6 +1180,21 @@ mod tests {
         names.sort();
         assert_eq!(names, ["b", "c", "d"]);
         assert!(places.join("b/manifest.json").is_file());
+    }
+
+    #[test]
+    fn clean_up_leaves_hidden_folders_this_app_did_not_make() {
+        let tmp = tempfile::tempdir().unwrap();
+        let places = tmp.path();
+        // The person's own hidden folders, named like leftovers.
+        fs::create_dir_all(places.join(".mine.part")).unwrap();
+        fs::write(places.join(".mine.part/notes.txt"), b"keep").unwrap();
+        fs::create_dir_all(places.join(".theirs.old")).unwrap();
+        fs::write(places.join(".theirs.old/manifest.json"), b"{}").unwrap();
+        clean_up(places);
+        assert!(places.join(".mine.part/notes.txt").is_file());
+        assert!(places.join(".theirs.old/manifest.json").is_file());
+        assert!(!places.join("theirs").exists());
     }
 
     #[test]

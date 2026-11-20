@@ -263,13 +263,16 @@ fn flat_uv(origin: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
 
 // Where a ray meets the booth glass: xy its coordinates on it (0..1, across
 // from the bottom left and up), z 1 when it meets the glass's plane in front
-// of the eye and facing it. Not clamped, so derivatives are good at its edge.
+// of the eye and facing it (only its front, the side the seats are on, is
+// drawn: from behind it is not there). Not clamped, so derivatives are good at its edge.
 fn glass_at(origin: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
     let u = params.booth_u.xyz;
     let v = params.booth_v.xyz;
     let n = normalize(cross(u, v));
     let denom = dot(d, n);
-    if (abs(denom) < 1e-5) { return vec3<f32>(INVALID, 0.0); }
+    // The corners run bottom left, bottom right, top right as seen from the
+    // seats, so the normal points at them: a ray from the front goes against it.
+    if (denom > -1e-5) { return vec3<f32>(INVALID, 0.0); }
     let t = dot(params.booth_o.xyz - origin, n) / denom;
     if (t <= 0.0) { return vec3<f32>(INVALID, 0.0); }
     let q = origin + t * d - params.booth_o.xyz;

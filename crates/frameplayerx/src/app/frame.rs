@@ -1261,8 +1261,6 @@ fn follows_head(setting: bool, flat: bool, dragging: bool) -> bool {
     setting && flat && !dragging
 }
 
-/// What a video's format, view settings, turn and pixel shape say about the
-/// picture: the parts of `VideoParams` its screen's size and curve come from.
 /// Which of the panels that want a compositor layer (`wants`, far to near)
 /// get one when only `budget` fit: the nearest. The rest are drawn into the
 /// eyes, where they still show, rather than being dropped from the frame by
@@ -1279,6 +1277,8 @@ fn grant_layers(wants: &[bool], budget: usize) -> Vec<bool> {
     granted
 }
 
+/// What a video's format, view settings, turn and pixel shape say about the
+/// picture: the parts of `VideoParams` its screen's size and curve come from.
 fn describe_video(video: &mut VideoParams, p: &Playback, shown: fp_core::view::ViewSettings) {
     video.format = p.format;
     video.settings = shown;

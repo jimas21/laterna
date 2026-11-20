@@ -79,6 +79,32 @@ pub fn startup() {
     startup_in(&fp_render::env::pack::places_dir());
 }
 
+/// Takes over a folder in the person's own places folder that beta 19
+/// installed from one of their sources (it has no marker yet) when its
+/// manifest names exactly the id and version of `entry`, the pack a source is
+/// offering: writes the marker, so it shows as installed and can be updated
+/// or removed. A folder of any other id, or of another version, stays theirs.
+/// Returns whether `entry`'s folder is now one this app installed.
+fn adopt_unmarked(dir: &Path, entry: &CatalogEntry) -> bool {
+    if places::is_installed_by_app(dir, &entry.id) {
+        return true;
+    }
+    let folder = dir.join(&entry.id);
+    let plain_dir = std::fs::symlink_metadata(&folder).is_ok_and(|m| m.file_type().is_dir());
+    let manifest = std::fs::symlink_metadata(folder.join("manifest.json"))
+        .is_ok_and(|m| m.file_type().is_file());
+    if !places::is_installed(dir, &entry.id) || !plain_dir || !manifest {
+        return false;
+    }
+    let same = fp_render::env::pack::installed_identity(&folder)
+        .is_some_and(|(id, version)| id == entry.id && version == entry.version);
+    same && std::fs::write(
+        folder.join(places::INSTALLED_MARKER),
+        entry.version.as_bytes(),
+    )
+    .is_ok()
+}
+
 fn startup_in(dir: &Path) {
     places::clean_up(dir);
     places::clean_up(&fp_render::env::user::dir());
@@ -287,6 +313,9 @@ impl PlaceDownloads {
         let installed = if user {
             let dir = fp_render::env::user::dir();
             let mine = s.user_installed.get_or_insert_with(|| scan_user(&dir));
+            if !mine.contains_key(&entry.id) && adopt_unmarked(&dir, entry) {
+                mine.insert(entry.id.clone(), Some(entry.version.clone()));
+            }
             // A folder of theirs in the way is told, not offered.
             if !mine.contains_key(&entry.id) && places::is_taken_by_other(&dir, &entry.id) {
                 return Row::Failed(Failure::Taken);
@@ -508,8 +537,9 @@ fn run(
     cancel: &AtomicBool,
     user: bool,
 ) -> Result<(), Option<Failure>> {
-    // A folder of theirs with this name is left alone, before any download.
-    if user && places::is_taken_by_other(dir, &entry.id) {
+    // A folder of theirs with this name is left alone, before any download,
+    // unless it is exactly the pack beta 19 installed from this source.
+    if user && places::is_taken_by_other(dir, &entry.id) && !adopt_unmarked(dir, entry) {
         log::warn!(
             "place pack {} not installed: {} is a folder of yours",
             entry.id,
@@ -594,6 +624,11 @@ mod tests {
         let places = tmp.as_path();
         std::fs::create_dir_all(places.join(".campsite.old")).unwrap();
         std::fs::write(places.join(".campsite.old/manifest.json"), b"{}").unwrap();
+        std::fs::write(
+            places.join(".campsite.old").join(places::INSTALLED_MARKER),
+            b"1",
+        )
+        .unwrap();
         std::fs::create_dir_all(places.join(".other.part")).unwrap();
         startup_in(places);
         assert!(places.join("campsite/manifest.json").is_file());
@@ -813,6 +848,42 @@ mod tests {
         );
         assert_eq!(r, Err(Some(Failure::Taken)));
         assert!(tmp.join("campsite/manifest.json").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_pack_beta_19_installed_from_a_source_is_adopted_only_when_it_matches() {
+        let tmp = std::env::temp_dir().join(format!("laterna-user-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let manifest = |id: &str, version: &str| {
+            format!("{{\"format\":1,\"id\":\"{id}\",\"version\":\"{version}\"}}")
+        };
+        let make = |folder: &str, id: &str, version: &str| {
+            std::fs::create_dir_all(tmp.join(folder)).unwrap();
+            std::fs::write(
+                tmp.join(folder).join("manifest.json"),
+                manifest(id, version),
+            )
+            .unwrap();
+        };
+        // Exactly the offered pack: adopted.
+        make("campsite", "campsite", "1");
+        // The right id at another version, and a manifest naming another id:
+        // theirs.
+        make("lodge", "lodge", "0.9");
+        make("cabin", "other", "1");
+        let adopt = |id: &str| adopt_unmarked(&tmp, &entry(id));
+        assert!(adopt("campsite"));
+        assert!(places::is_installed_by_app(&tmp, "campsite"));
+        assert!(scan_user(&tmp).contains_key("campsite"));
+        assert!(!adopt("lodge"));
+        assert!(!adopt("cabin"));
+        assert!(!adopt("missing"));
+        assert!(places::is_taken_by_other(&tmp, "lodge"));
+        assert!(places::is_taken_by_other(&tmp, "cabin"));
+        // Once adopted it can be removed like any the app installed.
+        PlaceDownloads::default().remove_in("campsite", &tmp, true);
+        assert!(!tmp.join("campsite").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

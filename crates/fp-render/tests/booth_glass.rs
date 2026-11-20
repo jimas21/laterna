@@ -88,6 +88,7 @@ fn shoot(
     e: &mut OffscreenEyes,
     place: Place,
     picture: Option<&Arc<VideoFrame>>,
+    house: f32,
 ) -> Vec<u8> {
     let layout = place.layout();
     let screen = layout.screen.expect("the pack has a screen");
@@ -104,7 +105,7 @@ fn shoot(
         let env = EnvFrame {
             screen_light: 0.0,
             time: f64::from(t),
-            ..place_frame(place, SeatName::Middle, 0.0)
+            ..place_frame(place, SeatName::Middle, house)
         };
         let mut p = common::params(
             Projection::Flat,
@@ -171,7 +172,7 @@ fn the_film_is_mirrored_on_the_booth_glass_of_a_pack_that_has_one() {
     };
     r.set_place_knobs(true, false);
 
-    let img = shoot(&mut r, &mut e, booth, Some(&film));
+    let img = shoot(&mut r, &mut e, booth, Some(&film), 0.0);
     let red = |c: [u8; 3]| c[0] > 12 && c[2] < 6;
     let blue = |c: [u8; 3]| c[2] > 12 && c[0] < 6;
     let (red_n, red_x) = find(&img, red);
@@ -199,15 +200,22 @@ fn the_film_is_mirrored_on_the_booth_glass_of_a_pack_that_has_one() {
     assert!((40..120).contains(&peak), "the glass is not faint: {peak}");
 
     // The same room with no video: nothing on the glass.
-    let none = shoot(&mut r, &mut e, booth, None);
+    let none = shoot(&mut r, &mut e, booth, None, 0.0);
     assert_eq!(
         find(&none, red).0 + find(&none, blue).0,
         0,
         "glass with no film"
     );
     // A pack without the field is as it was.
-    let other = shoot(&mut r, &mut e, plain, Some(&film));
+    let other = shoot(&mut r, &mut e, plain, Some(&film), 0.0);
     let (a, b) = (find(&other, red).0, find(&other, blue).0);
     assert_eq!(a + b, 0, "a pack with no glass shows one: {a} {b}");
+    // With the house lights up (paused) the glass is gone.
+    let up = shoot(&mut r, &mut e, booth, Some(&film), 1.0);
+    assert_eq!(
+        find(&up, red).0 + find(&up, blue).0,
+        0,
+        "the glass shows with the house lights up"
+    );
     e.destroy(&r);
 }
