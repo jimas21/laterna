@@ -13,6 +13,16 @@ pub struct Entry {
 /// Newest first.
 pub const ENTRIES: &[Entry] = &[
     Entry {
+        version: "0.18.0-beta.20",
+        bullets: &[
+            "Pulling the screen toward you keeps it coming, even past your head, instead of bouncing back out.",
+            "The move bar and resize corner fade away after Play, and come back when you point near the bottom of the screen.",
+            "A Place key on the control bar opens the place, seat and lights in one press; house lights have fine steps near off.",
+            "Screen light and Minimal lighting now work in places you add yourself, and a place can show a faint reflection of the film on the glass behind you.",
+            "Installing or removing a place no longer touches a folder of your own with the same name.",
+        ],
+    },
+    Entry {
         version: "0.18.0-beta.19",
         bullets: &[
             "The cinema's room murmur is gone: it sounded harsh. Room sound comes back once it is a real recording.",
