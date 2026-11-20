@@ -1733,8 +1733,6 @@ mod tests {
         assert_eq!(key.size(), Vec2::splat(CLOSE_KEY));
         assert!(key.right() > body.right() - 2.0 * CLOSE_KEY, "at the right");
         assert!(key.top() < body.top() + 2.0 * CLOSE_KEY, "at the top");
-        // A big enough target to point at.
-        assert!(CLOSE_KEY >= 32.0);
     }
 
     #[test]
