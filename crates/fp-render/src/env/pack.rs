@@ -2788,7 +2788,7 @@ mod tests {
                 "crackle",
                 { "sound": "crickets", "level": 0.4 },
                 { "sound": "murmur", "level": 0.5, "with_house_lights": false },
-            ])
+            ]);
         })
         .unwrap();
         let loops = m.layout().ambience.unwrap();
