@@ -195,7 +195,7 @@ pub struct Manifest {
     pub ambience: Option<Vec<AmbienceSpec>>,
     /// The projection booth's window, for the film's reflection. A field
     /// that is not a usable glass is dropped, never a reason to refuse the
-    /// pack (see [`lenient_glass`]).
+    /// pack (see `lenient_glass`).
     #[serde(default, deserialize_with = "lenient_glass")]
     pub booth_glass: Option<BoothGlassSpec>,
 }
