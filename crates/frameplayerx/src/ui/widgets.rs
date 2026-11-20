@@ -188,6 +188,36 @@ pub fn panel_slab(ctx: &egui::Context, radius: f32) -> Rect {
     rect
 }
 
+/// How big the close key in a pop-up's corner is, points, and how far in
+/// from the body's edges.
+pub const CLOSE_KEY: f32 = 36.0;
+const CLOSE_INSET: f32 = 8.0;
+
+/// Where a pop-up's close key goes: its top right corner, inside `body`.
+pub fn close_spot(body: Rect) -> Rect {
+    Rect::from_min_size(
+        Pos2::new(
+            body.right() - CLOSE_INSET - CLOSE_KEY,
+            body.top() + CLOSE_INSET,
+        ),
+        Vec2::splat(CLOSE_KEY),
+    )
+}
+
+/// The close (X) key every pop-up from the control bar has in its corner:
+/// the adjust panel, the audio and subtitles picker and the More list. True
+/// when pressed. Placed where it is without moving the pop-up's own layout.
+pub fn close_key(ui: &mut Ui, body: Rect) -> bool {
+    let mut at = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("close-key")
+            .max_rect(close_spot(body)),
+    );
+    icon_button(&mut at, super::icons::X, CLOSE_KEY, false)
+        .tip(tr!("player-close"))
+        .clicked()
+}
+
 /// [`panel_slab`]'s body at `rect`, for a panel that shows less of itself.
 pub fn slab(ctx: &egui::Context, rect: Rect, radius: f32) {
     let p = ctx.layer_painter(egui::LayerId::background());
@@ -1694,6 +1724,57 @@ pub fn display_title(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_popups_close_key_sits_in_its_top_right_corner() {
+        let body = Rect::from_min_max(Pos2::new(20.0, 8.0), Pos2::new(1080.0, 612.0));
+        let key = close_spot(body);
+        assert!(body.contains_rect(key));
+        assert_eq!(key.size(), Vec2::splat(CLOSE_KEY));
+        assert!(key.right() > body.right() - 2.0 * CLOSE_KEY, "at the right");
+        assert!(key.top() < body.top() + 2.0 * CLOSE_KEY, "at the top");
+    }
+
+    #[test]
+    fn pressing_the_close_key_closes_and_nothing_else_does() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 640.0));
+        let body = Rect::from_min_max(Pos2::new(20.0, 8.0), Pos2::new(1080.0, 612.0));
+        let run = |events: Vec<egui::Event>| {
+            let mut pressed = false;
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    pressed = close_key(ui, body);
+                });
+            });
+            pressed
+        };
+        let button = |pos: Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // Fonts take a pass to arrive.
+        run(vec![]);
+        run(vec![]);
+        // A click in the middle of the panel leaves it open.
+        let middle = body.center();
+        run(vec![egui::Event::PointerMoved(middle)]);
+        run(vec![button(middle, true)]);
+        assert!(!run(vec![button(middle, false)]));
+        // A click on the key closes it.
+        let at = close_spot(body).center();
+        run(vec![egui::Event::PointerMoved(at)]);
+        run(vec![button(at, true)]);
+        assert!(run(vec![button(at, false)]));
+    }
 
     #[test]
     fn a_box_too_wide_to_fit_goes_against_the_left() {

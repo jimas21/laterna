@@ -26,7 +26,7 @@ use crate::ui::{
 };
 use crate::world::{
     PLACE_LEVEL_WITHIN_DEG, Panel, Pointer, anchor_facing, anchor_facing_within, anchor_from_head,
-    follow, place, place_around, place_below, player_frame, turned_with_picture,
+    follow, place, place_around, place_below, player_frame, turned_with_picture, upright_popup,
 };
 use crate::writer::{Failing, Key};
 use fp_core::PlaybackStatus;

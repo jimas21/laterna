@@ -971,6 +971,9 @@ pub fn more_panel(ctx: &egui::Context, v: &mut View) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
+            if widgets::close_key(ui, body) {
+                state.more_open = false;
+            }
             let inner = body.shrink(TRACK_PAD);
             for (i, (name, rows)) in columns.into_iter().enumerate() {
                 let x = inner.left() + i as f32 * (MORE_COLUMN + MORE_GAP);
@@ -1534,7 +1537,7 @@ fn tabs() -> [(&'static str, &'static str); 7] {
 
 /// Format, view adjustments, tracks and haptics for the open video.
 pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
-    widgets::panel_slab(ctx, 28.0);
+    let body = widgets::panel_slab(ctx, 28.0);
     let frame = egui::Frame::new()
         .outer_margin(widgets::SHADOW_ROOM)
         .inner_margin(egui::Margin::same(22));
@@ -1542,6 +1545,10 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
         let Some(pb) = v.playback.as_deref_mut() else {
             return;
         };
+        // Every pop-up has its close key in its corner.
+        if widgets::close_key(ui, body) {
+            v.state.adjust_open = false;
+        }
         ui.label(
             RichText::new(tr!("player-adjust"))
                 .font(theme::font(Weight::Bold, 26.0))
@@ -2551,10 +2558,13 @@ pub fn tracks_panel(ctx: &egui::Context, v: &mut View) {
     }) {
         v.state.tracks_open = false;
     }
-    let actions = &mut *v.actions;
+    let (actions, state) = (&mut *v.actions, &mut *v.state);
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
+            if widgets::close_key(ui, body) {
+                state.tracks_open = false;
+            }
             let inner = body.shrink(TRACK_PAD);
             let columns = if quality_rows > 0 { 3.0 } else { 2.0 };
             let w = (inner.width() - TRACK_PAD * (columns - 1.0)) / columns;
@@ -3034,6 +3044,23 @@ fn stereo_pictures(
 mod tests {
     use super::*;
     use crate::settings::HOUSE_PLAYING_START;
+
+    #[test]
+    fn pressing_a_tab_entry_again_closes_the_panel() {
+        let mut state = crate::ui::UiState::default();
+        // The More list's Place entry opens Position; the same entry again
+        // (or the format pill for Format) shuts it.
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        assert!(state.adjust_open && state.adjust_tab == POSITION_TAB);
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        assert!(!state.adjust_open);
+        // Another entry while it is open changes the tab and stays open.
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        toggle_adjust_tab(&mut state, FORMAT_TAB);
+        assert!(state.adjust_open && state.adjust_tab == FORMAT_TAB);
+        toggle_format_tab(&mut state);
+        assert!(!state.adjust_open);
+    }
 
     fn settings(environment: &str, passthrough: bool) -> Settings {
         Settings {
