@@ -134,6 +134,37 @@ pub(crate) fn reach(head: Vec3, hand: Vec3) -> f32 {
     (hand - head).length()
 }
 
+/// How far a hand has gone in or out from where it took hold, measured along
+/// the line from the head to the hand at that moment. Measuring it as the
+/// hand's distance from the head instead turns round when the hand is drawn
+/// in past the head (to the face, beside it): the distance grows again and
+/// the thing carried goes back out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Reach {
+    /// From the head towards the hand when it took hold (zero: it was at the
+    /// head, so the plain distance is all there is).
+    dir: Vec3,
+    at: f32,
+}
+
+impl Reach {
+    pub fn begin(head: Vec3, hand: Vec3) -> Reach {
+        Reach {
+            dir: (hand - head).normalize_or_zero(),
+            at: reach(head, hand),
+        }
+    }
+
+    /// Metres the hand is further from the head than it began (negative:
+    /// nearer, and still nearer once past the head).
+    pub fn moved(&self, head: Vec3, hand: Vec3) -> f32 {
+        if self.dir == Vec3::ZERO {
+            return reach(head, hand) - self.at;
+        }
+        (hand - head).dot(self.dir) - self.at
+    }
+}
+
 /// Where a dragged thing `start` metres away goes when the hand moves
 /// `hand_moved` metres further from the head (negative: nearer), kept within
 /// `range` metres.
@@ -204,7 +235,7 @@ struct Drag {
     start: (f32, f32),
     /// How far the hand was from the head when the drag began, if the head
     /// was known.
-    reach: Option<f32>,
+    reach: Option<Reach>,
     /// The picture's yaw, pitch and distance deltas, following the hand.
     follow: Damped<3>,
 }
@@ -251,7 +282,7 @@ impl Controls {
                     let (yaw, pitch) = angles(rot, anchor);
                     // Without the head (then or now) the depth holds where it is.
                     let moved = match (ctx.head, d.reach) {
-                        (Some(head), Some(r)) => reach(head, pos) - r,
+                        (Some(head), Some(r)) => r.moved(head, pos),
                         _ => d.follow.value()[2],
                     };
                     let [yaw, pitch, distance] = d.follow.step(
@@ -280,7 +311,7 @@ impl Controls {
                     self.drag = Some(Drag {
                         hand: i,
                         start: angles(rot, anchor),
-                        reach: ctx.head.map(|head| reach(head, pos)),
+                        reach: ctx.head.map(|head| Reach::begin(head, pos)),
                         follow: Damped::at([0.0; 3]),
                     });
                     out.push(Cmd::DragBegin);

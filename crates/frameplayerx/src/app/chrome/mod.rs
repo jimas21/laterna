@@ -49,6 +49,16 @@ const POINTED_LINGER: f32 = 2.0;
 /// its size: the handles sit just outside it.
 const POINTED_MARGIN: f32 = 1.12;
 
+/// How far a laser must turn, degrees, to count as moving: a resting hand's
+/// tremor is not.
+const AIM_MOVED_DEG: f32 = 1.5;
+
+/// The stretch of the screen the handles are found by, as shares of its
+/// height measured up from its middle: the lower part and a little below
+/// it. A laser coming near them shows them even when it holds still, so
+/// they can be found with the player's controls hidden.
+const NEAR_HANDLES: std::ops::RangeInclusive<f32> = -0.8..=-0.25;
+
 /// The window controls' panels and what is held.
 pub struct ScreenChrome {
     pub bar: Panel,
@@ -70,6 +80,8 @@ pub struct ScreenChrome {
     /// the player's controls hidden, pointing at the screen shows its move
     /// bar and resize handle alone, as a Steam Frame window shows its own.
     pointed_at: Option<Instant>,
+    /// Where each laser pointed when it last counted as moving.
+    aim_seen: [Option<Vec3>; 2],
 }
 
 impl Default for ScreenChrome {
@@ -77,8 +89,12 @@ impl Default for ScreenChrome {
         // Texture sizes in pixels and points per egui point: fine enough that
         // the control looks sharp when it covers a few degrees of the eye's
         // view, in the same shape as the angles in `layout::LOOK`.
-        let mut bar = Panel::new([640, 144], Vec2::new(0.3, 0.07), 2.0).all_handle();
-        let mut corner = Panel::new([192, 192], Vec2::new(0.15, 0.15), 1.5).all_handle();
+        let mut bar = Panel::new([640, 144], Vec2::new(0.3, 0.07), 2.0)
+            .all_handle()
+            .softly();
+        let mut corner = Panel::new([192, 192], Vec2::new(0.15, 0.15), 1.5)
+            .all_handle()
+            .softly();
         // For comparing how they sit against the picture: with this on they
         // are drawn into the eyes with it, not as layers of their own.
         let in_eyes = std::env::var("FRAMEPLAYERX_CHROME_IN_EYES").is_ok_and(|v| v == "1");
@@ -94,6 +110,7 @@ impl Default for ScreenChrome {
             painted: [None; 2],
             multitask: None,
             pointed_at: None,
+            aim_seen: [None; 2],
         }
     }
 }
@@ -225,26 +242,44 @@ impl App {
         let hand_lost = self.docked().is_some_and(Dock::lost);
         let shown = self.window_controls_allowed() && with_bar && !hand_lost;
         self.chrome.bar.visible = shown;
-        let under_adjust = self.ui.adjust_open && part != Some(Part::Resize);
+        // Only an adjust panel that is up covers the handle: one left open
+        // under hidden controls does not.
+        let under_adjust = corner_under_adjust(self.panels[ADJUST].visible, part);
         self.chrome.corner.visible = shown && !under_adjust;
     }
 
     /// Notes whether a laser is on the flat screen (or on its move bar or
-    /// resize handle) this frame. Pointing alone shows the window controls;
-    /// the player's controls stay hidden until asked for.
+    /// resize handle) this frame. Moving a laser over the screen shows the
+    /// window controls alone, as does one near where they are or on one; the
+    /// player's controls stay hidden until asked for. A laser resting on
+    /// the screen (as after pressing Play) does not keep them up.
     pub(super) fn track_screen_pointing(&mut self, input: &FrameInput, anchor: Mat4) {
         if !self.window_controls_allowed() {
             self.chrome.pointed_at = None;
+            self.chrome.aim_seen = [None; 2];
             return;
         }
-        let on_handle = matches!(self.pointer.hovered(), Some(WINDOW_BAR | WINDOW_CORNER));
-        let on_screen = self.screen_geometry().is_some_and(|(shape, distance)| {
-            let picture = self.controls_frame(anchor);
-            input.hands.iter().filter_map(|h| h.aim).any(|(pos, rot)| {
-                pointed_at_screen(picture, pos, rot * Vec3::NEG_Z, &shape, distance)
-            })
-        });
-        if on_handle || on_screen {
+        let mut seen = matches!(self.pointer.hovered(), Some(WINDOW_BAR | WINDOW_CORNER));
+        let geometry = self.screen_geometry();
+        let picture = self.controls_frame(anchor);
+        for (i, hand) in input.hands.iter().enumerate() {
+            let Some((pos, rot)) = hand.aim else {
+                self.chrome.aim_seen[i] = None;
+                continue;
+            };
+            let dir = rot * Vec3::NEG_Z;
+            let moved = aim_moved(&mut self.chrome.aim_seen[i], dir);
+            let Some((shape, distance)) = &geometry else {
+                continue;
+            };
+            let hit = drag::on_plane_ray(picture, pos, dir, -distance);
+            seen |= match hit.map_or(Pointing::Off, |hit| pointing(hit, shape)) {
+                Pointing::Off => false,
+                Pointing::On => moved,
+                Pointing::Near => true,
+            };
+        }
+        if seen {
             self.chrome.pointed_at = Some(Instant::now());
         }
     }
@@ -517,45 +552,117 @@ impl App {
     }
 }
 
-/// Whether a ray from `origin` along `dir` meets the flat screen of `shape`,
-/// `distance` metres ahead of `picture`'s origin (a little past its edges
-/// counts). A curved screen is taken as the plane through its middle.
-fn pointed_at_screen(
-    picture: Mat4,
-    origin: Vec3,
-    dir: Vec3,
-    shape: &fp_render::ScreenShape,
-    distance: f32,
-) -> bool {
-    drag::on_plane_ray(picture, origin, dir, -distance).is_some_and(|hit| {
-        hit.x.abs() <= shape.width / 2.0 * POINTED_MARGIN
-            && hit.y.abs() <= shape.height / 2.0 * POINTED_MARGIN
-    })
+/// Whether the window controls' place is covered by the adjust panel
+/// (`adjust_up`: it is showing), unless one is being resized from.
+fn corner_under_adjust(adjust_up: bool, part: Option<Part>) -> bool {
+    adjust_up && part != Some(Part::Resize)
+}
+
+/// Whether a laser pointing along `dir` has turned since it was last seen
+/// to (`seen`, kept up to date here: it only changes when it has moved, so a
+/// slow drift adds up).
+fn aim_moved(seen: &mut Option<Vec3>, dir: Vec3) -> bool {
+    match *seen {
+        Some(prev) if prev.angle_between(dir) < AIM_MOVED_DEG.to_radians() => false,
+        was => {
+            *seen = Some(dir);
+            was.is_some()
+        }
+    }
+}
+
+/// Where a laser is on the screen's plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pointing {
+    /// Not at it.
+    Off,
+    /// On the screen, or just past its edge.
+    On,
+    /// In the lower part of it or just under, where the handles are.
+    Near,
+}
+
+/// How the laser meeting the screen's plane at `hit` (right and up from
+/// its middle, metres) is pointing at the flat screen of `shape` (a curved
+/// one is taken as the plane through its middle).
+fn pointing(hit: Vec2, shape: &fp_render::ScreenShape) -> Pointing {
+    let wide = hit.x.abs() <= shape.width / 2.0 * POINTED_MARGIN;
+    if wide && NEAR_HANDLES.contains(&(hit.y / shape.height)) {
+        Pointing::Near
+    } else if wide && hit.y.abs() <= shape.height / 2.0 * POINTED_MARGIN {
+        Pointing::On
+    } else {
+        Pointing::Off
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn pointing_at_the_screen_or_just_past_its_edge_counts() {
-        let shape = fp_render::ScreenShape {
+    fn shape() -> fp_render::ScreenShape {
+        fp_render::ScreenShape {
             width: 4.0,
             height: 2.25,
             arc: 0.0,
-        };
+        }
+    }
+
+    #[test]
+    fn pointing_at_the_screen_or_just_past_its_edge_counts() {
+        let shape = shape();
         let at = |x: f32, y: f32| {
             let dir = Vec3::new(x, y, -3.0).normalize();
-            pointed_at_screen(Mat4::IDENTITY, Vec3::ZERO, dir, &shape, 3.0)
+            drag::on_plane_ray(Mat4::IDENTITY, Vec3::ZERO, dir, -3.0)
+                .map_or(Pointing::Off, |hit| pointing(hit, &shape))
         };
-        assert!(at(0.0, 0.0));
-        assert!(at(1.9, -1.0));
+        assert_eq!(at(0.0, 0.0), Pointing::On);
+        assert_eq!(at(1.9, 0.5), Pointing::On);
         // The handles sit just outside the corner.
-        assert!(at(2.1, -1.2));
-        assert!(!at(3.0, 0.0));
-        assert!(!at(0.0, 2.0));
+        assert_eq!(at(2.1, -1.2), Pointing::Near);
+        assert_eq!(at(3.0, 0.0), Pointing::Off);
+        assert_eq!(at(0.0, 2.0), Pointing::Off);
         // Pointing away from it never counts.
-        let back = pointed_at_screen(Mat4::IDENTITY, Vec3::ZERO, Vec3::Z, &shape, 3.0);
-        assert!(!back);
+        let back = drag::on_plane_ray(Mat4::IDENTITY, Vec3::ZERO, Vec3::Z, -3.0);
+        assert!(back.is_none());
+    }
+
+    #[test]
+    fn the_lower_part_of_the_screen_and_below_it_is_near_the_handles() {
+        let shape = shape();
+        let h = shape.height;
+        let at = |x: f32, y: f32| pointing(Vec2::new(x, y * h), &shape);
+        assert_eq!(at(0.0, -0.45), Pointing::Near);
+        assert_eq!(at(0.0, -0.7), Pointing::Near);
+        assert_eq!(at(0.0, 0.0), Pointing::On);
+        assert_eq!(at(0.0, 0.4), Pointing::On);
+        assert_eq!(at(0.0, -1.2), Pointing::Off);
+        assert_eq!(at(3.0, -0.5), Pointing::Off);
+    }
+
+    #[test]
+    fn a_laser_at_rest_does_not_count_as_moving() {
+        let mut seen = None;
+        let along = |deg: f32| Quat::from_rotation_y(deg.to_radians()) * Vec3::NEG_Z;
+        // The first sight is not a move.
+        assert!(!aim_moved(&mut seen, along(0.0)));
+        // A hand's tremor is not.
+        for deg in [0.2, -0.3, 0.5, -0.4, 0.3] {
+            assert!(!aim_moved(&mut seen, along(deg)));
+        }
+        // A real turn is, once; then it rests again.
+        assert!(aim_moved(&mut seen, along(5.0)));
+        assert!(!aim_moved(&mut seen, along(5.2)));
+        // A slow drift adds up to a move.
+        let drifted = (0..20).any(|i| aim_moved(&mut seen, along(5.0 + 0.2 * i as f32)));
+        assert!(drifted);
+    }
+
+    #[test]
+    fn an_adjust_panel_left_open_under_hidden_controls_leaves_the_handle() {
+        assert!(!corner_under_adjust(false, None));
+        assert!(corner_under_adjust(true, None));
+        assert!(corner_under_adjust(true, Some(Part::Move)));
+        assert!(!corner_under_adjust(true, Some(Part::Resize)));
     }
 }

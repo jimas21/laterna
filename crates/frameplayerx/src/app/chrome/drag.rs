@@ -11,7 +11,7 @@
 //! pushes it away or pulls it near. Resizing keeps the screen's middle and
 //! shape and scales it so its corner follows the laser.
 
-use crate::controls::{DRAG_TAU, Damped, reach, reached_distance, wrap};
+use crate::controls::{DRAG_TAU, Damped, Reach, reached_distance, wrap};
 use crate::world::GrabBy;
 use fp_core::view::SCREEN_DISTANCE;
 use fp_render::ScreenShape;
@@ -147,7 +147,7 @@ pub struct ScreenDrag {
     carry: Vec3,
     origin: Vec3,
     start: (f32, f32),
-    reach: Option<f32>,
+    reach: Option<Reach>,
     follow: Damped<3>,
     /// Resizing: how far the screen's corner stands in front of its middle
     /// (the curve's depth) as the screen was shaped when taken hold of, the
@@ -239,7 +239,7 @@ impl ScreenDrag {
             carry,
             origin,
             start: carried(aim, carry, origin, room),
-            reach: head.map(|head| reach(head, aim.0)),
+            reach: head.map(|head| Reach::begin(head, aim.0)),
             follow: Damped::at([0.0; 3]),
             curve,
             chord,
@@ -279,7 +279,7 @@ impl ScreenDrag {
         let Some(aim) = f.aim else { return };
         let (yaw, pitch) = carried(aim, self.carry, self.origin, f.room);
         let moved = match (f.head, self.reach) {
-            (Some(head), Some(r)) => reach(head, aim.0) - r,
+            (Some(head), Some(r)) => r.moved(head, aim.0),
             // Without the head (then or now) the depth holds where it is.
             _ => self.follow.value()[2],
         };
@@ -481,6 +481,36 @@ mod tests {
             "{:?}",
             step.view
         );
+    }
+
+    #[test]
+    fn drawing_the_hand_in_past_the_head_keeps_bringing_the_screen_nearer() {
+        // The hand's distance from the head turns round once it is past it;
+        // the screen must not go back out with it.
+        for by in [GrabBy::Trigger, GrabBy::Grip] {
+            let ahead = (Vec3::new(0.0, 0.0, -0.4), Quat::IDENTITY);
+            let mut d = ScreenDrag::begin(start(Part::Move, by, ahead, flat()));
+            let mut last = f32::MAX;
+            for i in 0..=16 {
+                let z = -0.4 + 0.05 * i as f32;
+                let step = hold(&mut d, (Vec3::new(0.0, 0.0, z), Quat::IDENTITY), 0.0, 0.5);
+                assert!(
+                    step.view.distance <= last + 1e-4,
+                    "{by:?} z={z}: {} after {last}",
+                    step.view.distance
+                );
+                last = step.view.distance;
+            }
+            assert!(near(last, 1.0, 1e-4), "{by:?} {last}");
+            // And pushing out again goes monotonically further.
+            for i in 0..=32 {
+                let z = 0.4 - 0.05 * i as f32;
+                let step = hold(&mut d, (Vec3::new(0.0, 0.0, z), Quat::IDENTITY), 0.0, 0.5);
+                assert!(step.view.distance >= last - 1e-4, "{by:?} z={z}");
+                last = step.view.distance;
+            }
+            assert!(last > 4.0, "{by:?} {last}");
+        }
     }
 
     #[test]

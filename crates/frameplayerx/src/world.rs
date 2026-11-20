@@ -43,6 +43,8 @@ pub struct Panel {
     pub opacity: f32,
     /// 0 hidden → 1 shown, following `visible` over a short fade.
     fade: f32,
+    /// Seconds to fade in and out.
+    fade_secs: (f32, f32),
     events: Vec<Event>,
     /// Where egui's pointer was last put by a queued event, so a hover that
     /// has not moved is not queued again (see [`Panel::hover_at`]).
@@ -78,6 +80,7 @@ impl Panel {
             in_eyes: false,
             opacity: 1.0,
             fade: 0.0,
+            fade_secs: (0.15, 0.25),
             events: Vec::new(),
             pointer_at: None,
             hovered: false,
@@ -102,6 +105,13 @@ impl Panel {
     /// texture should already be fine enough for the largest scale.
     pub fn growing(mut self) -> Panel {
         self.grows = true;
+        self
+    }
+
+    /// A panel that comes and goes slowly, for a control that should
+    /// drift into view rather than appear.
+    pub fn softly(mut self) -> Panel {
+        self.fade_secs = (0.6, 0.9);
         self
     }
 
@@ -305,12 +315,13 @@ impl Panel {
         Ok(())
     }
 
-    /// Moves the fade towards `visible`: in over 0.15 s, out over 0.25 s.
+    /// Moves the fade towards `visible`: in over 0.15 s, out over 0.25 s
+    /// (longer for a [`Panel::softly`] one).
     pub fn update_fade(&mut self, dt: f32) {
         self.fade = if self.visible {
-            (self.fade + dt / 0.15).min(1.0)
+            (self.fade + dt / self.fade_secs.0).min(1.0)
         } else {
-            (self.fade - dt / 0.25).max(0.0)
+            (self.fade - dt / self.fade_secs.1).max(0.0)
         };
     }
 
@@ -865,6 +876,27 @@ mod tests {
         p.pose = Mat4::from_translation(Vec3::new(0.0, 0.0, -2.0));
         p.visible = true;
         p
+    }
+
+    #[test]
+    fn a_soft_panel_fades_in_and_out_slower_than_a_usual_one() {
+        let secs_to_show = |mut p: Panel| {
+            p.visible = true;
+            let mut t = 0.0;
+            while !p.fully_shown() {
+                p.update_fade(0.01);
+                t += 0.01;
+            }
+            t
+        };
+        let usual = secs_to_show(panel_in_front());
+        let soft = secs_to_show(panel_in_front().softly());
+        assert!(usual < 0.2 && soft > 0.5, "{usual} {soft}");
+        let mut p = panel_in_front().softly();
+        p.update_fade(2.0);
+        p.visible = false;
+        p.update_fade(0.25);
+        assert!(p.shown(), "still fading out after a quarter second");
     }
 
     #[test]
