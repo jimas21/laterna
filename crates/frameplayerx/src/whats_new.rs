@@ -13,6 +13,16 @@ pub struct Entry {
 /// Newest first.
 pub const ENTRIES: &[Entry] = &[
     Entry {
+        version: "0.18.0-beta.18",
+        bullets: &[
+            "Glossy surfaces in a place now catch the film's light and the shine moves as you move your head.",
+            "The cinema has a soft room murmur that fades as the lights go down, with its own slider; Minimal lighting turns exit and step lights off.",
+            "Drop a 360 photo or a place pack into the environments folder and it shows under Yours; you can add your own place sources too.",
+            "A sleep timer in the player's More list, and a short opening you can turn off.",
+            "Smoother 4K and 8K: the decoder gets the buffers it needs, and Plex sends HEVC for files the headset can't decode itself.",
+        ],
+    },
+    Entry {
         version: "0.18.0-beta.17",
         bullets: &[
             "Sound now comes from the screen: each speaker stays put as you turn your head, and every place has its own room echo.",
