@@ -763,6 +763,18 @@ fn sound(ui: &mut egui::Ui, v: &mut View) {
         ) {
             s.room_echo = (echo / 100.0).clamp(0.0, 1.0);
         }
+        let mut ambience = s.ambience_level * 100.0;
+        if r.slider(
+            tr!("settings-room-ambience"),
+            Some(tr!("settings-room-ambience-desc")),
+            &mut ambience,
+            0.0..=100.0,
+            crate::settings::AMBIENCE_START * 100.0,
+            " %",
+            0,
+        ) {
+            s.ambience_level = (ambience / 100.0).clamp(0.0, 1.0);
+        }
         r.row(
             tr!("settings-audio-device"),
             Some(tr!("settings-audio-device-desc")),

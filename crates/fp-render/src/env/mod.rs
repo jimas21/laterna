@@ -36,6 +36,17 @@ pub enum Place {
     Studio,
 }
 
+/// One of the sounds a place makes while it is shown (see
+/// [`Place::ambience`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmbienceLoop {
+    pub sound: fp_media::audio::ambience::Sound,
+    /// Whether the sound goes with the house lights: heard while they are up
+    /// and gone once they are down for the film. A sound without this is
+    /// heard whenever the place is (a camp fire, crickets).
+    pub with_house_lights: bool,
+}
+
 /// Whether a place is a room around the screen or a backdrop around the
 /// viewer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +94,21 @@ impl Place {
             Place::Cinema => Acoustics::Hall,
             Place::Studio => Acoustics::Dry,
         })
+    }
+
+    /// The sounds the place makes, mixed on their own and set with the
+    /// Room ambience slider. A place with none is quiet.
+    pub fn ambience(self) -> &'static [AmbienceLoop] {
+        use fp_media::audio::ambience::Sound;
+        match self {
+            // The audience before the film: a soft murmur that goes as the
+            // house lights go down.
+            Place::Cinema => &[AmbienceLoop {
+                sound: Sound::Murmur,
+                with_house_lights: true,
+            }],
+            Place::Studio => &[],
+        }
     }
 
     /// The seats and screen frame. Cheap: no meshes are built.
@@ -394,6 +420,16 @@ mod tests {
     #[test]
     fn vertex_is_44_bytes() {
         assert_eq!(size_of::<Vertex>(), 44);
+    }
+
+    #[test]
+    fn the_cinema_murmurs_with_its_house_lights_and_the_studio_is_quiet() {
+        use fp_media::audio::ambience::Sound;
+        let cinema = Place::Cinema.ambience();
+        assert_eq!(cinema.len(), 1);
+        assert_eq!(cinema[0].sound, Sound::Murmur);
+        assert!(cinema[0].with_house_lights);
+        assert!(Place::Studio.ambience().is_empty());
     }
 
     #[test]

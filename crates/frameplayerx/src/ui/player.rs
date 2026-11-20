@@ -2077,6 +2077,11 @@ pub(super) fn place_controls(
         ) {
             settings.screen_light_level = (light / 100.0).clamp(0.0, 1.0);
         }
+        r.switch(
+            tr!("place-minimal-lighting"),
+            Some(tr!("place-minimal-lighting-desc")),
+            &mut settings.minimal_lighting,
+        );
     });
     if let Some(i) = picked {
         pick_seat(settings, place, i);

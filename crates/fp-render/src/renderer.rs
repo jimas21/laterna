@@ -352,6 +352,9 @@ pub struct Renderer {
     /// The place knobs the environment set (perf_ab.rs), and, with
     /// `FRAMEPLAYERX_PERF_AB=1`, the cycle that steps through them.
     knobs: Knobs,
+    /// How strongly a place's own lights (exit signs, step lights) glow,
+    /// 0 off to 1 as built (see [`Renderer::set_accent_lights`]).
+    accent_lights: f32,
     ab: Option<AbCycle>,
     /// A place was drawn in the last eye passes.
     env_shown: bool,
@@ -611,6 +614,7 @@ impl Renderer {
                 samples,
                 msaa: None,
                 knobs,
+                accent_lights: 1.0,
                 ab: None,
                 env_shown: false,
                 fragments: None,
@@ -2329,6 +2333,7 @@ impl Renderer {
             room_view_proj,
             eye_pos,
             house: frame.house,
+            accent: self.accent_lights,
             floor_drop,
             time: frame.time,
             screen,
@@ -2580,6 +2585,18 @@ impl Renderer {
             return Err(e);
         }
         Ok((self.samples(), self.depth_format))
+    }
+
+    /// How strongly the lights a place makes itself (exit signs, step and
+    /// aisle lights; not a projector's window, which follows the picture)
+    /// glow from now on: 1 as built, 0 off. Anything else is clamped. The
+    /// app eases it to 0 as the film starts when Minimal lighting is on.
+    pub fn set_accent_lights(&mut self, scale: f32) {
+        self.accent_lights = if scale.is_finite() {
+            scale.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
     }
 
     /// Turns the place knobs (perf_ab.rs) on or off for what is drawn from

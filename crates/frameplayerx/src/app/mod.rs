@@ -252,6 +252,9 @@ pub struct App {
     /// Holds the house lights at this level, 0 dark to 1 full, instead of
     /// letting playback dim and raise them: for the desktop preview.
     pub house_override: Option<f32>,
+    /// The sounds of the place shown, on their own output. Made when a place
+    /// first has a sound to play.
+    ambience: Option<fp_media::audio::ambience::Ambience>,
     /// When the web remote's details were last built.
     remote_details_at: Instant,
     /// The open video's picture for the web remote, by its location.
@@ -411,6 +414,7 @@ impl App {
             place_shown: None,
             house_ease: 1.0,
             house_override: None,
+            ambience: None,
             remote_details_at: Instant::now(),
             remote_picture: None,
             update: None,
