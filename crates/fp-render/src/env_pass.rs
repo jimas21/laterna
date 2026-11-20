@@ -113,6 +113,33 @@ pub(crate) fn screen_mask(
 /// lets through, which is already faint (a dielectric reflects 4% facing it).
 pub(crate) const SHINE_GAIN: f32 = 1.0;
 
+/// How bright, at the Screen light slider's start, the brightest texel of a
+/// pack's basis light is for a white picture (linear): what the Cinema pack's
+/// own `basis_gain` gives, and so what the other packs are brought to.
+///
+/// A pack's `basis_gain` undoes the bake's 8-bit packing (the basis textures
+/// are scaled up to use their range), so a big dark room, whose light at any
+/// surface is small, is stored with a small gain, and nothing in the format
+/// says how much light that is on screen. The Multiplex pack's is 1/128:
+/// the picture's light there came to at most 0.8% of white, 2 codes of 255
+/// for an ordinary scene even at the slider's top, and moving the slider
+/// changed nothing anyone could see.
+pub(crate) const LIGHT_PEAK: f32 = 0.0625;
+/// The most [`light_boost`] lifts a pack's light.
+pub(crate) const LIGHT_BOOST_MAX: f32 = 16.0;
+
+/// What a pack's `basis_gain` is multiplied by so that the picture's light on
+/// its brightest texel is [`LIGHT_PEAK`] at the slider's start: 1 for a gain
+/// that is there already (or above), up to [`LIGHT_BOOST_MAX`] for a tiny one,
+/// and 1 for a gain that is not a positive number (the light is off then).
+pub(crate) fn light_boost(basis_gain: f32) -> f32 {
+    if basis_gain.is_finite() && basis_gain > 0.0 {
+        (LIGHT_PEAK / basis_gain).clamp(1.0, LIGHT_BOOST_MAX)
+    } else {
+        1.0
+    }
+}
+
 /// What the collapse draws the picture's light with: each patch's colour
 /// times the light's strength (`env_collapse.wgsl`).
 type Weights = [Vec3; PATCHES];
@@ -238,7 +265,10 @@ impl Look {
             palette2,
             lighting: data.lighting,
             sky: data.sky,
-            baked_gain: data.baked.as_ref().map_or(0.0, |b| b.basis_gain),
+            baked_gain: data
+                .baked
+                .as_ref()
+                .map_or(0.0, |b| b.basis_gain * light_boost(b.basis_gain)),
         }
     }
 
@@ -1196,6 +1226,25 @@ mod tests {
     }
 
     #[test]
+    fn a_dim_packs_light_is_brought_up_to_the_cinemas_and_a_bright_ones_is_left() {
+        // The Multiplex's gains (1/128 and 1/256): lifted so that the picture's
+        // light on its brightest texel is the Cinema pack's.
+        for gain in [1.0 / 128.0, 1.0 / 256.0] {
+            let got = gain * light_boost(gain);
+            assert!((got - LIGHT_PEAK).abs() < 1e-6, "{gain}: {got}");
+        }
+        // The Cinema's own, and anything brighter, as baked.
+        for gain in [0.0625, 0.125, 1.0, 2.5] {
+            assert_eq!(light_boost(gain), 1.0, "{gain}");
+        }
+        // A tiny gain is lifted only so far; nonsense is left alone.
+        assert_eq!(light_boost(1e-6), LIGHT_BOOST_MAX);
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(light_boost(bad), 1.0);
+        }
+    }
+
+    #[test]
     fn a_packs_basis_gain_reaches_the_uniform_and_a_built_in_room_has_none() {
         let data = Place::Cinema.build_builtin();
         assert_eq!(Look::new(&data).uniform(&input(1.0)).baked, Vec4::ZERO);
@@ -1217,6 +1266,19 @@ mod tests {
         data.baked = Some(Arc::new(baked));
         let u = Look::new(&data).uniform(&input(1.0));
         assert_eq!(u.baked.x, 2.5);
+        // A dim pack's reaches it brought up (see `light_boost`).
+        let dim = crate::env::pack::Baked {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            colors: none(),
+            basis: none(),
+            material: None,
+            basis_gain: 1.0 / 128.0,
+            seat: None,
+        };
+        data.baked = Some(Arc::new(dim));
+        let u = Look::new(&data).uniform(&input(1.0));
+        assert!((u.baked.x - LIGHT_PEAK).abs() < 1e-6, "{}", u.baked.x);
     }
 
     #[test]

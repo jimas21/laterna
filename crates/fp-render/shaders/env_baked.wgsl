@@ -141,7 +141,7 @@ fn span_cover(c: f32, h: f32, s: f32) -> f32 {
 // come first, in uniform control flow; everything after is arithmetic that
 // may differ from pixel to pixel.
 fn shine_light(in: VsOut) -> vec3<f32> {
-    let m = textureSample(material, basis_sampler, in.uv).rg;
+    let m = textureSample(material, basis_sampler, in.uv).rgb;
     let slope = cross(dpdx(in.rpos), dpdy(in.rpos));
 
     let to_eye = env.eye_pos[pc.eye].xyz - in.rpos;
@@ -193,7 +193,11 @@ fn shine_light(in: VsOut) -> vec3<f32> {
     let fresnel = F0 + (max(1.0 - rough, F0) - F0) * edge;
 
     let valid = flat_len > 1e-20 && heading < -0.001 && t > 0.0;
-    let strength = env.shine.y * env.screen_n.w * clamp(m.y, 0.0, 1.0) * fresnel * cover;
+    // The pack's accent lights (material B: rails, exit signs, step lights)
+    // are lamps, not mirrors: the film is not reflected in them, so nothing
+    // of the highlight is added where the pack marks one.
+    let mirror = clamp(m.y, 0.0, 1.0) * (1.0 - clamp(m.z, 0.0, 1.0));
+    let strength = env.shine.y * env.screen_n.w * mirror * fresnel * cover;
     return select(vec3<f32>(0.0), colour * strength, valid);
 }
 
