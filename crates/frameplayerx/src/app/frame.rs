@@ -437,6 +437,50 @@ impl App {
             .set(&wants);
     }
 
+    /// The sleep timer: counts the time spent watching, turns the sound down
+    /// over its last ten seconds and pauses. It ends with the video.
+    fn update_sleep_timer(&mut self, dt: f32) {
+        use crate::sleep_timer::Tick;
+        let volume = self.settings.volume;
+        let Some(p) = self.playback.as_ref().map(|p| &p.player) else {
+            self.ui.sleep = Default::default();
+            self.sleep_faded = false;
+            return;
+        };
+        let state = p.state();
+        if matches!(state, PlayerState::Ended | PlayerState::Failed) {
+            self.ui.sleep = Default::default();
+        }
+        let watching = matches!(state, PlayerState::Playing | PlayerState::Buffering);
+        let speed = p.speed().max(0.1);
+        let item_left =
+            (p.duration() > 0.0).then(|| ((p.duration() - p.position()) / speed) as f32);
+        // A paused video neither counts down nor fades.
+        let tick = if watching {
+            self.ui.sleep.tick(dt, item_left)
+        } else {
+            Tick::Idle
+        };
+        match tick {
+            Tick::Fade(gain) => {
+                p.set_volume(volume * gain);
+                self.sleep_faded = true;
+            }
+            Tick::Pause => {
+                p.pause();
+                p.set_volume(volume);
+                self.sleep_faded = false;
+                self.ui.toast(tr!("sleep-paused"));
+            }
+            Tick::Idle => {
+                if self.sleep_faded {
+                    p.set_volume(volume);
+                    self.sleep_faded = false;
+                }
+            }
+        }
+    }
+
     /// The picture: what its yaw and pitch turn (by dragging it, or the
     /// Position sliders). A flat screen and the subtitles are placed from
     /// it; a 180°/360° picture turns the same way. A flat screen starts
@@ -732,6 +776,13 @@ impl App {
         kb_target: Option<usize>,
     ) {
         let mut actions = Vec::new();
+        if let Some(a) = &mut self.ui.afterglow {
+            a.advance(input.dt);
+            if a.done() {
+                self.ui.afterglow = None;
+            }
+            self.panels[MAIN].request_repaint();
+        }
         if self.thumbs.poll(&self.panels[MAIN].ctx) {
             self.panels[MAIN].request_repaint();
         }
@@ -844,6 +895,7 @@ impl App {
         self.place_shown = in_place;
         self.update_house_lights(input.dt);
         self.update_room_ambience(renderer, in_place);
+        self.update_sleep_timer(input.dt);
         let anchor_rot = anchor.to_scale_rotation_translation().1;
         let player = self.picture_anchor(anchor);
         // A room sits round the viewer in a seat and turns with the picture;

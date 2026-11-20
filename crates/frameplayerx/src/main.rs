@@ -31,6 +31,7 @@ mod seektest;
 mod services;
 mod settings;
 mod shuffle;
+mod sleep_timer;
 mod subtitles;
 mod testcard;
 mod tragus;

@@ -258,6 +258,17 @@ impl App {
     pub(super) fn note_version(&mut self) {
         let current = env!("CARGO_PKG_VERSION");
         self.ui.whats_new = crate::whats_new::to_show(&self.settings.last_version, current);
+        if !self.settings.tips_seen {
+            if crate::whats_new::tips_due(&self.settings.last_version) {
+                self.ui.tips = true;
+            } else {
+                // A first run is not an update: nothing to point out yet.
+                self.settings.tips_seen = true;
+            }
+        }
+        if self.settings.afterglow_opening {
+            self.ui.afterglow = Some(ui::afterglow::Afterglow::new());
+        }
         if self.settings.last_version != current {
             self.settings.last_version = current.to_string();
         }

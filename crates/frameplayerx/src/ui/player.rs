@@ -778,6 +778,7 @@ struct MoreState {
     loop_video: bool,
     autoplay: bool,
     speed: f64,
+    sleep: crate::sleep_timer::Sleep,
     size: Option<ScreenSize>,
     /// Keys the bar was too narrow for.
     dropped: Dropped,
@@ -822,6 +823,12 @@ fn more_columns(m: &MoreState) -> [Vec<MoreRow>; 2] {
             icons::BOOKMARK_SIMPLE,
             tr!("more-bookmark"),
             Does::act(Action::AddBookmark),
+        ),
+        MoreRow::value(
+            icons::TIMER,
+            tr!("more-sleep"),
+            sleep_label(m.sleep),
+            Action::CycleSleep,
         ),
     ];
     // What the bar had no room for.
@@ -882,6 +889,11 @@ fn more_columns(m: &MoreState) -> [Vec<MoreRow>; 2] {
             });
         }
     }
+    screen.push(MoreRow::go(
+        icons::GAME_CONTROLLER,
+        tr!("more-controller"),
+        Does::act(Action::OpenControllerSettings),
+    ));
     // Your room shows around a flat video's screen, or through a
     // side-by-side passthrough video's own mask.
     if m.passthrough_available {
@@ -927,6 +939,7 @@ pub fn more_panel(ctx: &egui::Context, v: &mut View) {
         loop_video: v.settings.loop_video,
         autoplay: v.settings.autoplay,
         speed: pb.player.speed(),
+        sleep: v.state.sleep,
         size: super::size::current(v.settings, &pb.settings, v.place_shown),
         dropped: v.state.bar_dropped,
     };
@@ -1109,6 +1122,19 @@ fn next_speed(speed: f64) -> f64 {
         .copied()
         .find(|s| *s > speed + 1e-3)
         .unwrap_or(SPEEDS[0])
+}
+
+/// What the sleep timer row says it is set to.
+fn sleep_label(sleep: crate::sleep_timer::Sleep) -> String {
+    use crate::sleep_timer::Sleep;
+    match sleep {
+        Sleep::Off => tr!("more-off").to_string(),
+        Sleep::EndOfItem => tr!("more-sleep-end").to_string(),
+        Sleep::After { minutes, .. } => {
+            let left = sleep.minutes_left().unwrap_or(minutes);
+            tr!("more-sleep-minutes", minutes = minutes, left = left)
+        }
+    }
 }
 
 fn fmt_speed(speed: f64) -> String {
@@ -3173,6 +3199,7 @@ mod tests {
             loop_video: false,
             autoplay: true,
             speed: 1.0,
+            sleep: Default::default(),
             size: Some(ScreenSize::Cinema),
             dropped: Dropped::default(),
         }
@@ -3194,6 +3221,7 @@ mod tests {
                 "Up next list",
                 "Browse the library",
                 "Bookmark this moment",
+                "Sleep timer",
             ]
         );
         assert_eq!(
@@ -3203,6 +3231,7 @@ mod tests {
                 "Screen follows you",
                 "Browse beside the video",
                 "Place around the screen",
+                "Change controller buttons",
                 "Show my room",
             ]
         );
@@ -3215,6 +3244,11 @@ mod tests {
         // Only the rows that open something shut the list.
         assert!(play[3].closes && play[4].closes && play[5].closes);
         assert!(!play[0].closes && !screen[1].closes);
+        // The sleep timer steps through its choices and leaves the list open.
+        assert_eq!(play[6].mark, Mark::Value("Off".into()));
+        assert!(!play[6].closes);
+        // The controller buttons open Settings, so the list shuts.
+        assert!(screen[4].closes);
     }
 
     #[test]
@@ -3231,13 +3265,16 @@ mod tests {
     #[test]
     fn around_a_vr_video_only_its_mask_remains_of_the_screen_column() {
         let mut m = watching(false);
-        assert!(more_columns(&m)[1].is_empty());
+        assert_eq!(labels(&more_columns(&m)[1]), ["Change controller buttons"]);
         m.mask = Some(VideoFormat::default());
         let [play, screen] = more_columns(&m);
-        assert_eq!(labels(&screen), ["Use the video's mask"]);
-        assert_eq!(play.len(), 6);
+        assert_eq!(
+            labels(&screen),
+            ["Change controller buttons", "Use the video's mask"]
+        );
+        assert_eq!(play.len(), 7);
         m.passthrough_available = false;
-        assert!(more_columns(&m)[1].is_empty());
+        assert_eq!(more_columns(&m)[1].len(), 1);
     }
 
     #[test]
@@ -3251,6 +3288,6 @@ mod tests {
         assert_eq!(labels(&play).last(), Some(&"Hide the controls"));
         m.dropped.adjust = true;
         let [play, _] = more_columns(&m);
-        assert_eq!(&labels(&play)[6..], ["Adjust", "Hide the controls"]);
+        assert_eq!(&labels(&play)[7..], ["Adjust", "Hide the controls"]);
     }
 }
