@@ -574,6 +574,19 @@ size
 place cinema
 frames 4
 panel adjust place-picker
+# Lying back to watch, the menu still stands upright and faces the head, and
+# the controllers are drawn in the dark room (the left hand held out).
+look 0 38
+recenter
+frames 4
+adjust 1
+hand 0.25 -0.3 -0.4
+frames 6
+sbs place-menu-reclined
+hand off
+look 0 0
+recenter
+frames 4
 # In the room the same button picks the seat: Giant is the front, Home theater
 # the back.
 size

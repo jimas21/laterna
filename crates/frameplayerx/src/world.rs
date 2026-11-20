@@ -402,6 +402,55 @@ pub fn place_below(
     )
 }
 
+/// How near and how far from the eye a pop-up panel (the place menu, the
+/// audio picker, the More list, the keyboard under the adjust panel) is held
+/// to be read, metres.
+pub const POPUP_REACH: std::ops::RangeInclusive<f32> = 0.7..=2.0;
+
+/// Where a pop-up panel stands: at `wanted`'s middle (drawn in or out along
+/// the line from the eye if that is too near or far to read) and always
+/// upright, turned about the vertical to face the head, never pitched or
+/// rolled.
+///
+/// `wanted` is wherever the panel would go from the control bar and the
+/// room's frame. Those lean back (the bar is tipped towards the eye) and tip
+/// with the gaze when you lie back to watch, so a panel that took their tilt
+/// came up at an angle and was hard to read. Only the position is kept.
+pub fn upright_popup(wanted: Mat4, head: Vec3) -> Mat4 {
+    let spot = wanted.w_axis.truncate();
+    let away = spot - head;
+    let at = away.length();
+    let along = if at > 1e-3 {
+        away / at
+    } else {
+        // On top of the head: ahead of where the panel was turned.
+        wanted
+            .transform_vector3(Vec3::NEG_Z)
+            .try_normalize()
+            .unwrap_or(Vec3::NEG_Z)
+    };
+    let reach = at.clamp(*POPUP_REACH.start(), *POPUP_REACH.end());
+    let spot = head + along * reach;
+    // Turned to the head about the vertical. Straight above or below it, the
+    // head says nothing about the turn: the panel keeps its own.
+    let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
+    let to_head = flat(head - spot);
+    let z = if to_head.length() > 0.05 {
+        to_head.normalize()
+    } else {
+        flat(wanted.transform_vector3(Vec3::Z))
+            .try_normalize()
+            .unwrap_or(Vec3::Z)
+    };
+    let x = Vec3::Y.cross(z);
+    Mat4::from_cols(
+        x.extend(0.0),
+        Vec3::Y.extend(0.0),
+        z.extend(0.0),
+        spot.extend(1.0),
+    )
+}
+
 /// `anchor` turned about the viewer the way the renderer turns a 180°/360°
 /// picture for its yaw and pitch (degrees, left and up positive), so a panel
 /// placed from it moves with the picture. Roll is left out: it levels a
@@ -1482,6 +1531,99 @@ mod tests {
             left.dot(fwd) > 0.0 && (left - Vec3::new(0.0, 1.6, 0.0)).dot(right) < 0.0,
             "positive yaw is to the left"
         );
+    }
+
+    /// How far a panel's face leans from vertical and how far its right edge
+    /// is from level, degrees.
+    fn lean_and_roll(m: Mat4) -> (f32, f32) {
+        let normal = m.transform_vector3(Vec3::Z).normalize();
+        let right = m.transform_vector3(Vec3::X).normalize();
+        (
+            normal.y.asin().to_degrees().abs(),
+            right.y.asin().to_degrees().abs(),
+        )
+    }
+
+    #[test]
+    fn a_popup_stands_upright_whatever_it_was_wanted_at() {
+        let head = Vec3::new(0.2, 1.5, -0.1);
+        // The bar's frame while lying back: tipped with the gaze and a little
+        // rolled, with a panel placed from it 1.15 m away.
+        let tipped = anchor_facing_within(
+            head,
+            Quat::from_rotation_y(0.4) * Quat::from_rotation_x(0.7),
+            PLACE_LEVEL_WITHIN_DEG,
+        );
+        let wanted = place_around(tipped * Mat4::from_rotation_z(0.15), -52.0, 0.0, 1.15, 0.0);
+        let (lean, _) = lean_and_roll(wanted);
+        assert!(lean > 20.0, "the premise: it is pitched, {lean}");
+        let (lean, roll) = lean_and_roll(upright_popup(wanted, head));
+        assert!(lean < 0.01 && roll < 0.01, "lean {lean}, roll {roll}");
+        // And so for every pitch and roll the gaze can give the frame.
+        for pitch in [-1.2_f32, -0.6, 0.0, 0.5, 0.9, 1.4] {
+            for roll in [-0.4_f32, 0.0, 0.3] {
+                let frame = Mat4::from_rotation_translation(
+                    Quat::from_euler(glam::EulerRot::YXZ, 0.7, pitch, roll),
+                    head,
+                );
+                let wanted = place_around(frame, 20.0, 5.0, 1.1, 0.0);
+                let (lean, rolled) = lean_and_roll(upright_popup(wanted, head));
+                assert!(lean < 0.01 && rolled < 0.01, "{pitch} {roll}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_popup_faces_the_head_and_stays_where_it_was_wanted() {
+        let head = Vec3::new(0.0, 1.6, 0.0);
+        let anchor = anchor_from_head(head, Quat::from_rotation_y(0.5));
+        let wanted = place_around(anchor, 30.0, 0.0, 1.15, -0.1);
+        let up = upright_popup(wanted, head);
+        let at = up.w_axis.truncate();
+        assert!(
+            (at - wanted.w_axis.truncate()).length() < 1e-4,
+            "within reach it stays put"
+        );
+        let to_head = (head - at).normalize();
+        let normal = up.transform_vector3(Vec3::Z);
+        // Faces the head about the vertical (the head is a little above it).
+        let flat = Vec3::new(to_head.x, 0.0, to_head.z).normalize();
+        assert!((normal - flat).length() < 1e-4, "{normal} vs {flat}");
+        assert!(normal.dot(to_head) > 0.98);
+        // Its right edge is where the viewer's right is.
+        assert!(up.transform_vector3(Vec3::X).dot(Vec3::Y.cross(normal)) > 0.99);
+    }
+
+    #[test]
+    fn a_popup_is_held_to_a_readable_distance() {
+        let head = Vec3::new(0.0, 1.6, 0.0);
+        let far = Mat4::from_translation(Vec3::new(0.3, 1.2, -4.0));
+        let near = Mat4::from_translation(Vec3::new(0.05, 1.5, -0.2));
+        for (wanted, at) in [(far, *POPUP_REACH.end()), (near, *POPUP_REACH.start())] {
+            let up = upright_popup(wanted, head);
+            let d = (up.w_axis.truncate() - head).length();
+            assert!((d - at).abs() < 1e-4, "{d}");
+            // Still in the direction it was wanted in.
+            let was = (wanted.w_axis.truncate() - head).normalize();
+            let now = (up.w_axis.truncate() - head).normalize();
+            assert!(was.dot(now) > 0.9999);
+        }
+    }
+
+    #[test]
+    fn a_popup_straight_above_the_head_keeps_a_steady_turn() {
+        let head = Vec3::new(0.0, 1.6, 0.0);
+        let wanted = Mat4::from_rotation_translation(
+            Quat::from_rotation_y(1.0),
+            head + Vec3::new(0.0, 1.0, 0.0),
+        );
+        let up = upright_popup(wanted, head);
+        assert!(up.to_cols_array().iter().all(|v| v.is_finite()));
+        let (lean, roll) = lean_and_roll(up);
+        assert!(lean < 0.01 && roll < 0.01);
+        // Directly on the head too.
+        let on = upright_popup(Mat4::from_translation(head), head);
+        assert!(on.to_cols_array().iter().all(|v| v.is_finite()));
     }
 
     #[test]

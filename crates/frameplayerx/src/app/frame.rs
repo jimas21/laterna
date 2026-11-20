@@ -234,20 +234,20 @@ impl App {
         let kb_target = self.keyboard_target();
         self.panels[KEYBOARD].visible = kb_target.is_some();
         self.chrome.ease(input.dt);
-        self.place_panels(anchor, kb_target);
+        self.place_panels(anchor, eye, kb_target);
         self.place_panel_chrome(eye);
         let buzz = self.route_input(&input, anchor);
         // Routing the input moved the panels, the picture or both: place the
         // panels again, so they are drawn where the hands just put them rather
         // than a frame behind.
-        self.place_panels(anchor, kb_target);
+        self.place_panels(anchor, eye, kb_target);
         self.place_panel_chrome(eye);
         self.paint_panels(renderer, &input, kb_target);
         self.paint_window_controls(renderer, &input);
         self.paint_panel_chrome(renderer, &input);
         self.perf_overlay(renderer, &input);
         let (frame, video, passthrough) = self.video(renderer, &input, anchor);
-        let (quads, layers) = self.compose(&input, eye);
+        let (quads, layers) = self.compose(&input, eye, passthrough);
         let film_fps = self
             .playback
             .as_ref()
@@ -606,7 +606,11 @@ impl App {
             self.ui.toast(notice);
         }
         self.panels[BAR].visible = playing && self.ui_visible && (!self.show_browser || multitask);
-        self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
+        let adjust_up = self.panels[BAR].visible && self.ui.adjust_open;
+        if adjust_up && !self.panels[ADJUST].visible {
+            self.ui.adjust_top = true;
+        }
+        self.panels[ADJUST].visible = adjust_up;
         // The More list takes the picker's place above the bar.
         self.panels[TRACKS].visible =
             self.panels[BAR].visible && (self.ui.tracks_open || self.ui.more_open);
@@ -632,7 +636,7 @@ impl App {
     /// `player_anchor`), the audio and subtitles picker on top of it, and
     /// the adjust panel at its own place beside the bar, upright, going
     /// wherever the bar goes.
-    fn place_panels(&mut self, anchor: Mat4, kb_target: Option<usize>) {
+    fn place_panels(&mut self, anchor: Mat4, eye: Vec3, kb_target: Option<usize>) {
         let bar_anchor = self.player_anchor(anchor);
         // The adjust panel holds still while the trigger is held on it: its
         // yaw and pitch sliders move a flat screen, and with it the bar and
@@ -664,15 +668,25 @@ impl App {
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_below(anchor, my, mp, main_d, BELOW_DEG);
         self.panels[BAR].pose = chrome::layout::bar_pose(bar_anchor, bar_d, bar_drop);
-        self.panels[TRACKS].pose = above_bar(&self.panels[BAR], &self.panels[TRACKS]);
-        self.panels[TOAST].pose = toast_pose(
-            &self.panels[BAR],
-            self.panels[TRACKS]
-                .visible
-                .then(|| self.panels[TRACKS].size.y),
-            &self.panels[TOAST],
+        // The pop-ups (this one, the adjust panel and its keyboard below) stand
+        // upright facing the head, not leaning back with the bar or tipped
+        // with the room when lying back to watch.
+        self.panels[TRACKS].pose =
+            upright_popup(above_bar(&self.panels[BAR], &self.panels[TRACKS]), eye);
+        self.panels[TOAST].pose = upright_popup(
+            toast_pose(
+                &self.panels[BAR],
+                self.panels[TRACKS]
+                    .visible
+                    .then(|| self.panels[TRACKS].size.y),
+                &self.panels[TOAST],
+            ),
+            eye,
         );
-        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, adjust_d, 0.0);
+        self.panels[ADJUST].pose = upright_popup(
+            place_around(adjust_anchor, beside + ay, ap, adjust_d, 0.0),
+            eye,
+        );
         // The keyboard sits below the panel it types into, turned with it and
         // as much nearer or further, so it is where that panel was moved to.
         let (kb_from, [ky, kp], kb_moved) = match kb_target {
@@ -683,7 +697,16 @@ impl App {
         let kb_anchor = place_around(kb_from, ky, kp, 0.0, 0.0);
         let kb_d = panel_distance(KEYBOARD_DISTANCE, kb_moved);
         let kb_drop = -0.55 * kb_d / KEYBOARD_DISTANCE;
-        self.panels[KEYBOARD].pose = place(kb_anchor, 0.0, kb_d, kb_drop, 35.0);
+        // Under the adjust panel it stands upright like it, a little nearer
+        // and as far below as before; for the library it keeps its typing
+        // slope.
+        self.panels[KEYBOARD].pose = if kb_target == Some(ADJUST) {
+            let below = self.panels[ADJUST].pose.w_axis.truncate() + Vec3::new(0.0, kb_drop, 0.0);
+            let nearer = (eye - below).normalize_or_zero() * (adjust_d - kb_d).max(0.0);
+            upright_popup(Mat4::from_translation(below + nearer), eye)
+        } else {
+            place(kb_anchor, 0.0, kb_d, kb_drop, 35.0)
+        };
         // From the same point as the library panel, so it stays in the room or
         // follows along with the menus.
         let start = perf_start_yaw(
@@ -1020,7 +1043,12 @@ impl App {
 
     /// What the compositor draws: panels back to front, then pointers,
     /// as quads in the eyes or (when it can) layers of their own.
-    fn compose(&mut self, input: &FrameInput, eye: Vec3) -> (Vec<QuadDraw>, Vec<LayerDraw>) {
+    fn compose(
+        &mut self,
+        input: &FrameInput,
+        eye: Vec3,
+        passthrough: bool,
+    ) -> (Vec<QuadDraw>, Vec<LayerDraw>) {
         let mut quads = Vec::new();
         // Subtitles fade in like the panels (a panel that never fades in is
         // never drawn).
@@ -1073,8 +1101,12 @@ impl App {
         let distance = |p: &Panel| (p.pose.w_axis.truncate() - eye).length();
         order.sort_by(|(_, a), (_, b)| distance(b).total_cmp(&distance(a)));
         let mut layers = Vec::new();
-        for (key, p) in order {
-            let layered = input.layers && !p.in_eyes && p.fully_shown();
+        let wants: Vec<bool> = order
+            .iter()
+            .map(|(_, p)| input.layers && !p.in_eyes && p.fully_shown())
+            .collect();
+        let granted = grant_layers(&wants, input.layer_budget);
+        for ((key, p), layered) in order.into_iter().zip(granted) {
             match p.id {
                 // Fully shown: the compositor draws it. Fading: drawn into
                 // the eyes, where opacity works.
@@ -1093,6 +1125,22 @@ impl App {
             layers.extend(self.pointer.ray_layers(eye, any_ui));
         } else {
             quads.extend(self.pointer.quads(eye, any_ui));
+        }
+        // With the real room showing, your own hands and controllers are
+        // there; without it (a place, or the dark of Just the screen) they
+        // are drawn. Last, so they go over the rest of what is drawn.
+        if !passthrough && crate::hands::enabled() {
+            for hand in &input.hands {
+                if let Some((at, rot)) = hand.aim {
+                    quads.extend(crate::hands::controller(
+                        at,
+                        rot,
+                        eye,
+                        hand.trigger,
+                        hand.squeeze,
+                    ));
+                }
+            }
         }
         (quads, layers)
     }
@@ -1211,6 +1259,22 @@ fn follows_head(setting: bool, flat: bool, dragging: bool) -> bool {
 
 /// What a video's format, view settings, turn and pixel shape say about the
 /// picture: the parts of `VideoParams` its screen's size and curve come from.
+/// Which of the panels that want a compositor layer (`wants`, far to near)
+/// get one when only `budget` fit: the nearest. The rest are drawn into the
+/// eyes, where they still show, rather than being dropped from the frame by
+/// the runtime's limit (a pop-up or its close key that "wasn't showing").
+fn grant_layers(wants: &[bool], budget: usize) -> Vec<bool> {
+    let mut left = budget;
+    let mut granted = vec![false; wants.len()];
+    for (i, want) in wants.iter().enumerate().rev() {
+        if *want && left > 0 {
+            granted[i] = true;
+            left -= 1;
+        }
+    }
+    granted
+}
+
 fn describe_video(video: &mut VideoParams, p: &Playback, shown: fp_core::view::ViewSettings) {
     video.format = p.format;
     video.settings = shown;
@@ -1402,6 +1466,18 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn panels_over_the_layer_budget_go_into_the_eyes_nearest_first() {
+        // Far to near; the first and third do not want a layer.
+        let wants = [false, true, false, true, true];
+        assert_eq!(grant_layers(&wants, 9), [false, true, false, true, true]);
+        // Room for two: the nearest two keep theirs, the farthest is
+        // drawn in the eyes instead (not dropped).
+        assert_eq!(grant_layers(&wants, 2), [false, false, false, true, true]);
+        assert_eq!(grant_layers(&wants, 0), [false; 5]);
+        assert_eq!(grant_layers(&[], 3), Vec::<bool>::new());
+    }
 
     #[test]
     fn follow_pauses_while_the_picture_is_dragged() {

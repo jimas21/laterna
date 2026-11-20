@@ -935,6 +935,11 @@ pub struct UiState {
     /// The screen and the library are side by side (the bar's key is lit).
     pub multitask: bool,
     pub adjust_tab: usize,
+    /// The adjust panel came up just now: its page starts at the top, not
+    /// where the last visit left it.
+    pub adjust_top: bool,
+    /// The tab the adjust panel last drew, so a new one starts at the top.
+    pub adjust_seen: usize,
     /// The audio and subtitles picker shows above the control bar.
     pub tracks_open: bool,
     /// The More list shows above the control bar (instead of the picker).
@@ -1037,6 +1042,8 @@ impl Default for UiState {
             adjust_open: false,
             multitask: false,
             adjust_tab: 0,
+            adjust_top: false,
+            adjust_seen: 0,
             tracks_open: false,
             more_open: false,
             bar_dropped: Default::default(),

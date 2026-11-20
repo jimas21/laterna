@@ -118,6 +118,7 @@ impl Sim {
                 hands,
                 passthrough_available: true,
                 layers: false,
+                layer_budget: 0,
                 frame_ms: None,
                 display_hz: None,
                 display_lead: Duration::ZERO,

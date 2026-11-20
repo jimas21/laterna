@@ -274,8 +274,11 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 .max_rect(row)
                 .layout(Layout::right_to_left(Align::Center)),
         );
+        // The place picker and its settings are a press away while a flat
+        // video plays in a room or on a plain screen.
+        let place_key = v.places_enabled && pb.format.projection == Projection::Flat;
         widgets::well(&mut right, |ui| {
-            right_keys(ui, v.state, dropped, v.actions);
+            right_keys(ui, v.state, dropped, place_key, v.actions);
         });
     });
 }
@@ -307,15 +310,18 @@ fn group_width(n: usize) -> f32 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Dropped {
     pub hide: bool,
+    pub place: bool,
     pub adjust: bool,
 }
 
 impl Dropped {
-    /// What does not fit in `room`: the group is Adjust, More, Hide and Close;
-    /// Hide goes first, then Adjust. More and Close always stay.
+    /// What does not fit in `room`: the group is Place, Adjust, More, Hide and
+    /// Close; Hide goes first, then Place (the More list has it too), then
+    /// Adjust. More and Close always stay.
     fn for_room(room: f32) -> Dropped {
         Dropped {
-            hide: group_width(4) > room,
+            hide: group_width(5) > room,
+            place: group_width(4) > room,
             adjust: group_width(3) > room,
         }
     }
@@ -639,13 +645,15 @@ fn queue_key(
     }
 }
 
-/// What a viewer reaches for while watching, at the bar's end: Adjust, More,
-/// Hide and Close. Everything else is in the More list. A key in `dropped`
-/// is there instead of on the bar.
+/// What a viewer reaches for while watching, at the bar's end: Place, Adjust,
+/// More, Hide and Close. Everything else is in the More list. A key in
+/// `dropped` is there instead of on the bar; the Place key is only there when
+/// `place_key` (places may show, and the video is flat).
 fn right_keys(
     ui: &mut egui::Ui,
     state: &mut super::UiState,
     dropped: Dropped,
+    place_key: bool,
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::X, BAR_KEY, false)
@@ -675,6 +683,22 @@ fn right_keys(
             .clicked()
     {
         state.adjust_open = !state.adjust_open;
+        state.more_open = false;
+    }
+    if place_key
+        && !dropped.place
+        && widgets::key(
+            ui,
+            icons::FILM_STRIP,
+            BAR_KEY,
+            state.adjust_open && state.adjust_tab == POSITION_TAB,
+        )
+        .tip(tr!("player-place"))
+        .clicked()
+    {
+        // The adjust panel on Position, which starts with the place, its seat,
+        // house lights and screen light; pressed again it shuts.
+        toggle_adjust_tab(state, POSITION_TAB);
         state.more_open = false;
     }
 }
@@ -971,6 +995,9 @@ pub fn more_panel(ctx: &egui::Context, v: &mut View) {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
+            if widgets::close_key(ui, body) {
+                state.more_open = false;
+            }
             let inner = body.shrink(TRACK_PAD);
             for (i, (name, rows)) in columns.into_iter().enumerate() {
                 let x = inner.left() + i as f32 * (MORE_COLUMN + MORE_GAP);
@@ -1532,9 +1559,17 @@ fn tabs() -> [(&'static str, &'static str); 7] {
     ]
 }
 
+/// Whether the adjust panel's page starts at the top this pass: it has just
+/// come up, or it is showing another tab than it last did.
+fn adjust_page_to_top(state: &mut super::UiState) -> bool {
+    let top = std::mem::take(&mut state.adjust_top) || state.adjust_seen != state.adjust_tab;
+    state.adjust_seen = state.adjust_tab;
+    top
+}
+
 /// Format, view adjustments, tracks and haptics for the open video.
 pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
-    widgets::panel_slab(ctx, 28.0);
+    let body = widgets::panel_slab(ctx, 28.0);
     let frame = egui::Frame::new()
         .outer_margin(widgets::SHADOW_ROOM)
         .inner_margin(egui::Margin::same(22));
@@ -1542,6 +1577,10 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
         let Some(pb) = v.playback.as_deref_mut() else {
             return;
         };
+        // Every pop-up has its close key in its corner.
+        if widgets::close_key(ui, body) {
+            v.state.adjust_open = false;
+        }
         ui.label(
             RichText::new(tr!("player-adjust"))
                 .font(theme::font(Weight::Bold, 26.0))
@@ -1562,65 +1601,71 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
         let footer = v.state.adjust_tab <= 4;
         let footer_h = if footer { 64.0 } else { 0.0 };
         let page = ui.available_height() - footer_h;
-        egui::ScrollArea::vertical()
+        // One scroll area serves every tab, so a tab opened after another
+        // that was scrolled down came up part way (the place picker, at the
+        // top of Position, out of sight). Each tab, and each time the panel
+        // comes up, starts at the top.
+        let to_top = adjust_page_to_top(v.state);
+        let mut area = egui::ScrollArea::vertical()
             .max_height(page)
-            .auto_shrink([false, false])
-            .show_list(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 10.0;
-                let before = pb.settings;
-                match v.state.adjust_tab {
-                    0 => format_tab(ui, pb, v.settings, v.actions),
-                    1 => {
-                        let flat = pb.format.projection == Projection::Flat;
-                        // Round a flat screen, the place comes first; it
-                        // decides which of the controls below apply.
-                        let place = if flat {
-                            place_controls(
-                                ui,
-                                v.settings,
-                                v.passthrough_available,
-                                v.places_enabled,
-                                true,
-                            )
-                        } else {
-                            None
-                        };
-                        let moved = v.settings.panel_offsets != Default::default()
-                            || (flat && (pb.settings.yaw, pb.settings.pitch) != (0.0, 0.0));
-                        position_tab(
+            .auto_shrink([false, false]);
+        if to_top {
+            area = area.vertical_scroll_offset(0.0);
+        }
+        area.show_list(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 10.0;
+            let before = pb.settings;
+            match v.state.adjust_tab {
+                0 => format_tab(ui, pb, v.settings, v.actions),
+                1 => {
+                    let flat = pb.format.projection == Projection::Flat;
+                    // Round a flat screen, the place comes first; it
+                    // decides which of the controls below apply.
+                    let place = if flat {
+                        place_controls(
                             ui,
-                            &mut pb.settings,
-                            flat,
-                            moved,
-                            place,
-                            v.docked,
-                            v.actions,
-                        );
-                    }
-                    2 => stereo_tab(ui, &mut pb.settings),
-                    3 => picture_tab(ui, &mut pb.settings),
-                    4 => {
-                        widgets::section_label(ui, tr!("settings-passthrough-videos"));
-                        ui.label(
-                            RichText::new(tr!("adjust-passthrough-desc")).color(theme::TEXT_2),
-                        );
-                        ui.add_space(6.0);
-                        chroma_tab(
-                            ui,
-                            &mut pb.settings,
-                            pb.format,
-                            &v.settings.default_view,
+                            v.settings,
                             v.passthrough_available,
-                            v.actions,
-                        );
-                    }
-                    5 => chapters_tab(ui, pb, v.actions),
-                    _ => haptics_tab(ui, pb.script_count, v.settings, v.devices),
+                            v.places_enabled,
+                            true,
+                        )
+                    } else {
+                        None
+                    };
+                    let moved = v.settings.panel_offsets != Default::default()
+                        || (flat && (pb.settings.yaw, pb.settings.pitch) != (0.0, 0.0));
+                    position_tab(
+                        ui,
+                        &mut pb.settings,
+                        flat,
+                        moved,
+                        place,
+                        v.docked,
+                        v.actions,
+                    );
                 }
-                if pb.settings != before {
-                    pb.settings_dirty = true;
+                2 => stereo_tab(ui, &mut pb.settings),
+                3 => picture_tab(ui, &mut pb.settings),
+                4 => {
+                    widgets::section_label(ui, tr!("settings-passthrough-videos"));
+                    ui.label(RichText::new(tr!("adjust-passthrough-desc")).color(theme::TEXT_2));
+                    ui.add_space(6.0);
+                    chroma_tab(
+                        ui,
+                        &mut pb.settings,
+                        pb.format,
+                        &v.settings.default_view,
+                        v.passthrough_available,
+                        v.actions,
+                    );
                 }
-            });
+                5 => chapters_tab(ui, pb, v.actions),
+                _ => haptics_tab(ui, pb.script_count, v.settings, v.devices),
+            }
+            if pb.settings != before {
+                pb.settings_dirty = true;
+            }
+        });
         if footer {
             adjust_footer(ui, pb, v.actions);
         }
@@ -1995,6 +2040,12 @@ fn seat_label(name: SeatName) -> &'static str {
 /// [`HOUSE_PLAYING`] and `HOUSE_PLAYING_START` as that.
 const HOUSE_PERCENT: std::ops::RangeInclusive<f32> = 0.0..=40.0;
 const HOUSE_PERCENT_START: f32 = 4.0;
+/// How the slider's travel is bent (see `widgets::rail_fraction`): the eye
+/// tells 1 % from 2 % of light far more finely than 30 % from 40 %, so the low
+/// end gets most of the rail. With 3, 1 % sits near a third of the way along,
+/// and a percent there is ten times as wide as at the top. The setting still
+/// holds the plain fraction, so what was saved loads as it was.
+const HOUSE_CURVE: f32 = 3.0;
 
 /// The screen light slider is in percent: 0 is off, and the start is
 /// `SCREEN_LIGHT_START` as that.
@@ -2078,9 +2129,13 @@ pub(super) fn place_controls(
     let mut light = settings.screen_light_level * 100.0;
     widgets::rows(ui, |r| {
         if sized {
+            // The size chips are the seats; say so where the place is chosen.
+            r.content(|ui| {
+                ui.label(RichText::new(tr!("place-seat-sized")).color(theme::TEXT_2));
+            });
             picked_size = widgets::size_row(r, current_size);
         } else if layout.seats.len() > 1 {
-            r.row(tr!("place-seat"), None, |ui| {
+            r.row(tr!("place-seat"), Some(tr!("place-seat-desc")), |ui| {
                 // Right to left: the first seat shows first.
                 for (i, s) in layout.seats.iter().enumerate().rev() {
                     if widgets::chip(ui, seat_label(s.name), i == seat).clicked() {
@@ -2103,14 +2158,15 @@ pub(super) fn place_controls(
         {
             new_height = Some(places::snap_height_cm(height.round() as i32));
         }
-        if r.slider(
+        if r.slider_curved(
             tr!("place-house-lights"),
             Some(tr!("place-house-lights-desc")),
             &mut house,
             HOUSE_PERCENT,
             HOUSE_PERCENT_START,
             " %",
-            0,
+            1,
+            HOUSE_CURVE,
         ) {
             let (low, high) = (*HOUSE_PLAYING.start(), *HOUSE_PLAYING.end());
             settings.house_lights_playing = (house / 100.0).clamp(low, high);
@@ -2551,10 +2607,13 @@ pub fn tracks_panel(ctx: &egui::Context, v: &mut View) {
     }) {
         v.state.tracks_open = false;
     }
-    let actions = &mut *v.actions;
+    let (actions, state) = (&mut *v.actions, &mut *v.state);
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
+            if widgets::close_key(ui, body) {
+                state.tracks_open = false;
+            }
             let inner = body.shrink(TRACK_PAD);
             let columns = if quality_rows > 0 { 3.0 } else { 2.0 };
             let w = (inner.width() - TRACK_PAD * (columns - 1.0)) / columns;
@@ -3035,6 +3094,49 @@ mod tests {
     use super::*;
     use crate::settings::HOUSE_PLAYING_START;
 
+    #[test]
+    fn pressing_a_tab_entry_again_closes_the_panel() {
+        let mut state = crate::ui::UiState::default();
+        // The More list's Place entry opens Position; the same entry again
+        // (or the format pill for Format) shuts it.
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        assert!(state.adjust_open && state.adjust_tab == POSITION_TAB);
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        assert!(!state.adjust_open);
+        // Another entry while it is open changes the tab and stays open.
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        toggle_adjust_tab(&mut state, FORMAT_TAB);
+        assert!(state.adjust_open && state.adjust_tab == FORMAT_TAB);
+        toggle_format_tab(&mut state);
+        assert!(!state.adjust_open);
+    }
+
+    #[test]
+    fn the_adjust_page_starts_at_the_top_for_each_tab_and_each_visit() {
+        let mut state = crate::ui::UiState::default();
+        // The first pass on a tab it already shows scrolls nowhere.
+        assert!(!adjust_page_to_top(&mut state));
+        assert!(!adjust_page_to_top(&mut state));
+        // Another tab starts at the top, once.
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        assert!(adjust_page_to_top(&mut state));
+        assert!(!adjust_page_to_top(&mut state));
+        // The panel coming up again does too, on the same tab.
+        state.adjust_top = true;
+        assert!(adjust_page_to_top(&mut state));
+        assert!(!adjust_page_to_top(&mut state));
+    }
+
+    #[test]
+    fn the_place_key_opens_the_position_tab_and_again_shuts_it() {
+        let mut state = crate::ui::UiState::default();
+        // The key's own action (see `right_keys`).
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        assert!(state.adjust_open && state.adjust_tab == POSITION_TAB);
+        toggle_adjust_tab(&mut state, POSITION_TAB);
+        assert!(!state.adjust_open);
+    }
+
     fn settings(environment: &str, passthrough: bool) -> Settings {
         Settings {
             environment: environment.into(),
@@ -3141,6 +3243,30 @@ mod tests {
     }
 
     #[test]
+    fn the_house_lights_low_end_has_room_on_the_rail() {
+        let (lo, hi) = (*HOUSE_PERCENT.start(), *HOUSE_PERCENT.end());
+        let at = |p: f32| widgets::rail_fraction(p, lo, hi, HOUSE_CURVE);
+        // On a 200 point rail, a percent between 1 and 2 is at least 12
+        // points (a straight slider gave 5).
+        assert!((at(2.0) - at(1.0)) * 200.0 >= 12.0);
+        assert!((at(1.0) - at(0.0)) * 200.0 >= 12.0);
+        // Both ends and the start still map, and back.
+        assert_eq!(at(lo), 0.0);
+        assert!((at(hi) - 1.0).abs() < 1e-6);
+        for p in [0.0, 1.0, 2.0, HOUSE_PERCENT_START, 25.0, 40.0] {
+            let back = widgets::rail_value(at(p), lo, hi, HOUSE_CURVE);
+            assert!((back - p).abs() < 1e-3, "{p} came back as {back}");
+        }
+    }
+
+    #[test]
+    fn a_straight_rail_is_the_old_slider() {
+        assert_eq!(widgets::rail_fraction(25.0, 0.0, 100.0, 1.0), 0.25);
+        assert_eq!(widgets::rail_value(0.25, 0.0, 100.0, 1.0), 25.0);
+        assert_eq!(widgets::rail_fraction(5.0, 5.0, 5.0, 1.0), 0.0);
+    }
+
+    #[test]
     fn every_place_and_seat_has_its_own_label() {
         let mut labels = vec![
             place_label(PlaceChoice::Plain),
@@ -3170,16 +3296,21 @@ mod tests {
         for width in (0..3000).step_by(10) {
             let room = side_room(width as f32);
             let dropped = Dropped::for_room(room);
-            let keys = 2 + usize::from(!dropped.adjust) + usize::from(!dropped.hide);
+            let keys = 2
+                + usize::from(!dropped.adjust)
+                + usize::from(!dropped.place)
+                + usize::from(!dropped.hide);
             // What stays on the bar fits beside the transport, or is as few
             // keys as it can be.
             assert!(group_width(keys) <= room || keys == 2, "{width}: {keys}");
-            // Hide goes before Adjust, and a wider bar never drops more.
-            assert!(!dropped.adjust || dropped.hide);
+            // Hide goes before Place, Place before Adjust, and a wider bar
+            // never drops more.
+            assert!(!dropped.adjust || dropped.place);
+            assert!(!dropped.place || dropped.hide);
             assert!(!(dropped.hide && !last.hide) || width == 0, "{width}");
             last = dropped;
         }
-        // The bar as it is built keeps all four.
+        // The bar as it is built keeps all five.
         assert_eq!(Dropped::for_room(side_room(1444.0)), Dropped::default());
         assert!(Dropped::for_room(side_room(600.0)).adjust);
     }
@@ -3282,6 +3413,7 @@ mod tests {
         let mut m = watching(false);
         m.dropped = Dropped {
             hide: true,
+            place: false,
             adjust: false,
         };
         let [play, _] = more_columns(&m);

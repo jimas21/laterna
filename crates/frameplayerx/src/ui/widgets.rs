@@ -188,6 +188,36 @@ pub fn panel_slab(ctx: &egui::Context, radius: f32) -> Rect {
     rect
 }
 
+/// How big the close key in a pop-up's corner is, points, and how far in
+/// from the body's edges.
+pub const CLOSE_KEY: f32 = 36.0;
+const CLOSE_INSET: f32 = 8.0;
+
+/// Where a pop-up's close key goes: its top right corner, inside `body`.
+pub fn close_spot(body: Rect) -> Rect {
+    Rect::from_min_size(
+        Pos2::new(
+            body.right() - CLOSE_INSET - CLOSE_KEY,
+            body.top() + CLOSE_INSET,
+        ),
+        Vec2::splat(CLOSE_KEY),
+    )
+}
+
+/// The close (X) key every pop-up from the control bar has in its corner:
+/// the adjust panel, the audio and subtitles picker and the More list. True
+/// when pressed. Placed where it is without moving the pop-up's own layout.
+pub fn close_key(ui: &mut Ui, body: Rect) -> bool {
+    let mut at = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("close-key")
+            .max_rect(close_spot(body)),
+    );
+    icon_button(&mut at, super::icons::X, CLOSE_KEY, false)
+        .tip(tr!("player-close"))
+        .clicked()
+}
+
 /// [`panel_slab`]'s body at `rect`, for a panel that shows less of itself.
 pub fn slab(ctx: &egui::Context, rect: Rect, radius: f32) {
     let p = ctx.layer_painter(egui::LayerId::background());
@@ -882,6 +912,25 @@ impl Rows<'_> {
         })
     }
 
+    /// [`Rows::slider`] with the knob's travel bent by `curve` (see
+    /// [`slider_curved`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn slider_curved(
+        &mut self,
+        title: &str,
+        desc: Option<&str>,
+        value: &mut f32,
+        range: std::ops::RangeInclusive<f32>,
+        default: f32,
+        suffix: &str,
+        decimals: usize,
+        curve: f32,
+    ) -> bool {
+        self.row(title, desc, |ui| {
+            slider_control_curved(ui, value, range, default, suffix, decimals, curve)
+        })
+    }
+
     /// A full-width line of content (a hint, a list) inside the card.
     pub fn content<R>(&mut self, add: impl FnOnce(&mut Ui) -> R) -> R {
         self.next_row(|ui| {
@@ -1009,6 +1058,20 @@ pub fn slider_control(
     suffix: &str,
     decimals: usize,
 ) -> bool {
+    slider_control_curved(ui, value, range, default, suffix, decimals, 1.0)
+}
+
+/// [`slider_control`] whose knob travel is bent by `curve` (see
+/// [`slider_curved`]).
+pub fn slider_control_curved(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default: f32,
+    suffix: &str,
+    decimals: usize,
+    curve: f32,
+) -> bool {
     let mut changed = false;
     let reset = (*value - default).abs() > 1e-4;
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::click());
@@ -1042,7 +1105,7 @@ pub fn slider_control(
     // What the row leaves it, so at a large interface size it doesn't run
     // over the text beside it.
     let width = ui.available_width().clamp(120.0, 240.0);
-    let resp = slider(ui, value, range.clone(), width);
+    let resp = slider_curved(ui, value, range.clone(), width, curve);
     changed |= resp.changed();
     if resp.hovered() {
         let ctx = ui.ctx().clone();
@@ -1264,18 +1327,43 @@ pub fn slider(
     range: std::ops::RangeInclusive<f32>,
     width: f32,
 ) -> Response {
+    slider_curved(ui, value, range, width, 1.0)
+}
+
+/// How far along its rail (0 to 1) the knob of a slider over `lo..=hi` sits
+/// for `value`, when the travel is bent by `curve`: the value at a fraction
+/// `f` of the rail is `lo + (hi - lo) * f.powf(curve)`, so a `curve` above 1
+/// gives the low end more of the rail.
+pub fn rail_fraction(value: f32, lo: f32, hi: f32, curve: f32) -> f32 {
+    if hi > lo {
+        ((value - lo) / (hi - lo))
+            .clamp(0.0, 1.0)
+            .powf(1.0 / curve.max(1e-3))
+    } else {
+        0.0
+    }
+}
+
+/// The value at a fraction `f` of the rail: the inverse of [`rail_fraction`].
+pub fn rail_value(f: f32, lo: f32, hi: f32, curve: f32) -> f32 {
+    lo + (hi - lo) * f.clamp(0.0, 1.0).powf(curve.max(1e-3))
+}
+
+/// A [`slider`] whose knob travel is bent by `curve` (see [`rail_fraction`]):
+/// the house lights use it so 1 to 2 % is not a hair's width of rail.
+pub fn slider_curved(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    width: f32,
+    curve: f32,
+) -> Response {
     let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(width, 36.0), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let inset = 11.0;
     let rail_x = (rect.left() + inset)..=(rect.right() - inset);
     let len = rail_x.end() - rail_x.start();
-    let fraction = |v: f32| {
-        if hi > lo {
-            ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    };
+    let fraction = |v: f32| rail_fraction(v, lo, hi, curve);
     if resp.hovered() {
         let pass = ui.ctx().cumulative_pass_nr();
         ui.data_mut(|d| d.insert_temp(egui::Id::new(OVER_SLIDER), pass));
@@ -1302,7 +1390,7 @@ pub fn slider(
                     let v0 = if (origin.x - knob).abs() <= GRAB_REACH {
                         *value
                     } else {
-                        lo + ((origin.x - rail_x.start()) / len).clamp(0.0, 1.0) * (hi - lo)
+                        rail_value((origin.x - rail_x.start()) / len, lo, hi, curve)
                     };
                     (origin.x, v0)
                 }
@@ -1312,7 +1400,7 @@ pub fn slider(
             d.insert_temp(grab, (origin, from_x, v0));
             (from_x, v0)
         });
-        let v = (v0 + (p.x - from_x) / len * (hi - lo)).clamp(lo, hi);
+        let v = rail_value(fraction(v0) + (p.x - from_x) / len, lo, hi, curve);
         if (v - *value).abs() > f32::EPSILON {
             *value = v;
             resp.mark_changed();
@@ -1694,6 +1782,57 @@ pub fn display_title(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_popups_close_key_sits_in_its_top_right_corner() {
+        let body = Rect::from_min_max(Pos2::new(20.0, 8.0), Pos2::new(1080.0, 612.0));
+        let key = close_spot(body);
+        assert!(body.contains_rect(key));
+        assert_eq!(key.size(), Vec2::splat(CLOSE_KEY));
+        assert!(key.right() > body.right() - 2.0 * CLOSE_KEY, "at the right");
+        assert!(key.top() < body.top() + 2.0 * CLOSE_KEY, "at the top");
+    }
+
+    #[test]
+    fn pressing_the_close_key_closes_and_nothing_else_does() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 640.0));
+        let body = Rect::from_min_max(Pos2::new(20.0, 8.0), Pos2::new(1080.0, 612.0));
+        let run = |events: Vec<egui::Event>| {
+            let mut pressed = false;
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    pressed = close_key(ui, body);
+                });
+            });
+            pressed
+        };
+        let button = |pos: Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // Fonts take a pass to arrive.
+        run(vec![]);
+        run(vec![]);
+        // A click in the middle of the panel leaves it open.
+        let middle = body.center();
+        run(vec![egui::Event::PointerMoved(middle)]);
+        run(vec![button(middle, true)]);
+        assert!(!run(vec![button(middle, false)]));
+        // A click on the key closes it.
+        let at = close_spot(body).center();
+        run(vec![egui::Event::PointerMoved(at)]);
+        run(vec![button(at, true)]);
+        assert!(run(vec![button(at, false)]));
+    }
 
     #[test]
     fn a_box_too_wide_to_fit_goes_against_the_left() {
