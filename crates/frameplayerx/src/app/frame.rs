@@ -1920,12 +1920,17 @@ mod tests {
 
     #[test]
     fn recentring_brings_moved_room_panels_back_in_front() {
-        let mut offsets = crate::settings::PanelOffsets::default();
-        offsets.adjust = [30.0, -5.0];
-        offsets.depth.adjust = 0.4;
-        offsets.tracks = [-12.0, 3.0];
-        offsets.depth.tracks = -0.2;
-        offsets.main = [7.0, 0.0];
+        let mut offsets = crate::settings::PanelOffsets {
+            adjust: [30.0, -5.0],
+            tracks: [-12.0, 3.0],
+            main: [7.0, 0.0],
+            depth: crate::settings::PanelDepths {
+                adjust: 0.4,
+                tracks: -0.2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let mut s = Spawns {
             adjust: Some(Mat4::from_rotation_y(1.2)),
             tracks: Some(Vec3::X),
