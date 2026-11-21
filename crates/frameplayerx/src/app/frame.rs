@@ -748,6 +748,7 @@ impl App {
     /// commands; returns the haptic pulses to play.
     fn route_input(&mut self, input: &FrameInput, anchor: Mat4) -> Vec<(usize, f32, i64)> {
         self.pointer.rays_shown = self.any_ui();
+        self.pointer.near_handles = self.chrome.near_handles();
         let routed = {
             let [a, b, c, d, e, _toast] = &mut self.panels;
             // The window controls (app/chrome) come last, after the overlay:
@@ -1143,15 +1144,16 @@ impl App {
                 _ => quads.extend(p.quad()),
             }
         }
-        let any_ui = self.any_ui();
+        // Which lasers show, and how much, is the pointer's: over a panel or
+        // a window control, near the handles, or raised by a grip tap.
         if input.layers {
-            layers.extend(self.pointer.ray_layers(eye, any_ui));
+            layers.extend(self.pointer.ray_layers(eye));
         } else {
-            quads.extend(self.pointer.quads(eye, any_ui));
+            quads.extend(self.pointer.quads(eye));
         }
-        // With the real room showing, your own hands and controllers are
-        // there; without it (a place, or the dark of Just the screen) they
-        // are drawn. Last, so they go over the rest of what is drawn.
+        // The runtime draws the controllers, so the app's own shapes are
+        // only drawn when asked for (FRAMEPLAYERX_CONTROLLERS=1), and then
+        // only without the real room. Last, over the rest of what is drawn.
         if !passthrough && crate::hands::enabled() {
             for hand in &input.hands {
                 if let Some((at, rot)) = hand.aim {

@@ -91,6 +91,8 @@ pub enum LayerDraw {
     Ray {
         /// The active hand's ray is the brighter one.
         active: bool,
+        /// How bright, 1 to `world::RAY_LEVELS`: it fades in and out.
+        level: u8,
         pose: (Vec3, Quat),
         size: Vec2,
     },

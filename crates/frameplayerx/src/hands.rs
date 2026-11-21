@@ -1,7 +1,9 @@
-//! The controllers as the eyes see them. With the real room hidden (inside a
-//! place, or in the empty dark of Just the screen) nothing of your hands is
-//! left, so each tracked controller is drawn as a small solid shape at its
-//! pointing pose, the laser coming out of its front.
+//! Controller shapes the app can draw itself, off unless asked for (see
+//! [`enabled`]): the runtime draws the real controllers, and shapes of ours
+//! over them looked like sticks with plates. When on, with the real room
+//! hidden (inside a place, or in the empty dark of Just the screen), each
+//! tracked controller is drawn as a small solid shape at its pointing pose,
+//! the laser coming out of its front.
 //!
 //! Plain flat-coloured faces drawn into the eyes after the room, so they
 //! never go dark with the house lights and read in a black auditorium; the
@@ -12,15 +14,19 @@ use fp_render::QuadDraw;
 use glam::{Quat, Vec3};
 use std::sync::OnceLock;
 
-/// `FRAMEPLAYERX_CONTROLLERS=0` draws none (a kill switch, as for places).
+/// Whether the app draws its own controller shapes. By default it does not:
+/// the runtime draws the real controller models, which are what you had
+/// before beta 19, and the app's flat boxes (a stick with a plate on its end)
+/// were drawn over them. `FRAMEPLAYERX_CONTROLLERS=1` brings the shapes back,
+/// for a runtime that draws nothing.
 pub fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        !matches!(
-            std::env::var("FRAMEPLAYERX_CONTROLLERS").as_deref(),
-            Ok("0")
-        )
-    })
+    *ON.get_or_init(|| wanted(std::env::var("FRAMEPLAYERX_CONTROLLERS").ok().as_deref()))
+}
+
+/// [`enabled`] for the switch's value.
+fn wanted(switch: Option<&str>) -> bool {
+    switch == Some("1")
 }
 
 /// A box in the controller's frame (-Z is where it points): the corners it
@@ -246,10 +252,10 @@ mod tests {
     }
 
     #[test]
-    fn the_kill_switch_defaults_to_on() {
-        // Not set in the test environment.
-        if std::env::var("FRAMEPLAYERX_CONTROLLERS").is_err() {
-            assert!(enabled());
-        }
+    fn the_runtimes_own_controllers_are_left_alone_unless_asked() {
+        assert!(!wanted(None));
+        assert!(!wanted(Some("0")));
+        assert!(!wanted(Some("")));
+        assert!(wanted(Some("1")));
     }
 }
