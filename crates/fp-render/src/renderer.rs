@@ -2351,6 +2351,11 @@ impl Renderer {
                         open,
                     )
                 }),
+            idle: frame
+                .place
+                .layout()
+                .screen
+                .and_then(crate::env_pass::idle_screen),
             floor_drop,
             time: frame.time,
             screen,

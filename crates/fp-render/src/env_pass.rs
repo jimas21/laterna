@@ -63,6 +63,75 @@ pub(crate) struct EnvUniform {
     /// xy the frame's half size, zw the half size of the opening in it.
     pub mask_c: Vec4,
     pub mask_h: Vec4,
+    /// The idle screen (a pack place's blank screen): xyz the rectangle's
+    /// middle and w on (1) or off (0); xy its half size, z the overlap past
+    /// the rectangle, w the depth of the slab it replaces.
+    pub idle_c: Vec4,
+    pub idle_h: Vec4,
+    /// Its colour (linear), already lit by the house lights.
+    pub idle_rgb: Vec4,
+}
+
+/// The blank cinema screen of a pack place, drawn over whatever the pack
+/// baked there (a white, blotchy sheet with ragged edges): the manifest's
+/// screen rectangle in a flat matte colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct IdleScreen {
+    /// The rectangle's middle, room space (it faces +z).
+    pub centre: Vec3,
+    /// Half its width and height.
+    pub half: Vec2,
+}
+
+/// How far past the manifest's rectangle the blank screen reaches, metres,
+/// so no baked pixel shows at the border. The black masking round a film
+/// reaches the same 2 cm.
+pub(crate) const IDLE_OVERLAP: f32 = 0.02;
+/// How deep a slab round the screen's plane the blank screen replaces
+/// (baked screen mesh, frame, a pixel of wall): the masking's own.
+pub(crate) const IDLE_DEPTH: f32 = 0.08;
+/// How far in front of the plane the blank screen's own quad sits, metres,
+/// so it covers holes in the baked mesh without fighting it.
+pub(crate) const IDLE_LIFT: f32 = 0.004;
+/// The blank screen's colour in full house light (linear, warm grey): a
+/// matte white screen lit that dimly reads as dark grey.
+pub(crate) const IDLE_LIT: [f32; 3] = [0.080, 0.074, 0.064];
+/// Its colour with the lights off (linear): near black, not a hole.
+pub(crate) const IDLE_DARK: [f32; 3] = [0.0016, 0.0015, 0.0013];
+
+/// The blank screen's colour at house-light level `house` (0 to 1).
+pub(crate) fn idle_colour(house: f32) -> [f32; 3] {
+    let h = if house.is_finite() {
+        house.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    std::array::from_fn(|i| IDLE_DARK[i] + (IDLE_LIT[i] - IDLE_DARK[i]) * h)
+}
+
+/// The blank screen for a room's screen frame, if it has a flat one.
+pub(crate) fn idle_screen(frame: crate::env::ScreenFrame) -> Option<IdleScreen> {
+    let ok = frame.max.is_finite() && frame.max.x > 0.0 && frame.max.y > 0.0;
+    (ok && frame.centre.is_finite() && frame.curvature <= 1e-4).then_some(IdleScreen {
+        centre: frame.centre,
+        half: frame.max / 2.0,
+    })
+}
+
+/// The blank screen's two triangles: the rectangle and its overlap, just in
+/// front of the plane. `base` is the index of its first vertex.
+fn idle_quad(i: IdleScreen, base: u32) -> ([BakedVertex; 4], [u32; 6]) {
+    let hx = i.half.x + IDLE_OVERLAP;
+    let hy = i.half.y + IDLE_OVERLAP;
+    let z = i.centre.z + IDLE_LIFT;
+    let v = |sx: f32, sy: f32| BakedVertex {
+        pos: [i.centre.x + sx * hx, i.centre.y + sy * hy, z],
+        uv: [0.5, 0.5],
+    };
+    (
+        [v(-1.0, -1.0), v(1.0, -1.0), v(1.0, 1.0), v(-1.0, 1.0)],
+        [base, base + 1, base + 2, base, base + 2, base + 3],
+    )
 }
 
 /// The black masking round a film on a room's screen: the screen frame (the
@@ -212,6 +281,8 @@ pub(crate) struct EnvInput {
     pub time: f64,
     /// The masking round the film, if it is drawn.
     pub mask: Option<ScreenMask>,
+    /// The blank screen of a pack place.
+    pub idle: Option<IdleScreen>,
     /// The picture's light, if it lights the place.
     pub screen: Option<LitScreen>,
 }
@@ -310,6 +381,11 @@ impl Look {
             u.mask_c = m.centre.extend(1.0);
             u.mask_h = Vec4::new(m.frame_half.x, m.frame_half.y, m.hole_half.x, m.hole_half.y);
         }
+        if let Some(i) = input.idle {
+            u.idle_c = i.centre.extend(1.0);
+            u.idle_h = Vec4::new(i.half.x, i.half.y, IDLE_OVERLAP, IDLE_DEPTH);
+            u.idle_rgb = Vec4::from((Vec3::from(idle_colour(house)), 0.0));
+        }
         u.palette = self.palette;
         u.palette2 = self.palette2;
         let accent = if input.accent.is_finite() {
@@ -353,6 +429,8 @@ struct Loaded {
     sorted: Option<(Buffer, u32)>,
     /// The eye (room space) `sorted` was made for.
     sorted_eye: Option<Vec3>,
+    /// A pack's blank screen quad: the first of its six indices in `indices`.
+    idle_first: Option<u32>,
 }
 
 struct SlotEnv {
@@ -944,6 +1022,23 @@ impl EnvPass {
             ),
         };
         let index_count = (index_bytes.len() / size_of::<u32>()) as u32;
+        // A pack with a flat screen gets its blank screen's quad after its
+        // own triangles (drawn on its own, so the nearest-first order of the
+        // pack's never leaves it out).
+        let idle_quad = data
+            .baked
+            .as_ref()
+            .and(place.layout().screen)
+            .and_then(idle_screen)
+            .map(|i| idle_quad(i, (vertex_bytes.len() / size_of::<BakedVertex>()) as u32));
+        let (vertex_bytes, index_bytes): (std::borrow::Cow<[u8]>, std::borrow::Cow<[u8]>) =
+            match &idle_quad {
+                Some((v, i)) => (
+                    [vertex_bytes, bytemuck::cast_slice(v)].concat().into(),
+                    [index_bytes, bytemuck::cast_slice(i)].concat().into(),
+                ),
+                None => (vertex_bytes.into(), index_bytes.into()),
+            };
         let pack: Option<Arc<crate::env::pack::Baked>> = data.baked.clone();
         let baked = match &data.baked {
             Some(b) => {
@@ -987,8 +1082,8 @@ impl EnvPass {
                 return Err(e);
             }
         };
-        vertices.bytes()[..vertex_bytes.len()].copy_from_slice(vertex_bytes);
-        indices.bytes()[..index_bytes.len()].copy_from_slice(index_bytes);
+        vertices.bytes()[..vertex_bytes.len()].copy_from_slice(&vertex_bytes);
+        indices.bytes()[..index_bytes.len()].copy_from_slice(&index_bytes);
         let loaded = Loaded {
             place,
             set: data.baked.as_ref().and_then(|b| b.seat),
@@ -1002,6 +1097,7 @@ impl EnvPass {
             generation: self.generation + 1,
             sorted: None,
             sorted_eye: None,
+            idle_first: idle_quad.map(|_| index_count),
         };
         self.generation += 1;
         self.ordered_for = None;
@@ -1105,6 +1201,11 @@ impl EnvPass {
                     d.cmd_bind_index_buffer(cmd, indices, 0, vk::IndexType::UINT32);
                     d.cmd_draw_indexed(cmd, count, 1, 0, 0, 0);
                 }
+                if let Some(first) = l.idle_first {
+                    d.cmd_bind_vertex_buffers(cmd, 0, &[l.vertices.buffer], &[0]);
+                    d.cmd_bind_index_buffer(cmd, l.indices.buffer, 0, vk::IndexType::UINT32);
+                    d.cmd_draw_indexed(cmd, 6, 1, first, 0, 0);
+                }
             }
             return;
         }
@@ -1180,6 +1281,7 @@ mod tests {
             floor_drop: 0.0,
             time: 12.5,
             mask: None,
+            idle: None,
             screen: None,
         }
     }
@@ -1204,7 +1306,10 @@ mod tests {
         assert_eq!(offset_of!(EnvUniform, shine), 1232);
         assert_eq!(offset_of!(EnvUniform, mask_c), 1248);
         assert_eq!(offset_of!(EnvUniform, mask_h), 1264);
-        assert_eq!(size_of::<EnvUniform>(), 1280);
+        assert_eq!(offset_of!(EnvUniform, idle_c), 1280);
+        assert_eq!(offset_of!(EnvUniform, idle_h), 1296);
+        assert_eq!(offset_of!(EnvUniform, idle_rgb), 1312);
+        assert_eq!(size_of::<EnvUniform>(), 1328);
     }
 
     #[test]
@@ -1403,6 +1508,57 @@ mod tests {
     }
 
     #[test]
+    fn the_idle_screen_is_a_flat_screen_lit_by_the_house_lights_only() {
+        use crate::env::ScreenFrame;
+        let frame = ScreenFrame {
+            centre: Vec3::new(0.0, 3.5, 0.0),
+            max: Vec2::new(9.0, 3.8),
+            curvature: 0.0,
+        };
+        let idle = idle_screen(frame).unwrap();
+        assert_eq!(idle.half, Vec2::new(4.5, 1.9));
+        // Curved screens and nonsense have none.
+        assert!(
+            idle_screen(ScreenFrame {
+                curvature: 0.3,
+                ..frame
+            })
+            .is_none()
+        );
+        assert!(
+            idle_screen(ScreenFrame {
+                max: Vec2::new(f32::NAN, 1.0),
+                ..frame
+            })
+            .is_none()
+        );
+        // Dim at full light, near black with the lights off, never brighter
+        // with less light, and a number whatever it is given.
+        let (up, mid, down) = (idle_colour(1.0), idle_colour(0.5), idle_colour(0.0));
+        for c in 0..3 {
+            assert!(up[c] <= 0.1 && up[c] > mid[c] && mid[c] > down[c]);
+            assert!(down[c] > 0.0 && down[c] < 0.003);
+        }
+        assert_eq!(idle_colour(f32::NAN), up);
+        // It reaches the uniform when there is one, and only then.
+        let look = Look::new(&Place::Studio.build());
+        let on = look.uniform(&EnvInput {
+            idle: Some(idle),
+            ..input(1.0)
+        });
+        assert_eq!(on.idle_c, Vec4::new(0.0, 3.5, 0.0, 1.0));
+        assert_eq!(on.idle_h.truncate(), Vec3::new(4.5, 1.9, IDLE_OVERLAP));
+        assert_eq!(on.idle_rgb.truncate(), Vec3::from(up));
+        let off = look.uniform(&input(1.0));
+        assert_eq!(off.idle_c.w, 0.0);
+        // Its quad covers the rectangle and its overlap, in front of the plane.
+        let (v, i) = idle_quad(idle, 10);
+        assert_eq!(i, [10, 11, 12, 10, 12, 13]);
+        assert_eq!(v[0].pos, [-4.52, 1.58, IDLE_LIFT]);
+        assert_eq!(v[2].pos, [4.52, 5.42, IDLE_LIFT]);
+    }
+
+    #[test]
     fn the_house_level_scales_the_baked_light_and_dims_the_sky() {
         let data = Place::Studio.build();
         let look = Look::new(&data);
@@ -1503,6 +1659,7 @@ mod tests {
             normal: Vec3::Z,
             gain: 1.0,
         });
+        let look = Look::new(&Place::Studio.build());
         let on = look.uniform(&i);
         assert_eq!(on.patch_pos, patches);
         let spill = Place::Cinema.build().lighting.spill;
