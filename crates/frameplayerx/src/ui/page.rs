@@ -946,6 +946,12 @@ pub fn grid_fit(avail: f32, width: f32) -> (usize, f32, f32) {
 /// [`grid_fit`] fits them.
 pub fn grid(ui: &mut egui::Ui, n: usize, width: f32, mut add: impl FnMut(&mut egui::Ui, usize)) {
     let (per_row, gap, margin) = grid_fit(ui.available_width(), width);
+    // Fewer cards than a row holds sit as close as a full row's would.
+    let (gap, margin) = if n < per_row {
+        (GAP, 0.0)
+    } else {
+        (gap, margin)
+    };
     for start in (0..n).step_by(per_row) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
