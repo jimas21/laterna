@@ -940,6 +940,7 @@ impl Pointer {
     }
 
     /// How much of hand `i`'s laser shows, 0 (none) to 1 (all).
+    #[cfg(test)]
     pub fn ray_alpha(&self, i: usize) -> f32 {
         self.ray_alpha.get(i).copied().unwrap_or(0.0)
     }
