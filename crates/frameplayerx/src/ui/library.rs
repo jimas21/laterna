@@ -246,6 +246,10 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
             let selected =
                 v.state.screen == s && v.state.details.is_none() && v.state.picking.is_none();
             if widgets::nav_tab(ui, icon, label, selected, labelled).clicked() {
+                // The tab already shown: its page goes back to the top.
+                if selected {
+                    widgets::scroll_to_top(ui.ctx());
+                }
                 v.state.screen = s;
                 v.state.details = None;
                 v.state.picking = None;
