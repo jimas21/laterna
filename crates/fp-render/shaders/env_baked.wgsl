@@ -94,7 +94,20 @@ fn base_color(uv: vec2<f32>) -> vec3<f32> {
 
 // Fog and dither: the end of every place's fragment.
 fn finish(colour: vec3<f32>, in: VsOut) -> vec4<f32> {
-    var lit_color = colour * screen_mask(in.rpos);
+    // The idle screen first (derivatives, so before any branch): inside the
+    // screen's rectangle and its slab, whatever the pack baked there is
+    // replaced by a flat matte colour with a pixel-wide straight edge.
+    let dp = fwidth(in.rpos);
+    var base = colour;
+    if (env.idle_c.w > 0.5) {
+        let d = in.rpos - env.idle_c.xyz;
+        let reach = env.idle_h.xy + vec2<f32>(env.idle_h.z);
+        let wide = max(dp.xy, vec2<f32>(0.0005));
+        let edge = clamp((reach - abs(d.xy)) / wide + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
+        let cover = edge.x * edge.y * select(0.0, 1.0, abs(d.z) < env.idle_h.w);
+        base = mix(colour, env.idle_rgb.rgb, cover);
+    }
+    var lit_color = base * screen_mask(in.rpos);
     // The pack's accent texels (material B: exit signs, step lights) glow as
     // baked, or less when Minimal lighting dims them for the film. env.shine.z
     // is a uniform, so the read is skipped (and stays in uniform control

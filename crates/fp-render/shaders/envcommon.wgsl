@@ -56,6 +56,13 @@ struct Env {
     // shape when closed).
     mask_c: vec4<f32>,
     mask_h: vec4<f32>,
+    // The idle screen of a pack place (env_baked.wgsl): xyz the rectangle's
+    // middle and w 1 when it is drawn; xy its half size, z how far it reaches
+    // past that, w the depth of the slab round the plane it replaces; then
+    // its colour, already lit by the house lights.
+    idle_c: vec4<f32>,
+    idle_h: vec4<f32>,
+    idle_rgb: vec4<f32>,
 };
 
 struct PushConstants {
