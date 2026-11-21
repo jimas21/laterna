@@ -903,7 +903,14 @@ impl Pointer {
             let hit = self.aims[i].and_then(|a| a.hit);
             self.on_target[i] =
                 hit.is_some_and(|(pi, _, _)| self.rays_shown || !panels[pi].display_only);
-            let squeezed = h.squeeze > crate::controls::GRIP;
+            // Let go the way a grab is let go, so a squeeze that wavers
+            // round the threshold is not a string of taps.
+            let release = if self.taps[i].held.is_some() {
+                0.6
+            } else {
+                1.0
+            };
+            let squeezed = h.squeeze > crate::controls::GRIP * release;
             let other = &hands[1 - i];
             let busy = h.trigger > 0.3
                 || h.stick.length() > 0.3
@@ -915,8 +922,9 @@ impl Pointer {
                 || h.menu
                 || h.shoulder
                 || other.squeeze > crate::controls::GRIP * 0.6;
-            // Squeezed on a panel it takes hold of it: not a tap.
-            let grabbed = hit.is_some();
+            // Squeezed on a panel it takes hold of it: not a tap. A toast or
+            // the perf overlay cannot be held, so a tap there still counts.
+            let grabbed = hit.is_some_and(|(pi, _, _)| !panels[pi].display_only);
             if self.taps[i].update(squeezed, busy, grabbed, dt) {
                 self.tapped_on[i] = if self.tapped_on[i] > 0.0 {
                     0.0

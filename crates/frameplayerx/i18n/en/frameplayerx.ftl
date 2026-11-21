@@ -1552,7 +1552,6 @@ place-seat = Seat
 place-seat-desc = Where you sit in the room. Closer makes the screen look bigger.
 # Above the Size choice when a room's three seats are its three sizes.
 place-seat-sized = Pick your seat by the screen size: Home theater is the back row, Cinema the middle, Giant the front.
-# A tooltip on the control bar's key that opens the place, its seat and its lights.
 # Short: a chip.
 seat-front = Front
 # Short: a chip.

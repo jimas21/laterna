@@ -10,8 +10,9 @@ impl App {
     /// Forward becomes where the head faces, and the browse panel comes
     /// back in front, wherever it was moved. A flat screen comes back in
     /// front too (its yaw and pitch only place it; a 180°/360° picture keeps
-    /// its turn), so the two line up. The other panels keep their places,
-    /// except those never moved, which open afresh where they belong.
+    /// its turn), so the two line up. The adjust panel and the picker or More
+    /// list open afresh where they belong, even if they were moved: they sit
+    /// in the room, and would otherwise be left at the old heading.
     pub(super) fn recenter(&mut self) {
         self.reanchor = true;
         self.panel_drag = None;
@@ -19,7 +20,7 @@ impl App {
         self.panel_chrome.cancel();
         self.offsets.main = [0.0, 0.0];
         self.offsets.depth.main = 0.0;
-        self.spawns.forget_unmoved(&self.offsets);
+        recenter_floating(&mut self.offsets, &mut self.spawns);
         if let Some(p) = &mut self.playback
             && p.format.projection == Projection::Flat
             && (p.settings.yaw, p.settings.pitch) != (0.0, 0.0)
@@ -1428,6 +1429,16 @@ impl Spawns {
     }
 }
 
+/// On recenter, the panels placed in the room (adjust, and the picker or More
+/// list) drop where they were moved and opened, so they come back in front.
+fn recenter_floating(offsets: &mut crate::settings::PanelOffsets, spawns: &mut Spawns) {
+    offsets.adjust = [0.0; 2];
+    offsets.depth.adjust = 0.0;
+    offsets.tracks = [0.0; 2];
+    offsets.depth.tracks = 0.0;
+    spawns.forget_unmoved(offsets);
+}
+
 /// The picker or More list, standing upright facing `eye`, where it opened
 /// (`spawn`) and was then moved by `offsets`.
 fn tracks_pose(
@@ -1905,6 +1916,25 @@ mod tests {
         s.tracks = Some(Vec3::Y);
         s.forget_unmoved(&moved);
         assert_eq!((s.adjust, s.tracks), (Some(later), None));
+    }
+
+    #[test]
+    fn recentring_brings_moved_room_panels_back_in_front() {
+        let mut offsets = crate::settings::PanelOffsets::default();
+        offsets.adjust = [30.0, -5.0];
+        offsets.depth.adjust = 0.4;
+        offsets.tracks = [-12.0, 3.0];
+        offsets.depth.tracks = -0.2;
+        offsets.main = [7.0, 0.0];
+        let mut s = Spawns {
+            adjust: Some(Mat4::from_rotation_y(1.2)),
+            tracks: Some(Vec3::X),
+        };
+        recenter_floating(&mut offsets, &mut s);
+        assert_eq!(s, Spawns::default());
+        assert!(!offsets.adjust_moved() && !offsets.tracks_moved());
+        // The library's own place is recenter's business, not this helper's.
+        assert_eq!(offsets.main, [7.0, 0.0]);
     }
 
     #[test]
