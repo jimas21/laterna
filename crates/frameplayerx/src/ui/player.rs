@@ -327,8 +327,6 @@ pub const BAR_MARGIN: i8 = 28;
 
 /// The adjust panel's tabs the bar opens directly.
 const FORMAT_TAB: usize = 0;
-/// Position, which holds the place picker above the picture's placement.
-const POSITION_TAB: usize = 1;
 
 /// The format pill opens the adjust panel's Format tab (again closes it).
 fn toggle_format_tab(state: &mut super::UiState) {
@@ -700,8 +698,6 @@ enum Mark {
 #[derive(Debug)]
 enum Does {
     Act(Box<Action>),
-    /// Opens (or closes) the adjust panel at a tab.
-    Tab(usize),
     /// Opens (or closes) the adjust panel where it was.
     AdjustPanel,
 }
@@ -978,7 +974,6 @@ pub fn more_panel(ctx: &egui::Context, v: &mut View) {
                     if more_row(&mut col, &row).clicked() {
                         match row.does {
                             Does::Act(a) => actions.push(*a),
-                            Does::Tab(tab) => toggle_adjust_tab(state, tab),
                             Does::AdjustPanel => state.adjust_open = !state.adjust_open,
                         }
                         if row.closes {
@@ -3055,6 +3050,9 @@ mod tests {
     use super::*;
     use crate::settings::HOUSE_PLAYING_START;
 
+    /// Position, which holds the place picker above the picture's placement.
+    const POSITION_TAB: usize = 1;
+
     #[test]
     fn pressing_a_tab_entry_again_closes_the_panel() {
         let mut state = crate::ui::UiState::default();
@@ -3269,7 +3267,6 @@ mod tests {
             flat,
             in_room: false,
             place: None,
-            places_offered: true,
             passthrough_available: true,
             passthrough: false,
             mask: None,
@@ -3310,7 +3307,6 @@ mod tests {
                 "Screen size",
                 "Screen follows you",
                 "Browse beside the video",
-                "Place around the screen",
                 "Change controller buttons",
                 "Show my room",
             ]
@@ -3328,7 +3324,9 @@ mod tests {
         assert_eq!(play[6].mark, Mark::Value("Off".into()));
         assert!(!play[6].closes);
         // The controller buttons open Settings, so the list shuts.
-        assert!(screen[4].closes);
+        assert!(screen[3].closes);
+        // The place, seat and lights are Adjust's Position tab, not a row here.
+        assert!(!labels(&screen).iter().any(|l| l.contains("Place")));
     }
 
     #[test]
@@ -3362,7 +3360,6 @@ mod tests {
         let mut m = watching(false);
         m.dropped = Dropped {
             hide: true,
-            place: false,
             adjust: false,
         };
         let [play, _] = more_columns(&m);

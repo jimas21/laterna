@@ -853,6 +853,7 @@ impl Pointer {
     }
 
     /// The panel the trigger is held on, from press to release.
+    #[cfg(test)]
     pub fn pressed(&self) -> Option<usize> {
         self.pressed_panel
     }
