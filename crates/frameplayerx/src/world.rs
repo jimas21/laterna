@@ -2234,16 +2234,16 @@ mod tests {
         let mut ptr = Pointer::default();
         let [_, on] = run(&mut ptr, &mut [&mut handle], &hands, 0.5);
         assert_eq!(on, 1.0, "the laser reaches a handle");
-        assert!(!ptr.quads(Vec3::ZERO).is_empty());
-        assert_eq!(ptr.ray_layers(Vec3::ZERO).len(), 1);
+        assert!(!ptr.quads(Vec3::new(0.3, 0.3, 0.0)).is_empty());
+        assert_eq!(ptr.ray_layers(Vec3::new(0.3, 0.3, 0.0)).len(), 1);
 
         // Pointing away from everything: no laser.
         let mut ptr = Pointer::default();
         let hands = [Hand::default(), aimed(false)];
         let [_, off] = run(&mut ptr, &mut [&mut handle], &hands, 0.5);
         assert_eq!(off, 0.0);
-        assert!(ptr.quads(Vec3::ZERO).is_empty());
-        assert!(ptr.ray_layers(Vec3::ZERO).is_empty());
+        assert!(ptr.quads(Vec3::new(0.3, 0.3, 0.0)).is_empty());
+        assert!(ptr.ray_layers(Vec3::new(0.3, 0.3, 0.0)).is_empty());
 
         // A display-only panel (the performance overlay, the toast) is no
         // target while nothing else is up.
