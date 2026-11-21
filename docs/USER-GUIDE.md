@@ -881,6 +881,7 @@ picture. Play/pause and seeking are under either thumb.
 | Trigger | Click; on empty space, show or hide the controls | The same |
 | Hold trigger (or grip) on the bar under a flat screen, move | Move the screen with your hand; the thumbstick pushes it away (up) or pulls it near (down) | The same |
 | Hold trigger (or grip) on the handle at its bottom right corner, move | Resize the screen about its middle, keeping its shape | The same |
+| Tap grip (squeeze and let go quickly) while pointing at nothing | Show that hand's laser so you can aim at the screen's handles; tap again to hide it (it also goes by itself after 15 seconds). The laser shows by itself whenever it is on a panel, the move bar or the resize handle | The same |
 
 To get to SteamVR's dashboard without quitting, press **Dashboard** (four
 squares) at the top right of the browse panel, beside Quit (or beside Back to

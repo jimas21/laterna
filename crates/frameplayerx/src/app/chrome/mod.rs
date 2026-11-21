@@ -126,6 +126,15 @@ impl ScreenChrome {
         self.drag = None;
     }
 
+    /// The window controls are up because a laser is near them (not the
+    /// control bar bringing them): the lasers show so they can be aimed.
+    pub fn near_handles(&self) -> bool {
+        (self.bar.visible || self.corner.visible)
+            && self
+                .pointed_at
+                .is_some_and(|at| at.elapsed().as_secs_f32() < POINTED_LINGER)
+    }
+
     /// Which hands hold a window control.
     pub fn held_by(&self) -> [bool; 2] {
         let mut held = [false; 2];

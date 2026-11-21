@@ -627,7 +627,67 @@ pub struct Pointer {
     /// The rays are being drawn. A display-only panel shows where one lands
     /// only then: it's up while you watch, with the rays hidden.
     pub rays_shown: bool,
+    /// The screen's window controls are up because a laser is near them (set
+    /// by the app each frame): both lasers show, for aiming at them.
+    pub near_handles: bool,
     pub aims: [Option<Aim>; 2],
+    /// Each hand's ray rests on something that can be acted on (a panel, a
+    /// handle, the move bar), as of the last [`Pointer::route`].
+    on_target: [bool; 2],
+    /// Each hand's grip, watched for a quick tap.
+    taps: [GripTap; 2],
+    /// Seconds a grip tap keeps that hand's laser up; 0 when it is not.
+    tapped_on: [f32; 2],
+    /// How much of each laser shows, 0 to 1: it eases in and out.
+    ray_alpha: [f32; 2],
+}
+
+/// A grip squeezed and let go again quickly, with nothing else done and
+/// nothing taken hold of, is a tap.
+#[derive(Default, Clone, Copy)]
+struct GripTap {
+    /// Seconds the grip has been down, while it is.
+    held: Option<f32>,
+    /// Something else happened during the squeeze: not a tap.
+    spoiled: bool,
+}
+
+/// Longest a grip is down and still a tap, in seconds.
+pub const TAP_WITHIN: f32 = 0.35;
+/// How long a laser a grip tap raised stays up, in seconds.
+pub const TAP_LASER_FOR: f32 = 15.0;
+/// Seconds for a laser to come to full and to go.
+pub const RAY_FADE_IN: f32 = 0.12;
+pub const RAY_FADE_OUT: f32 = 0.45;
+/// The steps a laser's brightness is drawn in when it is a compositor layer
+/// (each its own picture).
+pub const RAY_LEVELS: u8 = 6;
+
+impl GripTap {
+    /// Feeds one frame; true when a tap has just been let go. `spoil` is
+    /// anything else going on with the hand or the other grip, and `grabbed`
+    /// that this squeeze took hold of something.
+    fn update(&mut self, squeezed: bool, spoil: bool, grabbed: bool, dt: f32) -> bool {
+        match (&mut self.held, squeezed) {
+            (None, true) => {
+                self.held = Some(0.0);
+                self.spoiled = spoil || grabbed;
+                false
+            }
+            (Some(t), true) => {
+                *t += dt;
+                self.spoiled |= spoil || grabbed;
+                false
+            }
+            (Some(t), false) => {
+                let tap = !self.spoiled && *t <= TAP_WITHIN;
+                self.held = None;
+                self.spoiled = false;
+                tap
+            }
+            (None, false) => false,
+        }
+    }
 }
 
 /// A panel taken hold of: by a grip squeezed while pointing at it, or by a
@@ -785,6 +845,7 @@ impl Pointer {
             }
             self.grips[i] = grip;
         }
+        self.update_lasers(panels, hands, dt);
         let gripping = self.grips[self.active];
         match transitions[self.active] {
             Some(true) if gripping && hit.is_some() => {}
@@ -832,6 +893,57 @@ impl Pointer {
         routed
     }
 
+    /// Works out which lasers show and eases each towards it. A laser shows
+    /// while the panels are up, near the screen's handles, when it rests on
+    /// anything that can be acted on (a panel, a handle, the move bar), and
+    /// for a while after a quick tap of its grip (which aims it anywhere: the
+    /// tap does nothing else when the ray is on nothing).
+    fn update_lasers(&mut self, panels: &[&mut Panel], hands: &[Hand; 2], dt: f32) {
+        for (i, h) in hands.iter().enumerate() {
+            let hit = self.aims[i].and_then(|a| a.hit);
+            self.on_target[i] =
+                hit.is_some_and(|(pi, _, _)| self.rays_shown || !panels[pi].display_only);
+            let squeezed = h.squeeze > crate::controls::GRIP;
+            let other = &hands[1 - i];
+            let busy = h.trigger > 0.3
+                || h.stick.length() > 0.3
+                || h.stick_click
+                || h.south
+                || h.north
+                || h.west
+                || h.east
+                || h.menu
+                || h.shoulder
+                || other.squeeze > crate::controls::GRIP * 0.6;
+            // Squeezed on a panel it takes hold of it: not a tap.
+            let grabbed = hit.is_some();
+            if self.taps[i].update(squeezed, busy, grabbed, dt) {
+                self.tapped_on[i] = if self.tapped_on[i] > 0.0 {
+                    0.0
+                } else {
+                    TAP_LASER_FOR
+                };
+            }
+            self.tapped_on[i] = (self.tapped_on[i] - dt).max(0.0);
+            let want = self.aims[i].is_some()
+                && (self.rays_shown
+                    || self.near_handles
+                    || self.on_target[i]
+                    || self.tapped_on[i] > 0.0);
+            let step = dt / if want { RAY_FADE_IN } else { RAY_FADE_OUT };
+            self.ray_alpha[i] = if want {
+                (self.ray_alpha[i] + step).min(1.0)
+            } else {
+                (self.ray_alpha[i] - step).max(0.0)
+            };
+        }
+    }
+
+    /// How much of hand `i`'s laser shows, 0 (none) to 1 (all).
+    pub fn ray_alpha(&self, i: usize) -> f32 {
+        self.ray_alpha.get(i).copied().unwrap_or(0.0)
+    }
+
     /// The panel the active hand points at.
     pub fn hovered(&self) -> Option<usize> {
         self.hovered_panel.filter(|_| !self.hovering_display_only)
@@ -858,17 +970,18 @@ impl Pointer {
     }
 
     /// Pointer rays and cursor dots to draw.
-    pub fn quads(&self, eye: Vec3, show: bool) -> Vec<QuadDraw> {
+    pub fn quads(&self, eye: Vec3) -> Vec<QuadDraw> {
         let mut out = Vec::new();
-        if !show {
-            return out;
-        }
         for (i, aim) in self.aims.iter().enumerate() {
             let Some(a) = aim else { continue };
+            let fade = self.ray_alpha[i];
+            if fade <= 0.0 {
+                continue;
+            }
             let active = i == self.active;
             let len = a.hit.map(|h| h.1).unwrap_or(2.0).min(5.0);
             let end = a.origin + a.dir * len;
-            let alpha = if active { 0.85 } else { 0.35 };
+            let alpha = if active { 0.85 } else { 0.35 } * fade;
             let color = [0.55 * alpha, 0.75 * alpha, 1.0 * alpha, alpha];
             out.push(QuadDraw::line(
                 a.origin + a.dir * 0.02,
@@ -883,13 +996,14 @@ impl Pointer {
 
     /// The rays as quad layers: each a thin strip from the hand to what it
     /// points at, turned to face the eye. (The dot is drawn on the panel.)
-    pub fn ray_layers(&self, eye: Vec3, show: bool) -> Vec<crate::app::LayerDraw> {
+    pub fn ray_layers(&self, eye: Vec3) -> Vec<crate::app::LayerDraw> {
         let mut out = Vec::new();
-        if !show {
-            return out;
-        }
         for (i, aim) in self.aims.iter().enumerate() {
             let Some(a) = aim else { continue };
+            let level = ray_level(self.ray_alpha[i]);
+            if level == 0 {
+                continue;
+            }
             let active = i == self.active;
             let len = a.hit.map(|h| h.1).unwrap_or(2.0).min(5.0) - 0.02;
             if len <= 0.01 {
@@ -907,12 +1021,22 @@ impl Pointer {
             let rot = Quat::from_mat3(&glam::Mat3::from_cols(x, y, z));
             out.push(crate::app::LayerDraw::Ray {
                 active,
+                level,
                 pose: (centre, rot),
                 size: Vec2::new(len, if active { 0.006 } else { 0.004 }),
             });
         }
         out
     }
+}
+
+/// A laser's brightness (0 to 1) as one of [`RAY_LEVELS`] steps, 0 for none:
+/// any laser that shows at all is at least the first step.
+pub fn ray_level(alpha: f32) -> u8 {
+    if alpha <= 0.0 {
+        return 0;
+    }
+    ((alpha.min(1.0) * RAY_LEVELS as f32).ceil() as u8).clamp(1, RAY_LEVELS)
 }
 
 #[cfg(test)]
@@ -2076,5 +2200,193 @@ mod tests {
         chrome.visible = false;
         ptr.route(&mut [&mut app, &mut chrome], &hands, 0.016);
         assert_eq!(ptr.hovered_below(1), Some(0));
+    }
+
+    /// A hand pointing straight at the middle of [`panel_in_front`], or
+    /// straight away from it.
+    fn aimed(at_panel: bool) -> Hand {
+        let rot = if at_panel {
+            Quat::IDENTITY
+        } else {
+            Quat::from_rotation_y(std::f32::consts::PI)
+        };
+        Hand {
+            aim: Some((Vec3::ZERO, rot)),
+            ..Default::default()
+        }
+    }
+
+    /// `secs` of frames (60 a second); the lasers' brightness afterwards.
+    fn run(ptr: &mut Pointer, panels: &mut [&mut Panel], hands: &[Hand; 2], secs: f32) -> [f32; 2] {
+        for _ in 0..(secs * 60.0).round() as usize {
+            ptr.route(panels, hands, 1.0 / 60.0);
+        }
+        [ptr.ray_alpha(0), ptr.ray_alpha(1)]
+    }
+
+    #[test]
+    fn a_laser_shows_on_whatever_can_be_acted_on_and_on_nothing_else() {
+        // The move bar, the resize handle and the like are panels that are not
+        // display-only: the laser shows on them with no other panel up.
+        let mut handle = panel_in_front();
+        let hands = [Hand::default(), aimed(true)];
+        let mut ptr = Pointer::default();
+        let [_, on] = run(&mut ptr, &mut [&mut handle], &hands, 0.5);
+        assert_eq!(on, 1.0, "the laser reaches a handle");
+        assert!(!ptr.quads(Vec3::ZERO).is_empty());
+        assert_eq!(ptr.ray_layers(Vec3::ZERO).len(), 1);
+
+        // Pointing away from everything: no laser.
+        let mut ptr = Pointer::default();
+        let hands = [Hand::default(), aimed(false)];
+        let [_, off] = run(&mut ptr, &mut [&mut handle], &hands, 0.5);
+        assert_eq!(off, 0.0);
+        assert!(ptr.quads(Vec3::ZERO).is_empty());
+        assert!(ptr.ray_layers(Vec3::ZERO).is_empty());
+
+        // A display-only panel (the performance overlay, the toast) is no
+        // target while nothing else is up.
+        let mut shown = panel_in_front();
+        shown.display_only = true;
+        let mut ptr = Pointer::default();
+        let hands = [Hand::default(), aimed(true)];
+        assert_eq!(run(&mut ptr, &mut [&mut shown], &hands, 0.5)[1], 0.0);
+        // Once the rays are up for the panels, it shows there too.
+        ptr.rays_shown = true;
+        assert_eq!(run(&mut ptr, &mut [&mut shown], &hands, 0.5)[1], 1.0);
+    }
+
+    #[test]
+    fn a_laser_shows_near_the_handles_before_it_is_on_one() {
+        let mut p = panel_in_front();
+        let hands = [Hand::default(), aimed(false)];
+        let mut ptr = Pointer::default();
+        assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 0.5)[1], 0.0);
+        ptr.near_handles = true;
+        assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 0.5)[1], 1.0);
+        // A hand that is not tracked has none.
+        let hands = [Hand::default(), Hand::default()];
+        assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 0.5), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_laser_fades_in_and_out_rather_than_popping() {
+        let mut p = panel_in_front();
+        let on = [Hand::default(), aimed(true)];
+        let mut ptr = Pointer::default();
+        let mut seen = Vec::new();
+        for _ in 0..30 {
+            ptr.route(&mut [&mut p], &on, 1.0 / 60.0);
+            seen.push(ptr.ray_alpha(1));
+        }
+        assert!(seen[0] > 0.0 && seen[0] < 0.5, "starts softly: {}", seen[0]);
+        assert!(seen.windows(2).all(|w| w[1] >= w[0]));
+        assert_eq!(*seen.last().unwrap(), 1.0);
+        // Pointing away: it goes slowly, still half there a moment later.
+        let off = [Hand::default(), aimed(false)];
+        let mut gone = Vec::new();
+        for _ in 0..60 {
+            ptr.route(&mut [&mut p], &off, 1.0 / 60.0);
+            gone.push(ptr.ray_alpha(1));
+        }
+        assert!(gone[0] > 0.9, "no pop: {}", gone[0]);
+        assert!(gone.windows(2).all(|w| w[1] <= w[0]));
+        assert_eq!(*gone.last().unwrap(), 0.0, "and gone in under a second");
+        assert!(gone.iter().any(|&a| a > 0.2 && a < 0.8), "passes through");
+    }
+
+    #[test]
+    fn brightness_steps_never_hide_a_laser_that_shows() {
+        assert_eq!(ray_level(0.0), 0);
+        assert_eq!(ray_level(0.001), 1);
+        assert_eq!(ray_level(1.0), RAY_LEVELS);
+        assert_eq!(ray_level(7.0), RAY_LEVELS);
+        let steps: Vec<u8> = (0..=10).map(|i| ray_level(i as f32 / 10.0)).collect();
+        assert!(steps.windows(2).all(|w| w[1] >= w[0]));
+    }
+
+    /// A grip squeezed for `secs` and let go, by hand 1 (pointing `at_panel`).
+    fn squeeze(
+        ptr: &mut Pointer,
+        panels: &mut [&mut Panel],
+        at_panel: bool,
+        secs: f32,
+        also: impl Fn(&mut Hand),
+    ) {
+        let mut h = aimed(at_panel);
+        h.squeeze = 1.0;
+        also(&mut h);
+        run(ptr, panels, &[Hand::default(), h], secs);
+        run(ptr, panels, &[Hand::default(), aimed(at_panel)], 0.05);
+    }
+
+    #[test]
+    fn a_grip_tap_on_nothing_shows_the_laser_and_another_hides_it() {
+        let mut p = panel_in_front();
+        let mut ptr = Pointer::default();
+        // Nothing to point at: the laser is off, and a tap raises it.
+        assert_eq!(
+            run(
+                &mut ptr,
+                &mut [&mut p],
+                &[Hand::default(), aimed(false)],
+                0.3
+            )[1],
+            0.0
+        );
+        squeeze(&mut ptr, &mut [&mut p], false, 0.15, |_| {});
+        let hands = [Hand::default(), aimed(false)];
+        assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 0.6)[1], 1.0);
+        // It stays up while aiming about.
+        assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 5.0)[1], 1.0);
+        // A second tap puts it away.
+        squeeze(&mut ptr, &mut [&mut p], false, 0.15, |_| {});
+        assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 1.0)[1], 0.0);
+        // Left up, it goes by itself.
+        squeeze(&mut ptr, &mut [&mut p], false, 0.15, |_| {});
+        assert_eq!(
+            run(&mut ptr, &mut [&mut p], &hands, TAP_LASER_FOR + 1.0)[1],
+            0.0
+        );
+    }
+
+    #[test]
+    fn a_grip_that_does_something_else_is_not_a_tap() {
+        let mut p = panel_in_front();
+        let hands = [Hand::default(), aimed(false)];
+        // Held for a while (a drag, a grip stick).
+        let mut ptr = Pointer::default();
+        squeeze(&mut ptr, &mut [&mut p], false, 0.8, |_| {});
+        assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 0.6)[1], 0.0);
+        // With the trigger (the dome drag), the stick or a button.
+        for also in [
+            (|h: &mut Hand| h.trigger = 0.9) as fn(&mut Hand),
+            |h| h.stick = Vec2::new(0.9, 0.0),
+            |h| h.south = true,
+            |h| h.shoulder = true,
+        ] {
+            let mut ptr = Pointer::default();
+            squeeze(&mut ptr, &mut [&mut p], false, 0.15, also);
+            assert_eq!(run(&mut ptr, &mut [&mut p], &hands, 0.6)[1], 0.0);
+        }
+        // Both grips (recentre).
+        let mut ptr = Pointer::default();
+        let mut both = [aimed(false), aimed(false)];
+        both[0].squeeze = 1.0;
+        both[1].squeeze = 1.0;
+        run(&mut ptr, &mut [&mut p], &both, 0.15);
+        run(&mut ptr, &mut [&mut p], &[aimed(false), aimed(false)], 0.6);
+        assert_eq!(ptr.ray_alpha(0) + ptr.ray_alpha(1), 0.0);
+    }
+
+    #[test]
+    fn a_grip_squeezed_on_a_panel_grabs_it_and_is_not_a_tap() {
+        let mut p = panel_in_front();
+        let mut ptr = Pointer::default();
+        // On the panel the laser is already up; this squeeze takes hold of it.
+        squeeze(&mut ptr, &mut [&mut p], true, 0.15, |_| {});
+        // Looking away afterwards: the laser fades, no tap kept it.
+        let away = [Hand::default(), aimed(false)];
+        assert_eq!(run(&mut ptr, &mut [&mut p], &away, 1.0)[1], 0.0);
     }
 }

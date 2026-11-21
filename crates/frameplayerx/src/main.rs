@@ -372,7 +372,8 @@ fn bench(file: &str, opts: &fp_media::bench::BenchOptions) -> Result<(), Error> 
 }
 
 /// Quad layer keys of the two pointer rays (panels use their index).
-const RAY_LAYER: u64 = 100;
+/// Each hand has one per brightness step (`world::RAY_LEVELS`).
+const RAY_LAYER: u64 = 200;
 const RAY_PX: [u32; 2] = [64, 8];
 /// The test card's quad layer (`FRAMEPLAYERX_TESTCARD_LAYER`).
 const CARD_LAYER: u64 = 102;
@@ -380,8 +381,9 @@ const CARD_LAYER: u64 = 102;
 /// The pointer ray's picture: light blue, soft across its width, fainter
 /// for the hand that isn't pointing. Premultiplied, as the compositor
 /// expects.
-fn ray_picture(active: bool) -> Vec<u8> {
-    let peak = if active { 0.85 } else { 0.35 };
+fn ray_picture(active: bool, level: u8) -> Vec<u8> {
+    let fade = level as f32 / world::RAY_LEVELS as f32;
+    let peak = if active { 0.85 } else { 0.35 } * fade;
     let across = [0.12, 0.5, 0.9, 1.0, 1.0, 0.9, 0.5, 0.12];
     let mut px = Vec::with_capacity((RAY_PX[0] * RAY_PX[1] * 4) as usize);
     for a in across {
@@ -1087,11 +1089,21 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                             size,
                         });
                     }
-                    LayerDraw::Ray { active, pose, size } => {
-                        let key = RAY_LAYER + active as u64;
+                    LayerDraw::Ray {
+                        active,
+                        level,
+                        pose,
+                        size,
+                    } => {
+                        let key = RAY_LAYER + active as u64 + 2 * level as u64;
                         session.static_quad_layer(key, RAY_PX[0], RAY_PX[1], 1, |image, _| {
                             renderer
-                                .upload_rgba(image, RAY_PX[0], RAY_PX[1], &ray_picture(active))
+                                .upload_rgba(
+                                    image,
+                                    RAY_PX[0],
+                                    RAY_PX[1],
+                                    &ray_picture(active, level),
+                                )
                                 .map_err(|e| e.to_string())
                         })?;
                         submits.push(QuadSubmit { key, pose, size });
