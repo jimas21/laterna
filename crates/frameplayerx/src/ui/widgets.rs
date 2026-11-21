@@ -1224,6 +1224,63 @@ fn drag_list(ui: &Ui, key: egui::Id, axis: usize) {
     ctx.data_mut(|d| d.insert_temp(key, g));
 }
 
+const TO_TOP: &str = "list-to-top";
+
+/// Asks the page's list to scroll smoothly back to its top: what a tab
+/// does when it is pressed on its own page. Only the first up-and-down list
+/// shown in this pass or the next takes it, and rows that scroll sideways
+/// keep their place.
+pub fn scroll_to_top(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(TO_TOP), pass));
+    ctx.request_repaint();
+}
+
+/// How the list `key` scrolls on to its top after [`scroll_to_top`]; a press
+/// or the wheel takes it back.
+fn rise(ctx: &egui::Context, key: egui::Id) {
+    let now = ctx.cumulative_pass_nr();
+    let asked = ctx.data_mut(|d| {
+        let id = egui::Id::new(TO_TOP);
+        let pass = d.get_temp::<u64>(id);
+        d.remove::<u64>(id);
+        pass.is_some_and(|p| now <= p + 1)
+    });
+    let rising = key.with("rise");
+    if asked {
+        ctx.data_mut(|d| d.insert_temp(rising, true));
+    }
+    if !ctx.data(|d| d.get_temp::<bool>(rising)).unwrap_or(false) {
+        return;
+    }
+    let done = || ctx.data_mut(|d| d.remove::<bool>(rising));
+    let Some(g) = ctx.data(|d| d.get_temp::<ListGrip>(key)) else {
+        return done();
+    };
+    let Some(mut state) = egui::scroll_area::State::load(ctx, g.id) else {
+        return done();
+    };
+    let (pressed, wheel, dt) = ctx.input(|i| {
+        (
+            i.pointer.any_pressed(),
+            i.smooth_scroll_delta != Vec2::ZERO,
+            i.stable_dt.min(0.05),
+        )
+    });
+    if pressed || wheel {
+        return done();
+    }
+    let next = state.offset.y * (-12.0 * dt).exp();
+    if next < 0.5 {
+        state.offset.y = 0.0;
+        done();
+    } else {
+        state.offset.y = next;
+        ctx.request_repaint();
+    }
+    state.store(ctx, g.id);
+}
+
 fn show_list_along<R>(
     area: egui::ScrollArea,
     ui: &mut Ui,
@@ -1232,6 +1289,9 @@ fn show_list_along<R>(
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     let key = ui.next_auto_id().with("list");
     drag_list(ui, key, axis);
+    if axis == 1 {
+        rise(ui.ctx(), key);
+    }
     let out = area
         .scroll_source(egui::scroll_area::ScrollSource {
             scroll_bar: true,
@@ -1782,6 +1842,75 @@ pub fn display_title(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tab_pressed_on_its_own_page_scrolls_it_back_to_the_top() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let top = std::cell::Cell::new(0.0_f32);
+        let run = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 400.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    super::super::page::scroll(ui, |ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(Vec2::new(100.0, 3000.0), Sense::hover());
+                        top.set(rect.top());
+                    });
+                });
+            });
+        };
+        run(vec![]);
+        run(vec![]);
+        let start = top.get();
+        run(vec![egui::Event::PointerMoved(Pos2::new(400.0, 200.0))]);
+        run(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -900.0),
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        for _ in 0..30 {
+            run(vec![]);
+        }
+        assert!(top.get() < start - 500.0, "scrolled down: {}", top.get());
+        // Nothing asked: it stays.
+        let down = top.get();
+        for _ in 0..10 {
+            run(vec![]);
+        }
+        assert_eq!(top.get(), down);
+        // The tab pressed: it glides up, and arrives.
+        scroll_to_top(&ctx);
+        run(vec![]);
+        let first = top.get();
+        assert!(first > down && first < start, "smoothly, not a jump");
+        for _ in 0..120 {
+            run(vec![]);
+        }
+        assert!((top.get() - start).abs() < 0.5, "at the top: {}", top.get());
+        // Asked on a page with no list, it is not kept for a later one.
+        scroll_to_top(&ctx);
+        for _ in 0..4 {
+            let _ = ctx.run(egui::RawInput::default(), |_| {});
+        }
+        run(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -900.0),
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        for _ in 0..30 {
+            run(vec![]);
+        }
+        assert!(
+            top.get() < start - 500.0,
+            "stale ask ignored: {}",
+            top.get()
+        );
+    }
 
     #[test]
     fn a_popups_close_key_sits_in_its_top_right_corner() {

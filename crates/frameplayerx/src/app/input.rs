@@ -250,6 +250,14 @@ impl App {
                         } else {
                             egui::Key::ArrowLeft
                         }));
+                    } else if ui::page::over_rail(&p.ctx) {
+                        // A row of cards pages sideways.
+                        let page = p.points().x * 0.7;
+                        p.push(egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(-page * dir as f32, 0.0),
+                            modifiers: egui::Modifiers::NONE,
+                        });
                     } else {
                         let page = p.points().y * 0.8;
                         p.push(egui::Event::MouseWheel {

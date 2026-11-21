@@ -98,6 +98,10 @@ PLEX_ITEMS = [{
                "Part": [{"key": "/plex-media/preview.mp4", "file": item["Path"]}]}],
 } for i, item in enumerate(LATEST_VR)]
 
+# Enough of them that a row has more than fits the panel, so its scroll
+# arrows show.
+PLEX_MANY = [dict(item, ratingKey=str(300 + n)) for n, item in enumerate(PLEX_ITEMS * 3)]
+
 # What a Plex server arranged for its front page: a row of its newest, a
 # collection promoted with its own picture, and its collections.
 PLEX_COLLECTIONS = [{
@@ -108,7 +112,7 @@ PLEX_COLLECTIONS = [{
 PLEX_HUBS = {"MediaContainer": {"Hub": [
     {"hubIdentifier": "movie.recentlyadded.1", "title": "Recently Added Movies", "type": "movie",
      "context": "hub.movie.recentlyadded", "key": "/hubs/home/recentlyAdded?type=1&sectionID=1",
-     "more": True, "librarySectionID": 1, "Metadata": PLEX_ITEMS[:4]},
+     "more": True, "librarySectionID": 1, "Metadata": PLEX_MANY[:12]},
     {"hubIdentifier": "custom.collection.1.900", "title": "Weekend trips", "type": "movie",
      "context": "hub.custom.collection", "key": "/library/collections/900/children",
      "more": True, "librarySectionID": 1, "Metadata": PLEX_ITEMS[1:5]},

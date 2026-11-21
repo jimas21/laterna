@@ -925,14 +925,38 @@ pub fn card(ui: &mut egui::Ui, thumbs: &mut Thumbs, c: &Card) -> CardResponse {
     }
 }
 
-/// Lays `n` items `width` wide out in rows that fill the width.
+/// How a grid fits `avail` points: as many `width`-wide cards in a row as
+/// go with at least [`GAP`] between them, then the points left over spread
+/// into the gaps (up to twice [`GAP`]) and the rest into one margin at each
+/// end, so whole cards line up edge to edge and no card crosses either side.
+/// Returns (cards per row, gap, margin at each end).
+pub fn grid_fit(avail: f32, width: f32) -> (usize, f32, f32) {
+    let per_row = (((avail + GAP) / (width + GAP)).floor().max(1.0)) as usize;
+    let left = (avail - per_row as f32 * width - (per_row as f32 - 1.0) * GAP).max(0.0);
+    let gap = if per_row > 1 {
+        (GAP + left / (per_row as f32 - 1.0)).min(2.0 * GAP)
+    } else {
+        GAP
+    };
+    let used = per_row as f32 * width + (per_row as f32 - 1.0) * gap;
+    (per_row, gap, ((avail - used) / 2.0).max(0.0))
+}
+
+/// Lays `n` items `width` wide out in rows that fill the width, as
+/// [`grid_fit`] fits them.
 pub fn grid(ui: &mut egui::Ui, n: usize, width: f32, mut add: impl FnMut(&mut egui::Ui, usize)) {
-    let per_row = ((ui.available_width() + GAP) / (width + GAP))
-        .floor()
-        .max(1.0) as usize;
+    let (per_row, gap, margin) = grid_fit(ui.available_width(), width);
+    // Fewer cards than a row holds sit as close as a full row's would.
+    let (gap, margin) = if n < per_row {
+        (GAP, 0.0)
+    } else {
+        (gap, margin)
+    };
     for start in (0..n).step_by(per_row) {
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(margin);
+            ui.spacing_mut().item_spacing.x = gap;
             for i in start..(start + per_row).min(n) {
                 add(ui, i);
             }
@@ -970,8 +994,12 @@ pub fn carousel_keyed(
     }
     section_title(ui, title, count);
     let mut see_all = false;
+    let key = ui.id().with(("rail", id));
+    let mut memo = ui.data(|d| d.get_temp::<RailMemo>(key)).unwrap_or_default();
+    glide(ui.ctx(), &mut memo);
+    let mut spans = Vec::with_capacity(n);
     // Room for a pointed-at card, as in `scroll`, and above it for its lift.
-    egui::Frame::new()
+    let shown = egui::Frame::new()
         .outer_margin(egui::Margin {
             left: -LIFT_ROOM,
             right: -LIFT_ROOM,
@@ -993,18 +1021,162 @@ pub fn carousel_keyed(
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = GAP;
+                                let origin = ui.cursor().min.x;
                                 for i in 0..n {
+                                    let left = ui.cursor().min.x - origin;
                                     add(ui, i);
+                                    spans.push((left, ui.min_rect().right() - origin));
                                 }
                                 if let Some(label) = more {
                                     see_all = see_all_card(ui, label);
                                 }
                             });
                         });
-                });
-        });
+                })
+        })
+        .inner;
+    let (area, view) = (
+        shown.inner_rect,
+        shown.inner_rect.width() - 2.0 * f32::from(LIFT_ROOM),
+    );
+    let offset = shown.state.offset.x;
+    let max = (shown.content_size.x - shown.inner_rect.width()).max(0.0);
+    memo.area = Some(shown.id);
+    memo.spans = spans;
+    // The thumbstick pages a row it points at sideways.
+    if ui.rect_contains_pointer(area) {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(egui::Id::new(OVER_RAIL), pass));
+    }
+    let (left, right) = rail_arrows(offset, max);
+    let picture = (shown.content_size.y - 8.0 - CARD_TEXT).max(96.0);
+    let middle = area.top() + 8.0 + picture / 2.0;
+    let inset = f32::from(LIFT_ROOM) + RAIL_ARROW / 2.0 + 2.0;
+    for (wanted, dir, x, icon) in [
+        (left, -1, area.left() + inset, icons::CARET_LEFT),
+        (right, 1, area.right() - inset, icons::CARET_RIGHT),
+    ] {
+        if wanted && rail_arrow(ui, key.with(dir), egui::pos2(x, middle), icon) {
+            memo.goto = Some(rail_target(&memo.spans, offset, view, max, dir));
+            ui.ctx().request_repaint();
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(key, memo));
     ui.add_space(18.0);
     see_all
+}
+
+/// Sideways rows: which of their arrows show for a row scrolled `offset`
+/// of `max` points, as (left, right); an arrow shows only where there is
+/// more that way.
+pub fn rail_arrows(offset: f32, max: f32) -> (bool, bool) {
+    (offset > 0.5, offset < max - 0.5)
+}
+
+/// Where a row scrolled `offset` rests after an arrow press `dir` (-1 left,
+/// 1 right): a card's left edge, so the cards before it are whole and the
+/// cards that fit stay whole too. `spans` are each card's (left, right)
+/// from the first card's left, `view` is the width cards are whole in and
+/// `max` how far the row scrolls.
+pub fn rail_target(spans: &[(f32, f32)], offset: f32, view: f32, max: f32, dir: i32) -> f32 {
+    const EPS: f32 = 1.0;
+    let target = if dir > 0 {
+        // The first card not whole at the right edge leads the next view.
+        spans
+            .iter()
+            .find(|(_, right)| *right - offset > view + EPS)
+            .map_or(max, |(left, _)| *left)
+    } else {
+        // The card just before the first whole one ends the next view.
+        match spans.iter().position(|(left, _)| *left >= offset - EPS) {
+            Some(0) | None => 0.0,
+            Some(k) => {
+                let from = spans[k - 1].1 - view;
+                spans[..k]
+                    .iter()
+                    .find(|(left, _)| *left >= from - EPS)
+                    .map_or(spans[k - 1].0, |(left, _)| *left)
+            }
+        }
+    };
+    target.clamp(0.0, max)
+}
+
+/// Width of a row's scroll arrow.
+const RAIL_ARROW: f32 = 48.0;
+
+const OVER_RAIL: &str = "over-rail";
+
+/// Whether the pointer was on a sideways row in the panel's last pass: the
+/// thumbstick pages it sideways instead of paging the list.
+pub fn over_rail(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::new(OVER_RAIL)))
+        .is_some_and(|pass| pass + 1 == ctx.cumulative_pass_nr())
+}
+
+/// What a sideways row keeps from pass to pass.
+#[derive(Clone, Default)]
+struct RailMemo {
+    /// Its scroll area.
+    area: Option<egui::Id>,
+    /// Its cards as in [`rail_target`].
+    spans: Vec<(f32, f32)>,
+    /// Where an arrow is taking it.
+    goto: Option<f32>,
+}
+
+/// Moves a row on towards where its arrow sends it; a press or the wheel
+/// takes it back.
+fn glide(ctx: &egui::Context, memo: &mut RailMemo) {
+    let (Some(goto), Some(area)) = (memo.goto, memo.area) else {
+        return;
+    };
+    let (pressed, wheel, dt) = ctx.input(|i| {
+        (
+            i.pointer.any_pressed(),
+            i.smooth_scroll_delta != Vec2::ZERO,
+            i.stable_dt.min(0.05),
+        )
+    });
+    let Some(mut state) = egui::scroll_area::State::load(ctx, area) else {
+        memo.goto = None;
+        return;
+    };
+    if pressed || wheel {
+        memo.goto = None;
+        return;
+    }
+    let now = state.offset.x;
+    let next = now + (goto - now) * (1.0 - (-14.0 * dt).exp());
+    if (goto - next).abs() < 0.5 {
+        state.offset.x = goto;
+        memo.goto = None;
+    } else {
+        state.offset.x = next;
+        ctx.request_repaint();
+    }
+    state.store(ctx, area);
+}
+
+/// A round arrow button at `center`; true when clicked.
+fn rail_arrow(ui: &mut egui::Ui, id: egui::Id, center: egui::Pos2, icon: &str) -> bool {
+    let rect = egui::Rect::from_center_size(center, Vec2::splat(RAIL_ARROW));
+    let resp = ui.interact(rect, id, Sense::click());
+    let h = ui.ctx().animate_bool_with_time(id, resp.hovered(), 0.12);
+    let painter = ui.painter();
+    painter.circle_filled(
+        center,
+        RAIL_ARROW / 2.0,
+        Color32::from_black_alpha(190).lerp_to_gamma(theme::ACCENT, h),
+    );
+    painter.text(
+        center,
+        Align2::CENTER_CENTER,
+        icon,
+        theme::icon(24.0),
+        Color32::WHITE,
+    );
+    resp.clicked()
 }
 
 /// Width of a row's "See all" card.
@@ -1184,6 +1356,222 @@ mod tests {
             all: false,
         };
         assert_eq!(list_view(short, none, &state).shown.len(), 10);
+    }
+
+    /// `n` cards `w` wide, `GAP` apart, as a row measures them.
+    fn spans(n: usize, w: f32) -> Vec<(f32, f32)> {
+        (0..n)
+            .map(|i| (i as f32 * (w + GAP), i as f32 * (w + GAP) + w))
+            .collect()
+    }
+
+    #[test]
+    fn arrows_show_only_where_there_is_more() {
+        assert_eq!(rail_arrows(0.0, 0.0), (false, false), "all fits");
+        assert_eq!(rail_arrows(0.0, 900.0), (false, true), "at the start");
+        assert_eq!(rail_arrows(300.0, 900.0), (true, true), "between");
+        assert_eq!(rail_arrows(900.0, 900.0), (true, false), "at the end");
+        assert_eq!(rail_arrows(899.8, 900.0), (true, false), "to within a hair");
+    }
+
+    #[test]
+    fn an_arrow_moves_a_row_by_whole_cards() {
+        let cards = spans(12, 168.0);
+        let (view, max) = (1000.0, 12.0 * 188.0 - GAP - 1000.0);
+        // Five fit whole; the sixth, half in sight, leads the next view.
+        assert_eq!(rail_target(&cards, 0.0, view, max, 1), cards[5].0);
+        let mut at = 0.0;
+        for _ in 0..6 {
+            let next = rail_target(&cards, at, view, max, 1);
+            assert!(next >= at && next <= max);
+            at = next;
+        }
+        assert_eq!(at, max, "the end is where the row ends");
+        // Back from the end: a card's edge, and the card before the first
+        // whole one is whole at the right edge of the new view.
+        let back = rail_target(&cards, max, view, max, -1);
+        assert!(back < max && cards.iter().any(|c| (c.0 - back).abs() < 0.01));
+        let first_whole = cards.iter().position(|c| c.0 >= max - 1.0).unwrap();
+        assert!(cards[first_whole - 1].1 <= back + view + 0.01);
+        let mut at = max;
+        for _ in 0..8 {
+            at = rail_target(&cards, at, view, max, -1);
+        }
+        assert_eq!(at, 0.0, "and back to the start");
+        // A row that fits goes nowhere.
+        assert_eq!(rail_target(&spans(3, 168.0), 0.0, view, 0.0, 1), 0.0);
+    }
+
+    #[test]
+    fn a_grid_fits_whole_cards_edge_to_edge() {
+        for width in [168.0, 256.0, 336.0] {
+            for avail in (300..2400).step_by(7) {
+                let avail = avail as f32;
+                if avail < width {
+                    continue;
+                }
+                let (cols, gap, margin) = grid_fit(avail, width);
+                let used = cols as f32 * width + (cols as f32 - 1.0) * gap;
+                assert!(cols >= 1 && (GAP..=2.0 * GAP).contains(&gap));
+                assert!(margin >= 0.0);
+                // Whole cards inside, the same room each side.
+                assert!(margin * 2.0 + used <= avail + 0.01, "{avail} {width}");
+                assert!(margin * 2.0 + used >= avail - 0.01, "{avail} {width}");
+                // No more cards would have fit at the least gap.
+                let more = (cols + 1) as f32 * width + cols as f32 * GAP;
+                assert!(more > avail, "{avail} {width}");
+            }
+        }
+        // A small leftover all goes into the gaps, flush both sides.
+        let (cols, gap, margin) = grid_fit(5.0 * 168.0 + 4.0 * GAP + 20.0, 168.0);
+        assert_eq!((cols, margin), (5, 0.0));
+        assert!((gap - (GAP + 5.0)).abs() < 1e-3);
+    }
+
+    /// A page of two rows of 12 cards, drawn frame by frame.
+    struct Rows {
+        ctx: egui::Context,
+        /// Left edge of each row's first card.
+        firsts: std::cell::RefCell<[f32; 2]>,
+        /// Each row's first card.
+        card: std::cell::RefCell<[egui::Rect; 2]>,
+    }
+
+    impl Rows {
+        fn new() -> Self {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let rows = Rows {
+                ctx,
+                firsts: Default::default(),
+                card: std::cell::RefCell::new([egui::Rect::NOTHING; 2]),
+            };
+            rows.frames(4);
+            rows
+        }
+
+        fn frame(&self, events: Vec<egui::Event>) {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1100.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let _ = self.ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    scroll(ui, |ui| {
+                        for (r, id) in ["first", "second"].into_iter().enumerate() {
+                            carousel_keyed(ui, id, id, None, 12, None, |ui, i| {
+                                let size = Vec2::new(168.0, 300.0);
+                                let (rect, _) = ui.allocate_exact_size(size, Sense::click());
+                                if i == 0 {
+                                    self.firsts.borrow_mut()[r] = rect.min.x;
+                                    {
+                                        self.card.borrow_mut()[r] = rect;
+                                    }
+                                }
+                            });
+                        }
+                    });
+                });
+            });
+        }
+
+        fn frames(&self, n: usize) {
+            for _ in 0..n {
+                self.frame(vec![]);
+            }
+        }
+
+        fn press(&self, pos: egui::Pos2) {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.frame(vec![egui::Event::PointerMoved(pos)]);
+            self.frame(vec![button(true)]);
+            self.frame(vec![button(false)]);
+        }
+    }
+
+    #[test]
+    fn every_row_scrolls_by_drag_and_by_stick_not_only_the_first() {
+        for row in [0, 1] {
+            let rows = Rows::new();
+            let y = rows.card.borrow()[row].center().y;
+            let start = rows.firsts.borrow()[row];
+            let p = egui::pos2(600.0, y);
+            rows.frame(vec![egui::Event::PointerMoved(p)]);
+            rows.frame(vec![egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            for k in 1..=10 {
+                let to = egui::pos2(600.0 - 20.0 * k as f32, y);
+                rows.frame(vec![egui::Event::PointerMoved(to)]);
+            }
+            rows.frame(vec![egui::Event::PointerButton {
+                pos: egui::pos2(400.0, y),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            let dragged = rows.firsts.borrow()[row];
+            assert!(
+                dragged < start - 100.0,
+                "row {row} drags: {start} to {dragged}"
+            );
+            // The thumbstick pages it sideways.
+            rows.frame(vec![egui::Event::PointerMoved(egui::pos2(400.0, y))]);
+            assert!(over_rail(&rows.ctx), "row {row} knows it is pointed at");
+            rows.frame(vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(-100.0, 0.0),
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            rows.frames(10);
+            assert!(
+                rows.firsts.borrow()[row] < dragged - 50.0,
+                "row {row} pages"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rows_arrows_move_it_to_a_cards_edge_and_only_where_there_is_more() {
+        let rows = Rows::new();
+        let y = rows.card.borrow()[1].top() + (300.0 - CARD_TEXT) / 2.0;
+        let left = egui::pos2(34.0, y);
+        let right = egui::pos2(1066.0, y);
+        let start = rows.firsts.borrow()[1];
+        // At the start there is no way back: nothing to press on the left.
+        rows.press(left);
+        rows.frames(30);
+        assert_eq!(rows.firsts.borrow()[1], start, "no arrow at the start");
+        // The right one shows; pressing it moves the row to a card's edge.
+        rows.press(right);
+        rows.frames(80);
+        let moved = start - rows.firsts.borrow()[1];
+        assert!(moved > 500.0, "moved {moved}");
+        let cards = moved / (168.0 + GAP);
+        assert!(
+            (cards - cards.round()).abs() < 0.01,
+            "a card's edge: {cards}"
+        );
+        assert_eq!(rows.firsts.borrow()[0], start, "the other row stayed");
+        // Now the left one is there and brings it back.
+        rows.press(left);
+        rows.frames(80);
+        assert!(
+            (rows.firsts.borrow()[1] - start).abs() < 0.5,
+            "back at the start"
+        );
     }
 
     #[test]
