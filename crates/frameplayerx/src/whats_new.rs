@@ -13,6 +13,16 @@ pub struct Entry {
 /// Newest first.
 pub const ENTRIES: &[Entry] = &[
     Entry {
+        version: "0.18.0-beta.21",
+        bullets: &[
+            "Your own controllers are back in place of the stand-in sticks.",
+            "The laser shows whenever you point at something you can use, the screen's handles too; a quick grip tap shows it for aiming.",
+            "Every menu moves on its own and opens in the same spot each time you start; the Place key is gone, Adjust has it all.",
+            "With nothing playing, a place's screen is a clean, dim screen with straight edges.",
+            "Every row on Home scrolls left and right with arrows or the stick, grids fit whole posters, and pressing Home again goes back to the top.",
+        ],
+    },
+    Entry {
         version: "0.18.0-beta.20",
         bullets: &[
             "Pulling the screen toward you keeps it coming, even past your head, instead of bouncing back out.",
