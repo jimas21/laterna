@@ -1553,7 +1553,6 @@ place-seat-desc = Where you sit in the room. Closer makes the screen look bigger
 # Above the Size choice when a room's three seats are its three sizes.
 place-seat-sized = Pick your seat by the screen size: Home theater is the back row, Cinema the middle, Giant the front.
 # A tooltip on the control bar's key that opens the place, its seat and its lights.
-player-place = Place, seat and lights
 # Short: a chip.
 seat-front = Front
 # Short: a chip.
@@ -1647,7 +1646,6 @@ more-size-custom = Custom
 more-follow = Screen follows you
 more-follow-place = Does nothing inside a place
 more-multitask = Browse beside the video
-more-place = Place around the screen
 more-room = Show my room
 more-sleep = Sleep timer
 # The sleep timer's choice: { $minutes } is 15, 30, 45 or 60; { $left } counts down.

@@ -10,8 +10,8 @@ impl App {
     /// Forward becomes where the head faces, and the browse panel comes
     /// back in front, wherever it was moved. A flat screen comes back in
     /// front too (its yaw and pitch only place it; a 180°/360° picture keeps
-    /// its turn), so the two line up. The adjust panel keeps its place
-    /// beside the player.
+    /// its turn), so the two line up. The other panels keep their places,
+    /// except those never moved, which open afresh where they belong.
     pub(super) fn recenter(&mut self) {
         self.reanchor = true;
         self.panel_drag = None;
@@ -19,6 +19,7 @@ impl App {
         self.panel_chrome.cancel();
         self.offsets.main = [0.0, 0.0];
         self.offsets.depth.main = 0.0;
+        self.spawns.forget_unmoved(&self.offsets);
         if let Some(p) = &mut self.playback
             && p.format.projection == Projection::Flat
             && (p.settings.yaw, p.settings.pitch) != (0.0, 0.0)
@@ -41,7 +42,7 @@ impl App {
         self.panel_drag = None;
         self.chrome.cancel();
         self.panel_chrome.cancel();
-        self.adjust_hold = None;
+        self.spawns = Default::default();
         self.offsets = Default::default();
         self.settings.panel_offsets = self.offsets;
         if let Some(p) = &mut self.playback
@@ -82,13 +83,13 @@ impl App {
     }
 
     /// Squeezing a grip on the library panel, the control bar, the adjust
-    /// panel or the performance overlay moves it round the viewer with that
+    /// panel, the audio and subtitles picker (or More list) or the
+    /// performance overlay moves that one panel round the viewer with that
     /// hand, and nearer or further as the hand comes towards or goes away
-    /// from the head; where it is let go is saved: the bar's relative to a flat screen,
-    /// the adjust panel's relative to the bar, so each goes along when what it
-    /// is placed from moves. Squeezing one on the keyboard moves the panel it
-    /// types into, and the keyboard with it; on the audio and subtitles
-    /// picker, the bar it sits on. The picture itself is dragged with grip
+    /// from the head. The bar is moved relative to a flat screen; each of the
+    /// others from where it opened, so nothing else takes it along. Squeezing
+    /// one on the keyboard moves the panel it types into, and the keyboard
+    /// with it. The picture itself is dragged with grip
     /// and trigger (see `controls`).
     pub(super) fn move_panels(
         &mut self,
@@ -100,13 +101,17 @@ impl App {
         use crate::controls::{DRAG_TAU, Damped, GRIP, angles, pushed_distance, reach, wrap};
         let hands = &input.hands;
         let head = input.head.map(|(pos, _)| pos);
-        // The adjust panel sits beside the control bar, turned with the
-        // picture; the library panel and the overlay are placed in the room.
+        // The adjust panel is turned as the control bar was when it opened;
+        // the library panel, the picker and the overlay are placed in the room.
         let room = anchor.to_scale_rotation_translation().1;
         let rotation = |m: Mat4| m.to_scale_rotation_translation().1;
         // Each is moved about what it is placed from: the adjust panel
         // about the control bar, the bar about a flat screen.
-        let beside_bar = rotation(self.player_anchor(anchor));
+        let beside_bar = rotation(
+            self.spawns
+                .adjust
+                .unwrap_or_else(|| self.player_anchor(anchor)),
+        );
         let flat = self
             .playback
             .as_ref()
@@ -126,7 +131,7 @@ impl App {
         let grab = grab.and_then(|(panel, hand, by, via)| match panel {
             KEYBOARD => self.keyboard_target().map(|t| (t, hand, by, via)),
             MAIN | ADJUST | PERF => Some((panel, hand, by, via)),
-            BAR | TRACKS if self.playback.is_some() => Some((BAR, hand, by, via)),
+            BAR | TRACKS if self.playback.is_some() => Some((panel, hand, by, via)),
             _ => None,
         });
         if let Some((panel, hand, by, via)) = grab
@@ -136,6 +141,7 @@ impl App {
                 MAIN => self.offsets.main,
                 ADJUST => self.offsets.adjust,
                 PERF => self.offsets.perf,
+                TRACKS => self.offsets.tracks,
                 _ => self.offsets.bar,
             };
             self.panel_drag = Some(PanelDrag {
@@ -200,6 +206,7 @@ impl App {
                     MAIN => self.offsets.main = to,
                     ADJUST => self.offsets.adjust = to,
                     PERF => self.offsets.perf = to,
+                    TRACKS => self.offsets.tracks = to,
                     _ => self.offsets.bar = to,
                 }
                 self.last_activity = Instant::now();
@@ -218,6 +225,7 @@ impl App {
             MAIN => &mut depth.main,
             ADJUST => &mut depth.adjust,
             PERF => &mut depth.perf,
+            TRACKS => &mut depth.tracks,
             _ => &mut depth.bar,
         }
     }
@@ -642,17 +650,18 @@ impl App {
     /// wherever the bar goes.
     fn place_panels(&mut self, anchor: Mat4, eye: Vec3, kb_target: Option<usize>) {
         let bar_anchor = self.player_anchor(anchor);
-        // The adjust panel holds still while the trigger is held on it: its
-        // yaw and pitch sliders move a flat screen, and with it the bar and
-        // this panel, away from the pointer. It catches up when let go.
-        let held = self.pointer.pressed() == Some(ADJUST);
-        let adjust_anchor = match self.adjust_hold.filter(|_| held) {
-            Some(hold) => hold,
-            None => {
-                self.adjust_hold = held.then_some(bar_anchor);
-                bar_anchor
-            }
-        };
+        // The adjust panel is placed from where the bar was when it opened,
+        // and stays there: its yaw and pitch sliders move a flat screen, and
+        // with it the bar, but not this panel. A panel nobody moved opens
+        // afresh each time; a moved one keeps its place.
+        self.spawns.update(
+            &self.offsets,
+            [self.panels[ADJUST].visible, self.panels[TRACKS].visible],
+        );
+        if self.panels[ADJUST].visible {
+            self.spawns.adjust.get_or_insert(bar_anchor);
+        }
+        let adjust_anchor = self.spawns.adjust.unwrap_or(bar_anchor);
         let moved = self.offsets.depth;
         let main_d = panel_distance(MAIN_DISTANCE, moved.main);
         let bar_d = panel_distance(BAR_DISTANCE, moved.bar);
@@ -674,15 +683,25 @@ impl App {
         self.panels[BAR].pose = chrome::layout::bar_pose(bar_anchor, bar_d, bar_drop);
         // The pop-ups (this one, the adjust panel and its keyboard below) stand
         // upright facing the head, not leaning back with the bar or tipped
-        // with the room when lying back to watch.
-        self.panels[TRACKS].pose =
-            upright_popup(above_bar(&self.panels[BAR], &self.panels[TRACKS]), eye);
+        // with the room when lying back to watch. The picker opens on the
+        // bar's end, where it is then, and is moved from there on its own.
+        let opens_at =
+            upright_popup(above_bar(&self.panels[BAR], &self.panels[TRACKS]), eye).w_axis;
+        if self.panels[TRACKS].visible {
+            self.spawns.tracks.get_or_insert(opens_at.truncate());
+        }
+        self.panels[TRACKS].pose = tracks_pose(
+            anchor,
+            self.spawns.tracks.unwrap_or(opens_at.truncate()),
+            &self.offsets,
+            eye,
+        );
+        // Above the bar, and above the picker only while that is on the bar.
+        let on_bar = self.panels[TRACKS].visible && !self.offsets.tracks_moved();
         self.panels[TOAST].pose = upright_popup(
             toast_pose(
                 &self.panels[BAR],
-                self.panels[TRACKS]
-                    .visible
-                    .then(|| self.panels[TRACKS].size.y),
+                on_bar.then(|| self.panels[TRACKS].size.y),
                 &self.panels[TOAST],
             ),
             eye,
@@ -1371,6 +1390,78 @@ fn above_bar(bar: &Panel, picker: &Panel) -> Mat4 {
     bar.pose * Mat4::from_translation(Vec3::new(x, y, 0.0))
 }
 
+/// The frames the panels that open beside or above the control bar are
+/// placed from: where the bar's frame was (adjust) and where the picker's
+/// middle was (tracks) when each opened. Moving the bar, the screen or another
+/// panel afterwards does not take them along; moving the panel itself is an
+/// offset from here. A panel nobody moved opens afresh next time, where it
+/// belongs for where you and the screen are then; a moved one keeps its place
+/// until Reset (or the end of the session: none of this is saved).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Spawns {
+    pub adjust: Option<Mat4>,
+    pub tracks: Option<Vec3>,
+}
+
+impl Spawns {
+    /// Once a frame, before placing: a panel that is shut and was never moved
+    /// forgets where it opened. `up` says which of adjust and tracks show.
+    pub fn update(&mut self, offsets: &crate::settings::PanelOffsets, up: [bool; 2]) {
+        if !up[0] && !offsets.adjust_moved() {
+            self.adjust = None;
+        }
+        if !up[1] && !offsets.tracks_moved() {
+            self.tracks = None;
+        }
+    }
+
+    /// Whatever was never moved opens afresh (the view was recentred).
+    pub fn forget_unmoved(&mut self, offsets: &crate::settings::PanelOffsets) {
+        if !offsets.adjust_moved() {
+            self.adjust = None;
+        }
+        if !offsets.tracks_moved() {
+            self.tracks = None;
+        }
+    }
+}
+
+/// The picker or More list, standing upright facing `eye`, where it opened
+/// (`spawn`) and was then moved by `offsets`.
+fn tracks_pose(
+    anchor: Mat4,
+    spawn: Vec3,
+    offsets: &crate::settings::PanelOffsets,
+    eye: Vec3,
+) -> Mat4 {
+    upright_popup(
+        Mat4::from_translation(moved_spot(
+            anchor,
+            spawn,
+            offsets.tracks,
+            offsets.depth.tracks,
+        )),
+        eye,
+    )
+}
+
+/// Where a panel that opened with its middle at `spawn` is after it was moved
+/// `[yaw, pitch]` degrees about `anchor` (left and up positive, as
+/// `place_around` has them) and `depth` metres nearer (negative) or further.
+fn moved_spot(anchor: Mat4, spawn: Vec3, [yaw, pitch]: [f32; 2], depth: f32) -> Vec3 {
+    let local = anchor.inverse().transform_point3(spawn);
+    let len = local.length();
+    if len < 1e-3 {
+        return spawn;
+    }
+    let turned = Quat::from_rotation_y(yaw.to_radians())
+        * Quat::from_rotation_x(pitch.to_radians())
+        * (local / len);
+    let reach = (len + panel_distance(BAR_DISTANCE, depth) - BAR_DISTANCE)
+        .clamp(*PANEL_RANGE.start(), *PANEL_RANGE.end());
+    anchor.transform_point3(turned * reach)
+}
+
 /// Centred above the control bar's body, and above the picker, `above` metres
 /// tall, when it is open.
 fn toast_pose(bar: &Panel, above: Option<f32>, toast: &Panel) -> Mat4 {
@@ -1613,5 +1704,234 @@ mod tests {
             let off = (content_end - body_end).dot(axis(Vec3::X));
             assert!(off.abs() < 1e-4, "{scale}: {off}");
         }
+    }
+
+    /// What the panels' places are measured in: `eye` at the origin, a
+    /// control bar below the middle as the app puts it, and the adjust panel
+    /// and picker where they open.
+    struct Opened {
+        bar: Panel,
+        adjust: Panel,
+        picker: Panel,
+        spawns: Spawns,
+    }
+
+    fn opened(scale: f32, frame: Mat4, eye: Vec3) -> Opened {
+        let mut bar = growing_panel(BAR_PX, BAR_PX[0] as f32 * BAR_M_PER_PX, 1.25);
+        let mut adjust = floating_panel([900, 1020], 0.75, 1.25);
+        let mut picker = growing_panel(PICKER_PX, PICKER_PX[0] as f32 * BAR_M_PER_PX, 1.25);
+        for p in [&mut bar, &mut picker, &mut adjust] {
+            p.set_scale(scale);
+        }
+        bar.pose = chrome::layout::bar_pose(frame, BAR_DISTANCE, 0.0);
+        let mut spawns = Spawns::default();
+        spawns.update(&Default::default(), [true, true]);
+        spawns.adjust = Some(frame);
+        spawns.tracks = Some(
+            upright_popup(above_bar(&bar, &picker), eye)
+                .w_axis
+                .truncate(),
+        );
+        Opened {
+            bar,
+            adjust,
+            picker,
+            spawns,
+        }
+    }
+
+    /// The adjust panel's pose, as `place_panels` puts it.
+    fn adjust_pose(o: &Opened, offsets: &crate::settings::PanelOffsets, eye: Vec3) -> Mat4 {
+        let half = |w: f32, d: f32| (w / 2.0 / d).atan().to_degrees();
+        let growth = half(o.bar.size.x, BAR_DISTANCE) - half(o.bar.base_size().x, BAR_DISTANCE);
+        let beside = -52.0 - growth;
+        let [ay, ap] = offsets.adjust;
+        upright_popup(
+            place_around(
+                o.spawns.adjust.unwrap(),
+                beside + ay,
+                ap,
+                panel_distance(ADJUST_DISTANCE, offsets.depth.adjust),
+                0.0,
+            ),
+            eye,
+        )
+    }
+
+    /// The picker's pose, as `place_panels` puts it.
+    fn picker_pose(
+        o: &Opened,
+        anchor: Mat4,
+        offsets: &crate::settings::PanelOffsets,
+        eye: Vec3,
+    ) -> Mat4 {
+        tracks_pose(anchor, o.spawns.tracks.unwrap(), offsets, eye)
+    }
+
+    /// The yaw and pitch range a panel's body covers as seen from the origin,
+    /// degrees: (left, right, low, high).
+    fn seen(p: &Panel) -> [f32; 4] {
+        let room = ui::widgets::SHADOW_ROOM;
+        let pts = p.points();
+        let mut out = [f32::MAX, f32::MIN, f32::MAX, f32::MIN];
+        for (x, y) in [
+            (room.left as f32, room.top as f32),
+            (pts.x - room.right as f32, room.top as f32),
+            (room.left as f32, pts.y - room.bottom as f32),
+            (pts.x - room.right as f32, pts.y - room.bottom as f32),
+        ] {
+            let w = p.world_point(egui::pos2(x, y));
+            let yaw = w.x.atan2(-w.z).to_degrees();
+            let pitch = w.y.atan2(w.x.hypot(w.z)).to_degrees();
+            out = [
+                out[0].min(yaw),
+                out[1].max(yaw),
+                out[2].min(pitch),
+                out[3].max(pitch),
+            ];
+        }
+        out
+    }
+
+    fn overlap(a: [f32; 4], b: [f32; 4], slack: f32) -> bool {
+        a[0] < b[1] - slack && b[0] < a[1] - slack && a[2] < b[3] - slack && b[2] < a[3] - slack
+    }
+
+    #[test]
+    fn panels_open_clear_of_each_other() {
+        let eye = Vec3::ZERO;
+        for scale in [0.8, 1.0, 1.4] {
+            let mut o = opened(scale, Mat4::IDENTITY, eye);
+            let none = crate::settings::PanelOffsets::default();
+            o.adjust.pose = adjust_pose(&o, &none, eye);
+            o.picker.pose = picker_pose(&o, Mat4::IDENTITY, &none, eye);
+            let (bar, adjust, picker) = (seen(&o.bar), seen(&o.adjust), seen(&o.picker));
+            // The picker stands on the bar's end (they meet, so a degree of
+            // give); the adjust panel is beside both.
+            assert!(!overlap(bar, picker, 1.0), "{scale}: {bar:?} {picker:?}");
+            assert!(!overlap(bar, adjust, 0.0), "{scale}: {bar:?} {adjust:?}");
+            assert!(
+                !overlap(picker, adjust, 0.0),
+                "{scale}: {picker:?} {adjust:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn moving_one_panel_leaves_the_others_where_they_were() {
+        let eye = Vec3::ZERO;
+        let o = opened(1.0, Mat4::IDENTITY, eye);
+        let none = crate::settings::PanelOffsets::default();
+        let adjust0 = adjust_pose(&o, &none, eye);
+        let picker0 = picker_pose(&o, Mat4::IDENTITY, &none, eye);
+        // The picker moved: the adjust panel does not.
+        let mut moved = none;
+        moved.tracks = [20.0, 10.0];
+        moved.depth.tracks = 0.3;
+        assert_eq!(adjust_pose(&o, &moved, eye), adjust0);
+        let picker1 = picker_pose(&o, Mat4::IDENTITY, &moved, eye);
+        assert!(
+            (picker1.w_axis - picker0.w_axis).truncate().length() > 0.2,
+            "it moved"
+        );
+        // The adjust panel moved: the picker does not.
+        let mut moved = none;
+        moved.adjust = [-15.0, 5.0];
+        moved.depth.adjust = -0.2;
+        assert_eq!(picker_pose(&o, Mat4::IDENTITY, &moved, eye), picker0);
+        assert_ne!(adjust_pose(&o, &moved, eye), adjust0);
+        // Neither follows the bar when it moves: they are placed from where
+        // they opened, whatever the bar's own frame is now.
+        let elsewhere =
+            Mat4::from_rotation_y(0.7) * Mat4::from_translation(Vec3::new(0.0, 0.3, 0.0));
+        let again = Opened {
+            bar: opened(1.0, elsewhere, eye).bar,
+            ..opened(1.0, Mat4::IDENTITY, eye)
+        };
+        assert_eq!(adjust_pose(&again, &none, eye), adjust0);
+        assert_eq!(picker_pose(&again, Mat4::IDENTITY, &none, eye), picker0);
+    }
+
+    #[test]
+    fn a_moved_picker_goes_where_it_was_taken_in_the_hand_s_direction() {
+        let anchor = Mat4::IDENTITY;
+        let spawn = Vec3::new(0.3, -0.2, -1.0);
+        // Nothing moved: where it opened.
+        let same = moved_spot(anchor, spawn, [0.0, 0.0], 0.0);
+        assert!(same.abs_diff_eq(spawn, 1e-5));
+        // Left (positive yaw) and up (positive pitch), as place_around.
+        let left = moved_spot(anchor, spawn, [30.0, 0.0], 0.0);
+        let up = moved_spot(anchor, spawn, [0.0, 20.0], 0.0);
+        assert!(left.x < spawn.x - 0.3 && (left.y - spawn.y).abs() < 1e-4);
+        assert!(up.y > spawn.y + 0.2);
+        // Turning keeps the distance; depth changes only it.
+        assert!((left.length() - spawn.length()).abs() < 1e-4);
+        let near = moved_spot(anchor, spawn, [0.0, 0.0], -0.3);
+        assert!((near.length() - (spawn.length() - 0.3)).abs() < 1e-4);
+        assert!(near.normalize().abs_diff_eq(spawn.normalize(), 1e-4));
+        // Never nearer or further than a panel may be.
+        let far = moved_spot(anchor, spawn, [0.0, 0.0], 50.0);
+        assert!((far.length() - *PANEL_RANGE.end()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_panel_nobody_moved_opens_afresh_and_a_moved_one_keeps_its_place() {
+        let none = crate::settings::PanelOffsets::default();
+        let first = Mat4::from_rotation_y(0.2);
+        let later = Mat4::from_rotation_y(-0.9);
+        let mut s = Spawns {
+            adjust: Some(first),
+            tracks: Some(Vec3::X),
+        };
+        // Up: kept as it is.
+        s.update(&none, [true, true]);
+        assert_eq!(s.adjust, Some(first));
+        // Shut and never moved: forgotten, so it opens by where you are then.
+        s.update(&none, [false, false]);
+        assert_eq!(s, Spawns::default());
+        // Shut after being moved: kept, with its moves meaning the same.
+        let mut moved = none;
+        moved.adjust = [5.0, 0.0];
+        s = Spawns {
+            adjust: Some(later),
+            tracks: Some(Vec3::Y),
+        };
+        s.update(&moved, [false, false]);
+        assert_eq!(s.adjust, Some(later));
+        assert_eq!(s.tracks, None);
+        // Recentring forgets the unmoved ones only.
+        s.tracks = Some(Vec3::Y);
+        s.forget_unmoved(&moved);
+        assert_eq!((s.adjust, s.tracks), (Some(later), None));
+    }
+
+    #[test]
+    fn a_fresh_start_has_every_panel_in_its_default_place() {
+        let saved = crate::settings::PanelOffsets {
+            main: [4.0, -2.0],
+            scale_main: Some(1.3),
+            bar: [3.0, 1.0],
+            adjust: [-8.0, 2.0],
+            tracks: [9.0, 9.0],
+            perf: [1.0, 1.0],
+            depth: crate::settings::PanelDepths {
+                main: 0.4,
+                bar: 0.2,
+                adjust: -0.1,
+                tracks: 0.3,
+                perf: 0.5,
+            },
+        };
+        let start = saved.at_start();
+        // The library keeps its place and size; nothing else is kept.
+        assert_eq!(start.main, saved.main);
+        assert_eq!(start.depth.main, 0.4);
+        assert_eq!(start.scale_main, Some(1.3));
+        let mut rest = start;
+        rest.main = [0.0; 2];
+        rest.depth.main = 0.0;
+        rest.scale_main = None;
+        assert_eq!(rest, Default::default());
+        assert!(!start.adjust_moved() && !start.tracks_moved());
     }
 }

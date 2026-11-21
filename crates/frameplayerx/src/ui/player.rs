@@ -267,10 +267,7 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
         );
         widgets::well(&mut left, |ui| volume_key(ui, pb, v.state, v.actions));
         transport(ui, row, pb, v.settings, v.queue, v.actions);
-        // The place picker and its settings are a press away while a flat
-        // video plays in a room or on a plain screen.
-        let place_key = v.places_enabled && pb.format.projection == Projection::Flat;
-        let dropped = Dropped::for_room(room, place_key);
+        let dropped = Dropped::for_room(room);
         v.state.bar_dropped = dropped;
         let mut right = ui.new_child(
             egui::UiBuilder::new()
@@ -278,7 +275,7 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 .layout(Layout::right_to_left(Align::Center)),
         );
         widgets::well(&mut right, |ui| {
-            right_keys(ui, v.state, dropped, place_key, v.actions);
+            right_keys(ui, v.state, dropped, v.actions);
         });
     });
 }
@@ -310,20 +307,15 @@ fn group_width(n: usize) -> f32 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Dropped {
     pub hide: bool,
-    pub place: bool,
     pub adjust: bool,
 }
 
 impl Dropped {
-    /// What does not fit in `room`: the group is Place, Adjust, More, Hide and
-    /// Close; Hide goes first, then Place (the More list has it too), then
-    /// Adjust. More and Close always stay. Without the Place key (`place_key`
-    /// false) the group is a key shorter, so Hide holds on longer and Place is
-    /// never dropped.
-    fn for_room(room: f32, place_key: bool) -> Dropped {
+    /// What does not fit in `room`: the group is Adjust, More, Hide and
+    /// Close; Hide goes first, then Adjust. More and Close always stay.
+    fn for_room(room: f32) -> Dropped {
         Dropped {
-            hide: group_width(4 + usize::from(place_key)) > room,
-            place: place_key && group_width(4) > room,
+            hide: group_width(4) > room,
             adjust: group_width(3) > room,
         }
     }
@@ -647,15 +639,14 @@ fn queue_key(
     }
 }
 
-/// What a viewer reaches for while watching, at the bar's end: Place, Adjust,
-/// More, Hide and Close. Everything else is in the More list. A key in
-/// `dropped` is there instead of on the bar; the Place key is only there when
-/// `place_key` (places may show, and the video is flat).
+/// What a viewer reaches for while watching, at the bar's end: Adjust, More,
+/// Hide and Close (the place, seat and lights are on Adjust's Position tab).
+/// Everything else is in the More list. A key in `dropped` is there instead of
+/// on the bar.
 fn right_keys(
     ui: &mut egui::Ui,
     state: &mut super::UiState,
     dropped: Dropped,
-    place_key: bool,
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::X, BAR_KEY, false)
@@ -685,22 +676,6 @@ fn right_keys(
             .clicked()
     {
         state.adjust_open = !state.adjust_open;
-        state.more_open = false;
-    }
-    if place_key
-        && !dropped.place
-        && widgets::key(
-            ui,
-            icons::FILM_STRIP,
-            BAR_KEY,
-            state.adjust_open && state.adjust_tab == POSITION_TAB,
-        )
-        .tip(tr!("player-place"))
-        .clicked()
-    {
-        // The adjust panel on Position, which starts with the place, its seat,
-        // house lights and screen light; pressed again it shuts.
-        toggle_adjust_tab(state, POSITION_TAB);
         state.more_open = false;
     }
 }
@@ -793,7 +768,6 @@ struct MoreState {
     /// Some place is showing round the picture.
     place: Option<Place>,
     /// Places may show at all (the kill switch is not set).
-    places_offered: bool,
     passthrough_available: bool,
     passthrough: bool,
     /// The format with the video's own mask switched, when it has one.
@@ -900,20 +874,6 @@ fn more_columns(m: &MoreState) -> [Vec<MoreRow>; 2] {
                 Action::ToggleMultitask,
             ));
         }
-        if m.places_offered {
-            let place = m.place.map_or_else(
-                || tr!("place-plain"),
-                |p| place_label(PlaceChoice::Place(p)).1,
-            );
-            screen.push(MoreRow {
-                mark: Mark::Value(place.to_string()),
-                ..MoreRow::go(
-                    icons::FILM_STRIP,
-                    tr!("more-place"),
-                    Does::Tab(POSITION_TAB),
-                )
-            });
-        }
     }
     screen.push(MoreRow::go(
         icons::GAME_CONTROLLER,
@@ -955,7 +915,6 @@ pub fn more_panel(ctx: &egui::Context, v: &mut View) {
         flat: pb.format.projection == Projection::Flat,
         in_room: v.place_shown.is_some_and(|p| p.kind() == PlaceKind::Room),
         place: v.place_shown,
-        places_offered: v.places_enabled,
         passthrough_available: v.passthrough_available,
         passthrough: v.settings.passthrough,
         mask: pb.mask_toggled(),
@@ -3099,8 +3058,8 @@ mod tests {
     #[test]
     fn pressing_a_tab_entry_again_closes_the_panel() {
         let mut state = crate::ui::UiState::default();
-        // The More list's Place entry opens Position; the same entry again
-        // (or the format pill for Format) shuts it.
+        // A tab's entry opens Position; the same entry again (or the format
+        // pill for Format) shuts it.
         toggle_adjust_tab(&mut state, POSITION_TAB);
         assert!(state.adjust_open && state.adjust_tab == POSITION_TAB);
         toggle_adjust_tab(&mut state, POSITION_TAB);
@@ -3127,16 +3086,6 @@ mod tests {
         state.adjust_top = true;
         assert!(adjust_page_to_top(&mut state));
         assert!(!adjust_page_to_top(&mut state));
-    }
-
-    #[test]
-    fn the_place_key_opens_the_position_tab_and_again_shuts_it() {
-        let mut state = crate::ui::UiState::default();
-        // The key's own action (see `right_keys`).
-        toggle_adjust_tab(&mut state, POSITION_TAB);
-        assert!(state.adjust_open && state.adjust_tab == POSITION_TAB);
-        toggle_adjust_tab(&mut state, POSITION_TAB);
-        assert!(!state.adjust_open);
     }
 
     fn settings(environment: &str, passthrough: bool) -> Settings {
@@ -3297,32 +3246,22 @@ mod tests {
         // From a bar far too narrow to a very wide one.
         for width in (0..3000).step_by(10) {
             let room = side_room(width as f32);
-            let dropped = Dropped::for_room(room, true);
-            let keys = 2
-                + usize::from(!dropped.adjust)
-                + usize::from(!dropped.place)
-                + usize::from(!dropped.hide);
+            let dropped = Dropped::for_room(room);
+            let keys = 2 + usize::from(!dropped.adjust) + usize::from(!dropped.hide);
             // What stays on the bar fits beside the transport, or is as few
             // keys as it can be.
             assert!(group_width(keys) <= room || keys == 2, "{width}: {keys}");
-            // Hide goes before Place, Place before Adjust, and a wider bar
-            // never drops more.
-            assert!(!dropped.adjust || dropped.place);
-            assert!(!dropped.place || dropped.hide);
+            // Hide goes before Adjust, and a wider bar never drops more.
+            assert!(!dropped.adjust || dropped.hide);
             assert!(!(dropped.hide && !last.hide) || width == 0, "{width}");
             last = dropped;
         }
-        // The bar as it is built keeps all five.
-        assert_eq!(
-            Dropped::for_room(side_room(1444.0), true),
-            Dropped::default()
-        );
-        assert!(Dropped::for_room(side_room(600.0), true).adjust);
-        // Without a Place key the four keys left keep Hide a step longer.
-        let room = group_width(4);
-        assert!(Dropped::for_room(room, true).hide);
-        assert_eq!(Dropped::for_room(room, false), Dropped::default());
-        assert!(!Dropped::for_room(0.0, false).place);
+        // The bar as it is built keeps all four (Close, Hide, More, Adjust),
+        // with no Place key among them.
+        assert_eq!(Dropped::for_room(side_room(1444.0)), Dropped::default());
+        assert_eq!(Dropped::for_room(group_width(4)), Dropped::default());
+        assert!(Dropped::for_room(group_width(4) - 1.0).hide);
+        assert!(Dropped::for_room(side_room(600.0)).adjust);
     }
 
     fn watching(flat: bool) -> MoreState {

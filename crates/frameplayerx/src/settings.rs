@@ -317,6 +317,10 @@ pub struct PanelOffsets {
     pub bar: [f32; 2],
     /// The performance overlay, from where it starts.
     pub perf: [f32; 2],
+    /// The audio and subtitles picker and the More list, from where they
+    /// opened. Like the others, none of these is kept across starts (see
+    /// `PanelOffsets::at_start`).
+    pub tracks: [f32; 2],
     /// How much nearer or further than usual each of them was moved.
     pub depth: PanelDepths,
     /// How much bigger or smaller than usual the library panel was made by
@@ -334,6 +338,32 @@ pub struct PanelDepths {
     pub adjust: f32,
     pub bar: f32,
     pub perf: f32,
+    pub tracks: f32,
+}
+
+impl PanelOffsets {
+    /// The adjust panel was moved from where it opens.
+    pub fn adjust_moved(&self) -> bool {
+        self.adjust != [0.0; 2] || self.depth.adjust != 0.0
+    }
+
+    /// The audio and subtitles picker and More list were moved from where
+    /// they open.
+    pub fn tracks_moved(&self) -> bool {
+        self.tracks != [0.0; 2] || self.depth.tracks != 0.0
+    }
+
+    /// What a fresh start begins with: every panel in its default place. Only
+    /// the library's place and size are kept from the last run.
+    pub fn at_start(self) -> PanelOffsets {
+        let mut start = PanelOffsets {
+            main: self.main,
+            scale_main: self.scale_main,
+            ..Default::default()
+        };
+        start.depth.main = self.depth.main;
+        start
+    }
 }
 
 /// The fisheye presets to start with: a plain 180° lens, the Canon RF 5.2 mm,

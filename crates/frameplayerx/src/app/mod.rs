@@ -129,7 +129,7 @@ const TOAST: usize = 5;
 /// How long a toast stays over the video.
 const VIDEO_TOAST_SECS: f32 = 3.0;
 /// The control bar's body in pixels. Wide enough that the view keys (up to
-/// seven on a flat video: close, hide, room, place, follow, bookmark, adjust)
+/// four: close, hide, more, adjust)
 /// stay clear of the transport keys in the middle.
 const BAR_PX: [u32; 2] = [1540, 268];
 /// The panel over the control bar's end in pixels, which holds the audio and
@@ -231,9 +231,10 @@ pub struct App {
     /// Yaw, pitch and screen distance when a picture drag began.
     drag_start: Option<(f32, f32, f32)>,
     panel_drag: Option<PanelDrag>,
-    /// Where the adjust panel was placed from when the trigger went down on
-    /// it (see `place_panels`).
-    adjust_hold: Option<Mat4>,
+    /// Where the adjust panel's frame was (beside the control bar) when it
+    /// opened: it is placed and moved from there, so nothing that moves
+    /// afterwards takes it along (see `place_panels`).
+    spawns: frame::Spawns,
     /// Where the panels that move sit now (saved when let go).
     offsets: crate::settings::PanelOffsets,
     /// The list the open video came from, for next/previous.
@@ -410,7 +411,7 @@ impl App {
             controls: Default::default(),
             drag_start: None,
             panel_drag: None,
-            adjust_hold: None,
+            spawns: Default::default(),
             offsets: Default::default(),
             queue: Default::default(),
             last_status: None,
@@ -441,7 +442,10 @@ impl App {
             open_dashboard: false,
             dashboard_requests: 0,
         };
-        app.offsets = app.settings.panel_offsets;
+        // Every panel starts where it does by default; the library's place
+        // and size are all that is kept from the last run.
+        app.offsets = app.settings.panel_offsets.at_start();
+        app.settings.panel_offsets = app.offsets;
         app.apply_ui_scale();
         app.note_version();
         app.check_last_run();
