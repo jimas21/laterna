@@ -1406,7 +1406,7 @@ mod tests {
                 }
                 let (cols, gap, margin) = grid_fit(avail, width);
                 let used = cols as f32 * width + (cols as f32 - 1.0) * gap;
-                assert!(cols >= 1 && gap >= GAP && gap <= 2.0 * GAP);
+                assert!(cols >= 1 && (GAP..=2.0 * GAP).contains(&gap));
                 assert!(margin >= 0.0);
                 // Whole cards inside, the same room each side.
                 assert!(margin * 2.0 + used <= avail + 0.01, "{avail} {width}");
